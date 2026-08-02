@@ -30,13 +30,13 @@ public class HemisEngagementLetterController : Controller
 
         // Letterhead
         WordHelper.AddHeaderTable(body,
-            ["14 May 2026", "The Chief Financial Officer (CFO)", "Tshwane University of Technology (TUT)", "Private Bag X600", "Pretoria", "0001"],
-            ["SNG Grant Thornton", "152 14th Road", "Noordwyk,", "Midrand, 1687", "T: +27 (0) 86 117 6782"]);
+            ["DD Month YYYY", "The Chief Financial Officer (CFO)", "Client Institution", "Address Line 1", "City", "Postal Code"],
+            ["Service Provider", "Office Address Line 1", "Office Address Line 2", "Office City", "Office Postal Code"]);
 
         body.Append(WordHelper.Empty(8));
-        body.Append(WordHelper.WPara("Dear Mr. Mamishi", afterPt: 8));
+        body.Append(WordHelper.WPara("Dear Client Representative", afterPt: 8));
         body.Append(WordHelper.WPara(
-            "Engagement letter: Higher Education Management Information System (HEMIS) – Agreed Upon Procedures for the period ending 31 December 2025.",
+            "Engagement letter: Higher Education Management Information System (HEMIS) – Agreed Upon Procedures for the period ending xx December xxxx.",
             bold: true, color: WordHelper.Purple, sizePt: 10, afterPt: 8));
         body.Append(WordHelper.WPara(
             "Please note that this Engagement letter should be used as a guide only and may be amended at any time, as it was developed for guidance purposes.",
@@ -374,7 +374,7 @@ public class HemisEngagementLetterController : Controller
         // 3. Responsibilities of the University
         body.Append(WordHelper.ELSection("3.", "Responsibilities of the University"));
         body.Append(WordHelper.WPara(
-            "Tshwane University of Technology acknowledges that the procedures are appropriate for the purpose of the engagement. This agreed-upon procedures engagement will be conducted on the basis that the University is responsible for the subject matter on which the agreed-upon procedures are performed. The responsibility of determining the adequacy or otherwise of the procedures agreed to be performed by us is that of Management.",
+            "The client acknowledges that the procedures are appropriate for the purpose of the engagement. This agreed-upon procedures engagement will be conducted on the basis that the client is responsible for the subject matter on which the agreed-upon procedures are performed. The responsibility of determining the adequacy or otherwise of the procedures agreed to be performed by us is that of Management.",
             afterPt: 4));
         body.Append(WordHelper.WPara(
             "We will make no representation regarding the sufficiency of the procedures either for the purpose for which our report is being prepared or for any other purpose. In addition, we have no obligation to perform any procedures beyond those referred above. We have no responsibility to update our report for any events or circumstances occurring after the date of such reports.",
@@ -409,7 +409,7 @@ public class HemisEngagementLetterController : Controller
             "•   it has been advised of the purpose and reason for the collection and processing of the Client Data; and",
             leftTwips: 360, afterPt: 2));
         body.Append(WordHelper.IndentPara(
-            "•   the audit tools, software and methodology of Grant Thornton International Limited is used in the conduct of the audit by the Practitioner and, as a result, the Practitioner will transfer and subsequently Process the Client Data at a Microsoft Azure data centres located in Europe.",
+            "•   the audit tools, software and methodology of the Service Provider is used in the conduct of the audit by the Practitioner and, as a result, the Practitioner will transfer and subsequently Process the Client Data at a Microsoft Azure data centres located in Europe.",
             leftTwips: 360, afterPt: 4));
         body.Append(WordHelper.WPara(
             "¹ “Personal Information” has the meaning given to it POPIA.",

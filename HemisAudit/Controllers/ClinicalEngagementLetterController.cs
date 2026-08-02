@@ -30,18 +30,18 @@ public class ClinicalEngagementLetterController : Controller
 
         // Letterhead
         WordHelper.AddHeaderTable(body,
-            ["The Chief Financial Officer (CFO)", "Tshwane University of Technology", "Private Bag X680", "Pretoria", "0001"],
-            ["SizweNtsalubaGobodo Grant Thornton", "152, 14th Road, Noordwyk", "Midrand, 1687", "T +27 (0) 12 443 6000", "sng-grantthornton.co.za"]);
+            ["The Chief Financial Officer (CFO)", "Client Institution", "Address Line 1", "City", "Postal Code"],
+            ["Service Provider", "Office Address Line 1", "Office Address Line 2", "Office City", "Telephone"]);
 
         body.Append(WordHelper.Empty(8));
-        body.Append(WordHelper.WPara("20 May 2026", afterPt: 6));
+        body.Append(WordHelper.WPara("DD Month YYYY", afterPt: 6));
         body.Append(WordHelper.WPara(
-            "Engagement letter: Clinical Training Enrolment – Agreed Upon Procedures for the period ending 31 December 2025",
+            "Engagement letter: Clinical Training Enrolment – Agreed Upon Procedures for the period ending xx December xxxx",
             bold: true, color: WordHelper.Purple, sizePt: 10, afterPt: 8));
         body.Append(WordHelper.WPara(
             "Please note that this Engagement letter should be used as a guide only and may be amended at any time, as it was developed for guidance purposes.",
             italic: true, color: WordHelper.Purple, afterPt: 10));
-        body.Append(WordHelper.WPara("Dear Mr Mamishi", afterPt: 8));
+        body.Append(WordHelper.WPara("Dear Client Representative", afterPt: 8));
 
         // 1. Purpose
         body.Append(WordHelper.ELSection("1.", "Purpose"));
@@ -168,10 +168,10 @@ public class ClinicalEngagementLetterController : Controller
         // 7. Staff
         body.Append(WordHelper.ELSection("7.", "Staff"));
         body.Append(WordHelper.WPara(
-            "Our staff members undergo periodic training and this, together with the taking of annual leave, may lead to staff turnover and lack of continuity. We will use our best endeavors to avoid any disruption to an engagement's progress. Save as envisaged below, you agree not to make any offer of employment or to otherwise interfere with or entice away from the employment of any persons employed by SizweNtsalubaGobodo Grant Thornton. You further agree not to use such person's services as an independent consultant or via a third party for a period of 12 months following the end of such person's involvement, without the prior written consent of SizweNtsalubaGobodo Grant Thornton. This consent may not be unreasonably withheld.",
+            "Our staff members undergo periodic training and this, together with the taking of annual leave, may lead to staff turnover and lack of continuity. We will use our best endeavors to avoid any disruption to an engagement's progress. Save as envisaged below, you agree not to make any offer of employment or to otherwise interfere with or entice away from the employment of any persons employed by the Service Provider. You further agree not to use such person's services as an independent consultant or via a third party for a period of 12 months following the end of such person's involvement, without the prior written consent of the Service Provider. This consent may not be unreasonably withheld.",
             afterPt: 4));
         body.Append(WordHelper.WPara(
-            "Should you make any offer of employment to any person currently employed by SizweNtsalubaGobodo Grant Thornton or who was employed by SizweNtsalubaGobodo Grant Thornton for the immediately preceding 12 month period from the date of such offer of employment, you will be liable for and will pay to SizweNtsalubaGobodo Grant Thornton a placement fee equal to 25% of such employee's total annual cost to entity, excluding Value Added Tax (“VAT”).",
+            "Should you make any offer of employment to any person currently employed by the Service Provider or who was employed by the Service Provider for the immediately preceding 12 month period from the date of such offer of employment, you will be liable for and will pay to the Service Provider a placement fee equal to 25% of such employee's total annual cost to entity, excluding Value Added Tax (“VAT”).",
             afterPt: 6));
 
         // 8. Communication with management
@@ -273,7 +273,7 @@ public class ClinicalEngagementLetterController : Controller
         // 15. Ownership and access to files
         body.Append(WordHelper.ELSection("15.", "Ownership and access to files"));
         body.Append(WordHelper.WPara(
-            "The working papers and files for this engagement created by us during the course of the engagement, including electronic documents and files, are the sole property of SizweNtsalubaGobodo Grant Thornton and you have no right to access them. We may decide in our own sole discretion to grant access to you to our working papers, should you wish to. We have set quality control policies for the retention of documentation, after which time we will commence the process of destroying the contents of our engagement files. To the extent we accumulate any of your original records during the engagement; those documents will be returned to you promptly upon completion of the engagement.",
+            "The working papers and files for this engagement created by us during the course of the engagement, including electronic documents and files, are the sole property of the Service Provider and you have no right to access them. We may decide in our own sole discretion to grant access to you to our working papers, should you wish to. We have set quality control policies for the retention of documentation, after which time we will commence the process of destroying the contents of our engagement files. To the extent we accumulate any of your original records during the engagement; those documents will be returned to you promptly upon completion of the engagement.",
             afterPt: 4));
         body.Append(WordHelper.WPara(
             "We will retain ownership of the copyright and all other intellectual property rights in the product of the services, whether oral or tangible, including written advice, methodologies, software, systems know how and working papers. For the purposes of delivering services to you or other clients, we will be entitled to use or develop knowledge, experience and skills of general application gained through performing the services. You agree to keep confidential any methodologies and technology used by us to carry out our services. If you wish to distribute copies of any of these materials, this will require our prior written permission. We have the right to use your name as a reference in proposals or other similar submissions to other prospective clients, unless you specifically withhold permission for such disclosure. If we wish to use details of the work done for you for reference purposes, we will obtain your permission in advance.",
@@ -282,10 +282,10 @@ public class ClinicalEngagementLetterController : Controller
         // 16. Limitation of liability
         body.Append(WordHelper.ELSection("16.", "Limitation of liability"));
         body.Append(WordHelper.WPara(
-            "The maximum liability of SizweNtsalubaGobodo Grant Thornton their partners, directors, employees and agents for all claims arising out of services provided in connection with this engagement shall be limited to the total fees charged for all services provided in connection with this engagement. This maximum liability shall be an aggregate liability for all claims from whatsoever source and howsoever arising, whether in contract, delict or otherwise.",
+            "The maximum liability of the Service Provider, their partners, directors, employees and agents for all claims arising out of services provided in connection with this engagement shall be limited to the total fees charged for all services provided in connection with this engagement. This maximum liability shall be an aggregate liability for all claims from whatsoever source and howsoever arising, whether in contract, delict or otherwise.",
             afterPt: 4));
         body.Append(WordHelper.WPara(
-            "The Firm will not be liable to Tshwane University of Technology any cessionary or third party claiming through or on behalf of Tshwane University of Technology or any punitive damages whatsoever or for any consequential or other loss or damages beyond the maximum liability specified. This engagement is governed by South African law and any claims will be subject to the exclusive jurisdiction of the Courts of South Africa",
+            "The Firm will not be liable to the client or any cessionary or third party claiming through or on behalf of the client for any punitive damages whatsoever or for any consequential or other loss or damages beyond the maximum liability specified. This engagement is governed by South African law and any claims will be subject to the exclusive jurisdiction of the Courts of South Africa",
             afterPt: 4));
         body.Append(WordHelper.WPara(
             "Any claims, however arising, must be commenced formally by service of summons or appropriate process by following necessary steps to initiate arbitration proceedings within three years after the party bringing the claim becomes aware (or ought reasonably to have become aware) of the facts which give rise to the claim and, in any event regardless of the knowledge of the Claimant, by no later than three years after the date of any alleged breach of contract, delictual act or other act or omission giving rise to a cause of action. This expressly overrides any statutory provision that would otherwise apply.",
