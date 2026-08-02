@@ -97,10 +97,6 @@
     vertical-align: top;
 }
 
-.wp-table tr:nth-child(even) td {
-    background: #fafafa;
-}
-
 .wp-table tr:hover td {
     background: #f5f0fc;
 }
@@ -175,10 +171,6 @@
     font-size: .84rem;
 }
 
-.steps-list li:nth-child(even) {
-    background: #fafafa;
-}
-
 .steps-list li:hover {
     background: #f5f0fc;
 }
@@ -195,21 +187,40 @@
 @@media (prefers-color-scheme: dark) {
     .wp-note { background: #2a1a4a; border-color: #9b5cf6; color: #d4b8ff; }
     .wp-section-head { background: #4a1f7a; }
-    .wp-table th { background: #2a1a4a; border-bottom-color: #9b5cf6; border-right-color: #3a2060; }
+    .wp-table { border-color: #333; }
+    .wp-table th { background: #2a1a4a; color: #e0d4ff; border-bottom-color: #9b5cf6; border-right-color: #3a2060; }
     .wp-table td { border-bottom-color: #2a2a2a; border-right-color: #2a2a2a; }
-    .wp-table tr:nth-child(even) td { background: #1e1e2e; }
     .wp-table tr:hover td { background: #2a1a4a; }
     .wp-kv-table td:first-child { color: #ccc; }
     .wp-kv-table td:last-child { color: #bbb; }
+    .rule-cat { color: #aaa; }
+    .rule-note { color: #4ade80; }
+    .rule-note.fatal { color: #f87171; }
+    .rule-text { color: #ddd; }
+    .rule-script { color: #c4b5fd; }
+    .step-num { color: #c4b5fd; }
+    .steps-list .step-body { color: #ddd; }
     .wp-dl-btn { background: #7c3aed; }
     .wp-dl-btn:hover { background: #6d28d9; }
     .steps-list { border-color: #2a2a2a; }
     .steps-list li { border-bottom-color: #2a2a2a; }
-    .steps-list li:nth-child(even) { background: #1e1e2e; }
     .steps-list li:hover { background: #2a1a4a; }
 }
 
 :root[data-theme="dark"] .wp-note { background: #2a1a4a; border-color: #9b5cf6; color: #d4b8ff; }
+:root[data-theme="dark"] .wp-table { border-color: #333; }
+:root[data-theme="dark"] .wp-table th { background: #2a1a4a; color: #e0d4ff; border-bottom-color: #9b5cf6; }
+:root[data-theme="dark"] .wp-table td { border-bottom-color: #2a2a2a; border-right-color: #2a2a2a; }
+:root[data-theme="dark"] .wp-table tr:hover td { background: #2a1a4a; }
+:root[data-theme="dark"] .rule-cat { color: #aaa; }
+:root[data-theme="dark"] .rule-note { color: #4ade80; }
+:root[data-theme="dark"] .rule-note.fatal { color: #f87171; }
+:root[data-theme="dark"] .rule-text { color: #ddd; }
+:root[data-theme="dark"] .rule-script { color: #c4b5fd; }
+:root[data-theme="dark"] .step-num { color: #c4b5fd; }
+:root[data-theme="dark"] .steps-list .step-body { color: #ddd; }
+:root[data-theme="dark"] .steps-list li { border-bottom-color: #2a2a2a; }
+:root[data-theme="dark"] .steps-list li:hover { background: #2a1a4a; }
 :root[data-theme="light"] .wp-note { background: #f0eaf8; border-color: #5C2D91; color: #3b1a6e; }
 </style>
 }
