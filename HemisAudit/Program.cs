@@ -655,6 +655,26 @@ app.MapControllerRoute(
     defaults: new { controller = "WorkingPaper", action = "Download" });
 
 app.MapControllerRoute(
+    name: "clinicaldraft-short",
+    pattern: "ClinicalDraftReport",
+    defaults: new { controller = "ClinicalDraftReport", action = "Index" });
+
+app.MapControllerRoute(
+    name: "clinicaldraft-download",
+    pattern: "ClinicalDraftReport/Download",
+    defaults: new { controller = "ClinicalDraftReport", action = "Download" });
+
+app.MapControllerRoute(
+    name: "hemisdraft-short",
+    pattern: "HemisDraftReport",
+    defaults: new { controller = "HemisDraftReport", action = "Index" });
+
+app.MapControllerRoute(
+    name: "hemisdraft-download",
+    pattern: "HemisDraftReport/Download",
+    defaults: new { controller = "HemisDraftReport", action = "Download" });
+
+app.MapControllerRoute(
     name: "saqa-short",
     pattern: "Saqa",
     defaults: new { controller = "Saqa", action = "Index" });
