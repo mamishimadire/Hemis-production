@@ -645,6 +645,16 @@ app.MapControllerRoute(
     defaults: new { controller = "Directives", action = "Index" });
 
 app.MapControllerRoute(
+    name: "workingpaper-short",
+    pattern: "WorkingPaper",
+    defaults: new { controller = "WorkingPaper", action = "Index" });
+
+app.MapControllerRoute(
+    name: "workingpaper-download",
+    pattern: "WorkingPaper/Download",
+    defaults: new { controller = "WorkingPaper", action = "Download" });
+
+app.MapControllerRoute(
     name: "saqa-short",
     pattern: "Saqa",
     defaults: new { controller = "Saqa", action = "Index" });
