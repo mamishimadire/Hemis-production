@@ -18,7 +18,7 @@ public class HemisDraftReportController : Controller
         stream.Position = 0;
         return File(stream,
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "TUT_AUP_HEMIS_2025_Draft_Report.docx");
+            "TUT_AUP_HEMIS_Draft_Report.docx");
     }
 
     private static void BuildDocument(MemoryStream ms)
@@ -30,14 +30,14 @@ public class HemisDraftReportController : Controller
 
         // ── Letterhead ──────────────────────────────────────────────────────────
         WordHelper.AddHeaderTable(body,
-            ["The Council", "Tshwane University of Technology", "Private Bag X680", "Pretoria", "0001"],
-            ["SNG Grant Thornton", "152, 14th Road", "Noordwyk", "Midrand, 1687", "T +27 (0) 86 117 6782"]);
+            ["The Council", "........ University", "Private Bag X680", "Pretoria", "0001"],
+            ["Auditor Firm Name", "Address line 1", "Address line 2", "City", "T [phone number]"]);
 
         body.Append(WordHelper.Empty(8));
 
         // ── Title ───────────────────────────────────────────────────────────────
         body.Append(WordHelper.WPara(
-            "Agreed-upon Procedures Report on the Higher Education Management Information System (HEMIS) for the period ending 31 December 2025.",
+            "Agreed-upon Procedures Report on the Higher Education Management Information System (HEMIS) for the period ending xx December xxxx.",
             bold: true, italic: true, color: WordHelper.Purple, sizePt: 10, afterPt: 8));
 
         // ── Disclaimer note ─────────────────────────────────────────────────────
@@ -47,20 +47,20 @@ public class HemisDraftReportController : Controller
 
         // ── Sections ─────────────────────────────────────────────────────────────
         WordHelper.AddSection(body, "Purpose of this Agreed-Upon Procedure Report and Restriction on Use and Distribution",
-            "Our report is solely for the purpose of assisting the Tshwane University of Technology in determining whether the HEMIS data submitted to the Department of Higher Education and Training (DHET) are compliant with the requirements of the DHET Higher Education Management Information System (HEMIS) policy and may not be suitable for any other purpose. This report is intended solely for the use of the Tshwane University of Technology and the DHET, and should not be used by, or distributed to, any other parties.");
+            "Our report is solely for the purpose of assisting ........ University in determining whether the HEMIS data submitted to the Department of Higher Education and Training (DHET) are compliant with the requirements of the DHET Higher Education Management Information System (HEMIS) policy and may not be suitable for any other purpose. This report is intended solely for the use of ........ University and the DHET, and should not be used by, or distributed to, any other parties.");
 
         WordHelper.AddSection(body, "Responsibility of the Engaging Party and the Responsible Party",
-            "Tshwane University of Technology has acknowledged that the agreed-upon procedures are appropriate for the purpose of the engagement.\n\nThe Executive Director: Institutional Effectiveness & Technology, as identified by the Tshwane University of Technology, is responsible for the subject matter on which the agreed-upon procedures are performed.");
+            "........ University has acknowledged that the agreed-upon procedures are appropriate for the purpose of the engagement.\n\nThe Executive Director: Institutional Effectiveness & Technology, as identified by ........ University, is responsible for the subject matter on which the agreed-upon procedures are performed.");
 
         WordHelper.AddSection(body, "Practitioner's responsibility",
-            "We have conducted the agreed-upon procedures engagement in accordance with the International Standard on Related Services (ISRS) 4400 (Revised), Agreed-Upon Procedures Engagements. An Agreed-upon procedures engagement involves our performing the procedures that have been agreed with the Tshwane University of Technology, and reporting the findings, which are the factual results of the agreed upon procedures performed. We make no representation regarding the appropriateness of the agreed-upon procedures.\n\nThe agreed-upon procedures engagement is not an assurance engagement. Accordingly, we do not express an opinion or a conclusive assurance conclusion.\n\nHad we performed additional procedures, other matters might have come to our attention that would have been reported.");
+            "We have conducted the agreed-upon procedures engagement in accordance with the International Standard on Related Services (ISRS) 4400 (Revised), Agreed-Upon Procedures Engagements. An Agreed-upon procedures engagement involves our performing the procedures that have been agreed with ........ University, and reporting the findings, which are the factual results of the agreed upon procedures performed. We make no representation regarding the appropriateness of the agreed-upon procedures.\n\nThe agreed-upon procedures engagement is not an assurance engagement. Accordingly, we do not express an opinion or a conclusive assurance conclusion.\n\nHad we performed additional procedures, other matters might have come to our attention that would have been reported.");
 
         WordHelper.AddSection(body, "Professional Ethics and Quality Management",
             "We have complied with the ethical requirements in accordance with the International Ethics Standards Board for Accountants' International Code of Ethics for Professional Accountants (IESBA Code) and in accordance with other ethical requirements applicable to performing agreed-upon procedures engagements in South Africa.\n\nOur Firm applies International Standard on Quality Management 1 (ISQM1), Quality Management for firms that perform Audits or Reviews of Financial Statements, or Other Assurance or Related Services Engagements, which requires the firm to design, implement and operate a system of quality management including policies or procedures regarding compliance with ethical requirements, professional standards and applicable legal and regulatory requirements.");
 
         body.Append(WordHelper.WPara("Procedures and Findings", bold: true, afterPt: 4));
         body.Append(WordHelper.WPara(
-            "We have performed the procedures described below, which were agreed upon with the Tshwane University of Technology management as delegated by The Council of the University in the engagement letter dated 14 May 2026.",
+            "We have performed the procedures described below, which were agreed upon with ........ University management as delegated by The Council of the University in the engagement letter dated xx July xxxx.",
             afterPt: 8));
 
         // ── Procedures table ─────────────────────────────────────────────────────
@@ -84,10 +84,10 @@ public class HemisDraftReportController : Controller
         tbl.Append(WordHelper.ProcDataRow("3.2",
             "3.2.2. Test the whole population of staff that were on the university's staff database and agree the staff number, permanent \"P\" or temporary \"T\", gender, ethnic group, and birth date details to the VALPAC database.",
             ("3.2.2. Tested the whole population of staff that were on the University's staff production database and agreed the staff number, permanent \"P\" or temporary \"T\" status, gender, ethnic group, and birth date details to the VAPLAC database.", false, null),
-            ("The following exception was noted where the staff date of birth in VALPAC did not agree with the staff date of birth in the University student database:", true, WordHelper.Purple),
-            ("STAFF NO: 1013010  |  DATE OF BIRTH IN VALPAC: 1991028  |  DATE OF BIRTH IN PRODUCTION: 19991028", false, null),
-            ("Management comment", true, null),
-            ("Management acknowledges the finding relating to the incorrect birth date captured for the temporary employee appointed as a Student Mentor for a period of one month during 2025. During the appointment process, the date of birth was incorrectly captured as 01991028 instead of 19991028 on the ITS production system and therefore, the incorrect data was also extracted incorrectly to Valpac.\n\nThe data verification process for temporary staff was compromised following the 2024 cyberattack, where error reports on the HEDA Interrogator-Pro system were lost. While business continuity measures were implemented to ensure the continuation of critical operations, it has been realised that some verification controls have not yet been fully restored, so the data error was not identified during the 2025 HEMIS data clean-up process.\n\nThere is no validation report available on the ITS production system to detect such data-capture errors.\n\nThere is a different, more rigorous data verification process for permanent staff, whereby similar data-capture errors are identified timely, before the finalization of the HEMIS data.\n\nData verification and data quality measures will be enhanced with the redevelopment of specifically identified error reports that will be published on the HEDA Interrogator-Pro system and automatically distributed to the relevant staff members, daily for data correction. These measures will improve data integrity and reduce the risk of similar data errors occurring. Permanent staff data will be included in the error reports that will be redeveloped.\n\nThe data on Valpac and the ITS production system has been corrected, and the 2025 HEMIS staff database will be re-submitted to the DHET.\n\nThere are no HEMIS staff headcount implications for this data correction and no effect on permanent instruction and research staff data.", false, null)));
+            ("Exception will be captured.", true, WordHelper.Purple),
+            ("", false, null),
+            ("", false, null),
+            ("", false, null)));
 
         // ── 3.3 ───────────────────────────────────────────────────────────────────
         tbl.Append(WordHelper.ProcSectionRow("3.3.  Deceased students"));
@@ -282,8 +282,8 @@ public class HemisDraftReportController : Controller
             ("Selected a sample of 55 courses from the Course File (CRSE) and performed the following procedures:", false, null)));
 
         tbl.Append(WordHelper.ProcDataRow("6.1.1",
-            "In respect of (Element 031) Course Approval Status, obtain from The Registrar the approved 2025 Prospectus. Inspect the approved 2025 Prospectus and note if the course appears in the curriculum of at least one qualification approved for state funding by the Minister of Higher Education, Science and Innovation.",
-            ("In respect of (Element 031) Course Approval Status, obtained from The Registrar the approved 2025 Prospectus. Inspected the approved 2025 Prospectus and noted if the course appears in the curriculum of at least one qualification approved for state funding by the Minister of Higher Education, Science and Innovation.", false, null),
+            "In respect of (Element 031) Course Approval Status, obtain from The Registrar the approved relevant Prospectus. Inspect the approved relevant Prospectus and note if the course appears in the curriculum of at least one qualification approved for state funding by the Minister of Higher Education, Science and Innovation.",
+            ("In respect of (Element 031) Course Approval Status, obtained from The Registrar the approved relevant Prospectus. Inspected the approved relevant Prospectus and noted if the course appears in the curriculum of at least one qualification approved for state funding by the Minister of Higher Education, Science and Innovation.", false, null),
             ("", false, null),
             ("No Exceptions Noted.", true, WordHelper.Purple)));
 
@@ -300,8 +300,8 @@ public class HemisDraftReportController : Controller
             ("No Exceptions Noted.", true, WordHelper.Purple)));
 
         tbl.Append(WordHelper.ProcDataRow("6.1.4",
-            "In respect of (Element 062) Experiential Training Indicator inspect the approved 2025 Prospectus and note if the subject is approved for experiential training only and if qualification has been approved with the experiential training time in the PQM.",
-            ("In respect of (Element 062) Experiential Training Indicator inspected the approved 2025 Prospectus and noted if the subject is approved for experiential training only and if qualification has been approved with the experiential training time in the PQM.", false, null),
+            "In respect of (Element 062) Experiential Training Indicator inspect the approved relevant Prospectus and note if the subject is approved for experiential training only and if qualification has been approved with the experiential training time in the PQM.",
+            ("In respect of (Element 062) Experiential Training Indicator inspected the approved relevant Prospectus and noted if the subject is approved for experiential training only and if qualification has been approved with the experiential training time in the PQM.", false, null),
             ("", false, null),
             ("No Exceptions Noted.", true, WordHelper.Purple)));
 
@@ -329,8 +329,8 @@ public class HemisDraftReportController : Controller
             ("No Exceptions Noted.", true, WordHelper.Purple)));
 
         tbl.Append(WordHelper.ProcDataRow("7.1.2",
-            "In respect of (Element 050) Completed Research Course Credit Value agree the research time for the relevant successfully completed research courses to the PQM and the 2025 approved Prospectus.",
-            ("In respect of (Element 050) Completed Research Course Credit Value agreed the research time for the relevant successfully completed research courses to the PQM and the 2025 approved Prospectus.", false, null),
+            "In respect of (Element 050) Completed Research Course Credit Value agree the research time for the relevant successfully completed research courses to the PQM and the approved relevant Prospectus.",
+            ("In respect of (Element 050) Completed Research Course Credit Value agreed the research time for the relevant successfully completed research courses to the PQM and the approved relevant Prospectus.", false, null),
             ("", false, null),
             ("No Exceptions Noted.", true, WordHelper.Purple)));
 
@@ -424,8 +424,8 @@ public class HemisDraftReportController : Controller
             ("No Exceptions Noted.", true, WordHelper.Purple)));
 
         tbl.Append(WordHelper.ProcDataRow("8.5",
-            "Select a sample of 10 \"Foundation student\" students and obtain from The Registrar the 2025 approved prospectus and agree the qualification per the student file to the 2025 approved prospectus.",
-            ("In respect of (Element 106) Foundation Students, selected a sample of 10 Foundation Students and obtained from The Registrar the 2025 approved prospectus and agreed the qualification per the student file to the 2025 approved prospectus.", false, null),
+            "Select a sample of 10 \"Foundation student\" students and obtain from The Registrar the approved relevant prospectus and agree the qualification per the student file to the approved relevant prospectus.",
+            ("In respect of (Element 106) Foundation Students, selected a sample of 10 Foundation Students and obtained from The Registrar the approved relevant prospectus and agreed the qualification per the student file to the approved relevant prospectus.", false, null),
             ("", false, null),
             ("No Exceptions Noted.", true, WordHelper.Purple)));
 
@@ -544,11 +544,11 @@ public class HemisDraftReportController : Controller
 
         // ── Signature ──────────────────────────────────────────────────────────────
         body.Append(WordHelper.WPara("_______________________________________________", afterPt: 2));
-        body.Append(WordHelper.WPara("SizweNtsalubaGobodo Grant Thornton Inc.", bold: true, color: WordHelper.Purple, afterPt: 0));
-        body.Append(WordHelper.WPara("Nericha Moodley", bold: true, color: WordHelper.Purple, afterPt: 2));
+        body.Append(WordHelper.WPara("Auditor Firm Name", bold: true, color: WordHelper.Purple, afterPt: 0));
+        body.Append(WordHelper.WPara("Full Name", bold: true, color: WordHelper.Purple, afterPt: 2));
         body.Append(WordHelper.WPara("Director", afterPt: 0));
         body.Append(WordHelper.WPara("Registered Auditor", afterPt: 6));
-        body.Append(WordHelper.WPara("Date: xx July 2026", afterPt: 6));
+        body.Append(WordHelper.WPara("Date: xx July xxxx", afterPt: 6));
         body.Append(WordHelper.WPara("152 14th Road Noordwyk", afterPt: 0));
         body.Append(WordHelper.WPara("Midrand, 1687", afterPt: 0));
 

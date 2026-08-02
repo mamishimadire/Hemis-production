@@ -233,6 +233,78 @@ public static class WordHelper
         return cell;
     }
 
+    // ── Indented paragraph (for sub-items in engagement letters) ─────────────
+    public static Paragraph IndentPara(string text, int leftTwips = 360,
+        bool bold = false, string? color = null, int sizePt = 9, int afterPt = 4)
+    {
+        var para = WPara(text, bold: bold, color: color, sizePt: sizePt, afterPt: afterPt);
+        var pProps = para.Elements<ParagraphProperties>().First();
+        pProps.Append(new Indentation { Left = leftTwips.ToString() });
+        return para;
+    }
+
+    // ── Section heading for engagement letters ────────────────────────────────
+    public static Paragraph ELSection(string num, string title) =>
+        WPara($"{num}  {title}", bold: true, color: Purple, afterPt: 4, beforePt: 6);
+
+    // ── Simple 3-column table for fee schedules ───────────────────────────────
+    public static Table SimpleTable(string[] headers, params string[][] rows)
+    {
+        var tbl = new Table();
+        tbl.Append(new TableProperties(
+            new TableWidth { Type = TableWidthUnitValues.Pct, Width = "5000" },
+            new TableBorders(
+                new TopBorder    { Val = BorderValues.Single, Size = 4, Color = "AAAAAA" },
+                new LeftBorder   { Val = BorderValues.Single, Size = 4, Color = "AAAAAA" },
+                new BottomBorder { Val = BorderValues.Single, Size = 4, Color = "AAAAAA" },
+                new RightBorder  { Val = BorderValues.Single, Size = 4, Color = "AAAAAA" },
+                new InsideHorizontalBorder { Val = BorderValues.Single, Size = 4, Color = "AAAAAA" },
+                new InsideVerticalBorder   { Val = BorderValues.Single, Size = 4, Color = "AAAAAA" }
+            )
+        ));
+        // header row
+        var hr = new TableRow();
+        foreach (var h in headers)
+        {
+            var c = new TableCell();
+            c.Append(new TableCellProperties(
+                new Shading { Val = ShadingPatternValues.Clear, Color = "auto", Fill = Purple },
+                new TableCellMargin(
+                    new TopMargin    { Width = "60",  Type = TableWidthUnitValues.Dxa },
+                    new LeftMargin   { Width = "80",  Type = TableWidthUnitValues.Dxa },
+                    new BottomMargin { Width = "60",  Type = TableWidthUnitValues.Dxa },
+                    new RightMargin  { Width = "80",  Type = TableWidthUnitValues.Dxa }
+                )
+            ));
+            c.Append(WPara(h, bold: true, color: White, afterPt: 0));
+            hr.Append(c);
+        }
+        tbl.Append(hr);
+        // data rows
+        foreach (var row in rows)
+        {
+            var tr = new TableRow();
+            bool isTotal = row.Any(x => x.StartsWith("Total", StringComparison.OrdinalIgnoreCase));
+            foreach (var cell in row)
+            {
+                var tc = new TableCell();
+                tc.Append(new TableCellProperties(
+                    isTotal ? new Shading { Val = ShadingPatternValues.Clear, Color = "auto", Fill = Purple } : null!,
+                    new TableCellMargin(
+                        new TopMargin    { Width = "60",  Type = TableWidthUnitValues.Dxa },
+                        new LeftMargin   { Width = "80",  Type = TableWidthUnitValues.Dxa },
+                        new BottomMargin { Width = "60",  Type = TableWidthUnitValues.Dxa },
+                        new RightMargin  { Width = "80",  Type = TableWidthUnitValues.Dxa }
+                    )
+                ));
+                tc.Append(WPara(cell, bold: isTotal, color: isTotal ? White : null, afterPt: 0));
+                tr.Append(tc);
+            }
+            tbl.Append(tr);
+        }
+        return tbl;
+    }
+
     // ── Page setup ───────────────────────────────────────────────────────────
     public static SectionProperties PageSetup() =>
         new SectionProperties(

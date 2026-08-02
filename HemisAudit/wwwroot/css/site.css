@@ -78,6 +78,38 @@ html, body { height: 100%; font-family: var(--font); color: var(--text); backgro
 .sidebar__nav-item:hover { background: rgba(255,255,255,.05); color: #fff; }
 .sidebar__nav-item--active { background: rgba(139,0,0,.3); color: #fff; border-right: 3px solid var(--red-bright); }
 
+.sidebar__nav-section--toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 8px 16px;
+    margin-top: 8px;
+    color: #AAAACC;
+    background: none;
+    border: none;
+    outline: none;
+    text-align: left;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.sidebar__nav-section--toggle:hover {
+    color: #fff;
+}
+.sidebar__nav-group {
+    padding-left: 8px;
+}
+.sidebar__nav-group--collapsed {
+    display: none;
+}
+.sidebar__nav-chevron {
+    font-size: 11px;
+    color: #AAAACC;
+}
+
 .nav-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .nav-dot--red    { background: var(--red-bright); }
 .nav-dot--green  { background: #4CAF50; }

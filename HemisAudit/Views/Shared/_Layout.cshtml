@@ -228,37 +228,42 @@
                 </span>
                 <span class="sidebar__nav-label">DEETYAPAC Help</span>
             </a>
-            <div class="sidebar__nav-section">Documents</div>
-            <a href="/WorkingPaper" class="sidebar__nav-item @(currentPath.StartsWith("/workingpaper") ? "sidebar__nav-item--active" : "")">
-                <span class="nav-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" class="nav-icon__svg" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-                        <path d="M14 2v6h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                        <path d="M9 13h6M9 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                    </svg>
-                </span>
-                <span class="sidebar__nav-label">Working Paper</span>
-            </a>
-            <a href="/HemisDraftReport" class="sidebar__nav-item @(currentPath.StartsWith("/hemisdraftreport") ? "sidebar__nav-item--active" : "")">
-                <span class="nav-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" class="nav-icon__svg" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-                        <path d="M14 2v6h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                        <path d="M9 10h6M9 14h6M9 18h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                    </svg>
-                </span>
-                <span class="sidebar__nav-label">HEMIS Draft Report</span>
-            </a>
-            <a href="/ClinicalDraftReport" class="sidebar__nav-item @(currentPath.StartsWith("/clinicaldraftreport") ? "sidebar__nav-item--active" : "")">
-                <span class="nav-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" class="nav-icon__svg" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-                        <path d="M14 2v6h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                        <path d="M9 10h6M9 14h6M9 18h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                    </svg>
-                </span>
-                <span class="sidebar__nav-label">Clinical Training Draft</span>
-            </a>
+            <button type="button" class="sidebar__nav-section sidebar__nav-section--toggle" id="sidebarDocumentsToggle" aria-expanded="true">
+                Documents
+                <span class="sidebar__nav-chevron" aria-hidden="true">▾</span>
+            </button>
+            <div class="sidebar__nav-group sidebar__nav-group--expanded" id="sidebarDocumentsGroup">
+                <a href="/WorkingPaper" class="sidebar__nav-item @(currentPath.StartsWith("/workingpaper") ? "sidebar__nav-item--active" : "")">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" class="nav-icon__svg" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                            <path d="M14 2v6h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M9 13h6M9 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                        </svg>
+                    </span>
+                    <span class="sidebar__nav-label">Working Paper</span>
+                </a>
+                <a href="/HemisDraftReport" class="sidebar__nav-item @(currentPath.StartsWith("/hemisdraftreport") ? "sidebar__nav-item--active" : "")">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" class="nav-icon__svg" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                            <path d="M14 2v6h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M9 10h6M9 14h6M9 18h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                        </svg>
+                    </span>
+                    <span class="sidebar__nav-label">HEMIS Draft Report</span>
+                </a>
+                <a href="/ClinicalDraftReport" class="sidebar__nav-item @(currentPath.StartsWith("/clinicaldraftreport") ? "sidebar__nav-item--active" : "")">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" class="nav-icon__svg" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                            <path d="M14 2v6h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M9 10h6M9 14h6M9 18h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                        </svg>
+                    </span>
+                    <span class="sidebar__nav-label">Clinical Training Draft</span>
+                </a>
+            </div>
             <a href="/Saqa" class="sidebar__nav-item @(currentPath.StartsWith("/saqa") ? "sidebar__nav-item--active" : "")">
                 <span class="nav-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" class="nav-icon__svg" xmlns="http://www.w3.org/2000/svg">
@@ -546,6 +551,25 @@
         sidebarHideBtn.addEventListener('click', function () {
             setSidebarHidden(!isSidebarHidden());
         });
+    }
+
+    var documentsToggle = document.getElementById('sidebarDocumentsToggle');
+    var documentsGroup = document.getElementById('sidebarDocumentsGroup');
+
+    function syncDocumentsGroup() {
+        if (!documentsToggle || !documentsGroup) return;
+        var expanded = documentsToggle.getAttribute('aria-expanded') === 'true';
+        documentsGroup.classList.toggle('sidebar__nav-group--collapsed', !expanded);
+        documentsToggle.querySelector('.sidebar__nav-chevron').textContent = expanded ? '▾' : '▸';
+    }
+
+    if (documentsToggle && documentsGroup) {
+        documentsToggle.addEventListener('click', function () {
+            var isExpanded = documentsToggle.getAttribute('aria-expanded') === 'true';
+            documentsToggle.setAttribute('aria-expanded', String(!isExpanded));
+            syncDocumentsGroup();
+        });
+        syncDocumentsGroup();
     }
 
     window.showAppToast = function (message, type) {
