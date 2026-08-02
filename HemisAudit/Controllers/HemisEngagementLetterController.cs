@@ -30,10 +30,11 @@ public class HemisEngagementLetterController : Controller
 
         // Letterhead
         WordHelper.AddHeaderTable(body,
-            ["The Chief Financial Officer (CFO)", "Tshwane University of Technology", "Private Bag X680", "Pretoria", "0001"],
-            ["SizweNtsalubaGobodo Grant Thornton", "152, 14th Road, Noordwyk", "Midrand, 1687", "T +27 (0) 12 443 6000", "sng-grantthornton.co.za"]);
+            ["14 May 2026", "The Chief Financial Officer (CFO)", "Tshwane University of Technology (TUT)", "Private Bag X600", "Pretoria", "0001"],
+            ["SNG Grant Thornton", "152 14th Road", "Noordwyk,", "Midrand, 1687", "T: +27 (0) 86 117 6782"]);
 
         body.Append(WordHelper.Empty(8));
+        body.Append(WordHelper.WPara("Dear Mr. Mamishi", afterPt: 8));
         body.Append(WordHelper.WPara(
             "Engagement letter: Higher Education Management Information System (HEMIS) – Agreed Upon Procedures for the period ending 31 December 2025.",
             bold: true, color: WordHelper.Purple, sizePt: 10, afterPt: 8));
@@ -704,7 +705,19 @@ public class HemisEngagementLetterController : Controller
         body.Append(WordHelper.WPara("Division: Assurance", afterPt: 0));
         body.Append(WordHelper.WPara("SizweNtsalubaGobodo Grant Thornton", bold: true, afterPt: 0));
         body.Append(WordHelper.WPara("T:", afterPt: 0));
-        body.Append(WordHelper.WPara("E:", afterPt: 4));
+        body.Append(WordHelper.WPara("E:", afterPt: 12));
+
+        // 28. Acceptance of terms
+        body.Append(WordHelper.ELSection("28.", "Acceptance of terms"));
+        body.Append(WordHelper.WPara(
+            "The signatory to this engagement letter confirms he has the authority to accept its terms. When acting in a representative capacity, the signatory hereby confirms that he has been duly authorised in writing to act in such representative capacity and to bind the client authorizing the signatory to act as if the client was personally in a position to affix its signature.",
+            afterPt: 10));
+        body.Append(WordHelper.WPara(
+            "I acknowledge that the contents of this Contract accord with our arrangements with the practitioner and that I am authorised to sign this contract on behalf of the client",
+            afterPt: 12));
+        body.Append(WordHelper.WPara("Name of Signatory     ___________________________", bold: true, afterPt: 10));
+        body.Append(WordHelper.WPara("Date     ___________________________", bold: true, afterPt: 10));
+        body.Append(WordHelper.WPara("Signature     ___________________________", bold: true, afterPt: 4));
 
         body.Append(WordHelper.PageSetup());
         main.Document.Append(body);
