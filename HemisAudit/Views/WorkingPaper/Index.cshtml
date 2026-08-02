@@ -95,6 +95,7 @@
     border-bottom: 1px solid #eee;
     border-right: 1px solid #eee;
     vertical-align: top;
+    color: #111;
 }
 
 .wp-table tr:hover td {
@@ -104,11 +105,11 @@
 .wp-kv-table td:first-child {
     font-weight: 600;
     width: 200px;
-    color: #444;
+    color: #111;
 }
 
 .wp-kv-table td:last-child {
-    color: #555;
+    color: #111;
 }
 
 .rule-num {
@@ -120,7 +121,7 @@
 
 .rule-cat {
     font-style: italic;
-    color: #666;
+    color: #111;
     white-space: nowrap;
     width: 160px;
 }
@@ -144,6 +145,7 @@
     white-space: pre-line;
     font-size: .82rem;
     line-height: 1.55;
+    color: #111;
 }
 
 .step-num {
@@ -177,7 +179,7 @@
 
 .steps-list .step-body {
     flex: 1;
-    color: #333;
+    color: #111;
 }
 
 .steps-list .step-body strong {
@@ -335,6 +337,53 @@
             <li><span class="step-num">36</span><span class="step-body">Deceased student check by applying rules <strong>#36</strong> outlined in <strong>Rules Applied (Rule Table)</strong></span></li>
             <li><span class="step-num">37</span><span class="step-body">Report on the exceptions.</span></li>
         </ol>
+    </div>
+
+    <!-- Data Source -->
+    <div class="wp-section">
+        <div class="wp-section-head">Data Source</div>
+        <div style="overflow-x:auto">
+        <table class="wp-table">
+            <thead>
+                <tr>
+                    <th style="width:50px">Files</th>
+                    <th style="width:240px">File Name</th>
+                    <th>Description</th>
+                    <th style="width:180px">Note</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td style="text-align:center">1</td><td>H16QUAL</td><td>Qualification ASCII files extracted from production.</td><td></td></tr>
+                <tr><td style="text-align:center">2</td><td>H16CRSE</td><td>Corse ASCII files extracted from production.</td><td></td></tr>
+                <tr><td style="text-align:center">3</td><td>H16CESM</td><td>CESM ASCII files extracted from production.</td><td></td></tr>
+                <tr><td style="text-align:center">4</td><td>H16CRED</td><td>Course Credit ASCII files extracted from production.</td><td></td></tr>
+                <tr><td style="text-align:center">5</td><td>H16STUD</td><td>Student ASCII files extracted from production.</td><td></td></tr>
+                <tr><td style="text-align:center">6</td><td>H16CREG</td><td>Course Registration ASCII files extracted from production.</td><td></td></tr>
+                <tr><td style="text-align:center">7</td><td>H16PROF</td><td>Staff ASCII files extracted from production.</td><td></td></tr>
+                <tr><td style="text-align:center">8</td><td>dbo_QUAL</td><td>Qualification data from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">9</td><td>dbo_CRSE</td><td>Course data from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">10</td><td>dbo_CESM</td><td>CESM data from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">11</td><td>dbo_CRED</td><td>Course Credit data from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">12</td><td>dbo_STUD</td><td>Student data from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">13</td><td>dbo_CREG</td><td>Course Registration data from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">14</td><td>dbo_PROF</td><td>Staff data from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">15</td><td>dbo_QUAL_VALIDATION_DETAIL</td><td>Qualification validation details from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">16</td><td>dbo_CRSE_VALIDATION_DETAIL</td><td>Course validation details from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">17</td><td>dbo_CESM_VALIDATION_DETAIL</td><td>CESM validation details from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">18</td><td>dbo_CRED_VALIDATION_DETAIL</td><td>Course credit validation details from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">19</td><td>dbo_STUD_VALIDATION_DETAIL</td><td>Student validation details from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">20</td><td>dbo_CREG_VALIDATION_DETAIL</td><td>Course registration validation details from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">21</td><td>dbo_PROF_VALIDATION_DETAIL</td><td>Staff validation details from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">22</td><td>deceased.xlsx</td><td>Course registration data from the VALPAC system.</td><td></td></tr>
+                <tr><td style="text-align:center">23</td><td>2024 CENSUS DATES.xlsx</td><td>Census Date working file for census design</td><td></td></tr>
+                <tr><td style="text-align:center">24</td><td>Census Date list &ndash; Final Report.docx</td><td>Census Date file from ITS configuration</td><td></td></tr>
+                <tr><td style="text-align:center">25</td><td>MT-audit-prod-CRSE.xlsx</td><td>Course master file from ITS</td><td></td></tr>
+                <tr><td style="text-align:center">26</td><td>MT-audit-prod-QUAL.xlsx</td><td>Qualification master file from ITS</td><td></td></tr>
+                <tr><td style="text-align:center">27</td><td>MT-Audit-prod-std.xlsx</td><td>Student master file from ITS</td><td></td></tr>
+                <tr><td style="text-align:center">28</td><td>Foundation_Sample_Moira.FIL</td><td>Foundation students extraction results</td><td></td></tr>
+            </tbody>
+        </table>
+        </div>
     </div>
 
     <!-- Rules Applied -->
@@ -520,109 +569,225 @@ ISBLANK(dbo_CREG.007) OR dbo_CREG.007 &lt;&gt; dbo_STUD.007</td>
                 </tr>
                 <tr>
                     <td class="rule-num">21</td><td class="rule-cat">Sample Selection</td>
-                    <td class="rule-text">* From the dbo_STUD table, selected First Time Entering (FTEN) students where the student is registered for the first time in the current year.</td>
-                    <td class="rule-note">FTEN File sample</td>
+                    <td class="rule-text">* From the dbo_STUD table, selected 40 first time entering  students using the below criteria
+
+010 = &quot;F&quot;</td>
+                    <td class="rule-note">First Time Entering sample</td>
                     <td class="rule-script">Refer to Ften Sample</td>
                 </tr>
                 <tr>
                     <td class="rule-num">22</td><td class="rule-cat">Sample Selection</td>
-                    <td class="rule-text">* From the dbo_PROF table, selected staff members for audit testing.</td>
-                    <td class="rule-note">Staff File sample</td>
+                    <td class="rule-text">* From the dbo_PROF table, selected 30 staff with using the below criteria
+
+_41 = &quot;PE&quot; AND _39 = &quot;01&quot;
+
+AND
+
+_41 = &quot;PE&quot; AND _39 &lt;&gt; &quot;01&quot;
+
+AND
+
+_41 &lt;&gt; &quot;PE&quot; AND _39 &lt;&gt; &quot;01&quot;</td>
+                    <td class="rule-note">Staff sample</td>
                     <td class="rule-script">Refer to Staff Sample</td>
                 </tr>
 
-                <!-- Reconciliation -->
+                <!-- Reconcile datasets -->
                 <tr>
-                    <td class="rule-num">23</td><td class="rule-cat">Reconciliation</td>
-                    <td class="rule-text">Reconcile the student count in dbo_STUD against the H16STUD file to confirm completeness.</td>
-                    <td class="rule-note">N/A</td>
+                    <td class="rule-num">23</td><td class="rule-cat">Reconcile datasets</td>
+                    <td class="rule-text">The below filters was applied on dbo_STUD
+
+ISBLANK(_2024H16STUD.STUDNUM) OR _08 &lt;&gt; _2024H16STUD.SAIDNUM OR _01 &lt;&gt; _2024H16STUD.QUALCODE OR ISBLANK(Prod_STUD.IAGSTNO) OR _08 &lt;&gt; Prod_STUD.IADIDNO OR _01 &lt;&gt; Prod_STUD.IAGQUAL
+
+ISBLANK(_2024H16STUD.STUDNUM) OR ISBLANK(Prod_STUD.IAGSTNO)</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Recon</td>
                 </tr>
                 <tr>
-                    <td class="rule-num">24</td><td class="rule-cat">Reconciliation</td>
-                    <td class="rule-text">Reconcile the course registration count in dbo_CREG against the H16CREG file to confirm completeness.</td>
-                    <td class="rule-note">N/A</td>
+                    <td class="rule-num">24</td><td class="rule-cat">Reconcile datasets</td>
+                    <td class="rule-text">The below filter was applied on dbo_QUAL
+
+(ISBLANK(_2024H16QUAL.QUALCODE) OR ISBLANK(Prod_Qual.IAIQUAL)) AND _01 = dbo_STUD_01 AND _04 &lt;&gt; &quot;N&quot;</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Recon</td>
                 </tr>
                 <tr>
-                    <td class="rule-num">25</td><td class="rule-cat">Reconciliation</td>
-                    <td class="rule-text">Reconcile the qualification count in dbo_QUAL against the H16QUAL file to confirm completeness.</td>
-                    <td class="rule-note">N/A</td>
+                    <td class="rule-num">25</td><td class="rule-cat">Reconcile datasets</td>
+                    <td class="rule-text">The below filter was applied on dbo_CRSE
+
+NOT MATCH(_30, _2024H16CRSE.CRSECODE, Prod_Course.IALSUBJ)</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Recon</td>
                 </tr>
                 <tr>
-                    <td class="rule-num">26</td><td class="rule-cat">Reconciliation</td>
-                    <td class="rule-text">Reconcile the staff count in dbo_PROF against the H16PROF file to confirm completeness.</td>
-                    <td class="rule-note">N/A</td>
+                    <td class="rule-num">26</td><td class="rule-cat">Reconcile datasets</td>
+                    <td class="rule-text">The below filters was applied on dbo_PROF
+
+Personnel_Number &lt;&gt; dbo_PROF_37
+
+Personnel_Number = dbo_PROF_37 AND PERMANENT_OR_TEMP &lt;&gt; SUBS(dbo_PROF_41, 1,1)
+
+Personnel_Number = dbo_PROF_37 AND GND &lt;&gt; dbo_PROF_12
+
+Personnel_Number = dbo_PROF_37 AND c_Race &lt;&gt; dbo_PROF_14
+
+Personnel_Number = dbo_PROF_37 AND BIRTH_DATE &lt;&gt; CTOD(ALLT(STR(dbo_PROF_11, 10)), &quot;YYYYMMDD&quot;)</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Recon</td>
                 </tr>
 
                 <!-- Fatal Errors -->
                 <tr>
                     <td class="rule-num">27</td><td class="rule-cat">Fatal Errors</td>
-                    <td class="rule-text">Check for students with invalid qualification codes in the STUD file (dbo_STUD.001 not in dbo_QUAL.001).</td>
-                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-text">The below filter was applied on dbo_CESM_VALIDATION_DETAIL
+
+ALLT(Error_Type) = &quot;Fatal&quot;</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Fatal Errors</td>
                 </tr>
                 <tr>
                     <td class="rule-num">28</td><td class="rule-cat">Fatal Errors</td>
-                    <td class="rule-text">Check for students with invalid course registration records (dbo_CREG.030 not in dbo_CRSE.030).</td>
-                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-text">The below filter was applied on dbo_CRED_VALIDATION_DETAIL
+
+ALLT(Error_Type) = &quot;Fatal&quot; AND NOT MATCH(Error, &quot;02202&quot;, &quot;02301&quot;, &quot;02302&quot;, &quot;00708&quot;, &quot;07201&quot;, &quot;01501&quot;)</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Fatal Errors</td>
                 </tr>
                 <tr>
                     <td class="rule-num">29</td><td class="rule-cat">Fatal Errors</td>
-                    <td class="rule-text">Check for staff members with missing or invalid personnel numbers in dbo_PROF.</td>
-                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-text">The below filter was applied on dbo_CREG_VALIDATION_DETAIL
+
+Error = &quot;00708&quot;
+
+A sample of 25 was taken from the 103 errors</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Fatal Errors</td>
                 </tr>
                 <tr>
                     <td class="rule-num">30</td><td class="rule-cat">Fatal Errors</td>
-                    <td class="rule-text">Check for qualifications with missing CESM codes (dbo_CESM.006 IS BLANK).</td>
-                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-text">The below filter was applied on dbo_PROF_VALIDATION_DETAIL
+
+ALLT(Error_Type) = &quot;Fatal&quot; AND NOT MATCH(Error, &quot;02202&quot;, &quot;02301&quot;, &quot;02302&quot;, &quot;00708&quot;, &quot;07201&quot;, &quot;01501&quot;)</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Fatal Errors</td>
                 </tr>
                 <tr>
                     <td class="rule-num">31</td><td class="rule-cat">Fatal Errors</td>
-                    <td class="rule-text">Check for courses with missing credit values (dbo_CRED IS BLANK).</td>
-                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-text">The below filter was applied on dbo_QUAL_VALIDATION_DETAIL
+
+SET FILTER ALLT(Error_Type) = &quot;Fatal&quot; AND NOT MATCH(Error, &quot;02202&quot;, &quot;02301&quot;, &quot;02302&quot;, &quot;00708&quot;, &quot;07201&quot;, &quot;01501&quot;)</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Fatal Errors</td>
                 </tr>
                 <tr>
                     <td class="rule-num">32</td><td class="rule-cat">Fatal Errors</td>
-                    <td class="rule-text">Check for students with duplicate registration records in dbo_CREG.</td>
-                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-text">The below filter was applied on dbo_STUD_VALIDATION_DETAIL
+
+ALLT(Error_Type) = &quot;Fatal&quot; AND NOT MATCH(Error, &quot;02202&quot;, &quot;02301&quot;, &quot;02302&quot;, &quot;00708&quot;, &quot;07201&quot;, &quot;01501&quot;)</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Fatal Errors</td>
                 </tr>
                 <tr>
                     <td class="rule-num">33</td><td class="rule-cat">Fatal Errors</td>
-                    <td class="rule-text">Check for staff records where the appointment date is after the census date.</td>
-                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-text">The below filter was applied on dbo_PROF_VALIDATION_DETAIL
+
+ALLT(Error_Type) = &quot;Fatal&quot; AND NOT MATCH(Error, &quot;02202&quot;, &quot;02301&quot;, &quot;02302&quot;, &quot;00708&quot;, &quot;07201&quot;, &quot;01501&quot;)</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Fatal Errors</td>
                 </tr>
 
-                <!-- Census / Course / Deceased -->
+                <!-- Census Checks / Coding / Deceased -->
                 <tr>
-                    <td class="rule-num">34</td><td class="rule-cat">Census Date Check</td>
-                    <td class="rule-text">Census dates check: verify that all student and staff records fall within the approved census dates for the reporting period.</td>
-                    <td class="rule-note">N/A</td>
+                    <td class="rule-num">34</td><td class="rule-cat">Census Checks</td>
+                    <td class="rule-text">Calculate fields used to define census dates:
+1. DAYS
+a) Calculate the number of days between the First and the Last Class Date.
+b) Save the field as c_Days.
+
+2. DAYS_2
+a) Calculate the midpoint by dividing the results in 1. by 2 i.e., c_Days/2.
+b) Save the field as c_Days_2.
+
+3. CENSUS_DATE_PREP
+a) Determine the census date based on adding the results in 2. above to the first lecture date i.e., First_Day_Class + c_Days_2.
+b) Save the field as c_Census_Date_Prep.
+
+4. CENSUS_DATE
+a) Determine the actual census date based on the results in 3 and if the day falls on a weekend or holiday, the next day or Monday will be the census date.
+b) Save the field as c_ACTUAL_CENSUS_DATE.
+
+5. Verify the defined census date against the computed census date i.e., c_ACTUAL_CENSUS_DATE &lt;&gt; s_CENSUS_DATE.</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Census Date</td>
                 </tr>
                 <tr>
-                    <td class="rule-num">35</td><td class="rule-cat">Course Code Check</td>
-                    <td class="rule-text">Course coding check: verify that all course codes in dbo_CRSE match the approved course codes in the H16CRSE master file.</td>
-                    <td class="rule-note">N/A</td>
+                    <td class="rule-num">35</td><td class="rule-cat">Coding of courses</td>
+                    <td class="rule-text">Checked for duplicates on dbo_CRSE using the 030  field.</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Course Code</td>
                 </tr>
                 <tr>
-                    <td class="rule-num">36</td><td class="rule-cat">Deceased Student Check</td>
-                    <td class="rule-text">Deceased student check: verify that no deceased students are included in the HEMIS student population for the reporting period.</td>
-                    <td class="rule-note">N/A</td>
+                    <td class="rule-num">36</td><td class="rule-cat">Deceased students</td>
+                    <td class="rule-text">The below filter was applied on dbo_STUD
+
+_07 = Deceased_Students.STUDENT_NUMBER</td>
+                    <td class="rule-note">No exceptions were identified</td>
                     <td class="rule-script">Refer to Deceased Students</td>
                 </tr>
             </tbody>
         </table>
         </div>
+    </div>
+
+    <!-- Analysis Results -->
+    <div class="wp-section">
+        <div class="wp-section-head">Analysis Results</div>
+        <div style="overflow-x:auto">
+        <table class="wp-table">
+            <thead>
+                <tr>
+                    <th style="width:50px">Tabs</th>
+                    <th style="width:180px">Tab Name</th>
+                    <th style="width:300px">Tab Description</th>
+                    <th>Finding Summary / Note</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td style="text-align:center">1</td>
+                    <td>Working Paper</td>
+                    <td>Working Paper</td>
+                    <td>This worksheet</td>
+                </tr>
+                <tr>
+                    <td style="text-align:center">5</td>
+                    <td style="color:#5C2D91;font-weight:600">SQLVALPAC 00708</td>
+                    <td>Fatal errors &ldquo;00708&rdquo; appear in the SQLVALPAC CREG validation report.</td>
+                    <td class="rule-text"><strong>Findings:</strong>
+Exceptions from the analysis:
+There were 46 student exceptions identified in the analysis:
+
+&bull; Error codes 00708
+
+<strong>Conclusion:</strong>
+Auditors to further test the evidence of the 15 students selected from the exceptions.</td>
+                </tr>
+            </tbody>
+        </table>
+        </div>
+    </div>
+
+    <!-- Conclusion -->
+    <div class="wp-section">
+        <div class="wp-section-head">Conclusion</div>
+        <table class="wp-table">
+            <tbody>
+                <tr>
+                    <td style="width:50px;text-align:center;font-weight:700;color:#5C2D91">1</td>
+                    <td>The Data Analytics Team has conducted the analysis, therefore management must provide comments on the finding to be captured in the final report.</td>
+                </tr>
+            </tbody>
+        </table>
     </div>
 
 </div>
