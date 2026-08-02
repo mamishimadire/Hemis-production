@@ -1,0 +1,617 @@
+@{
+    ViewData["Title"] = "Working Paper";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    var downloadUrl = Url.Action("Download", "WorkingPaper") ?? "/WorkingPaper/Download";
+}
+
+@section Styles {
+<style>
+.wp-page {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 0 48px 0;
+}
+
+.wp-topbar {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+}
+
+.wp-title-block h1 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--color-text, #111);
+    margin: 0 0 4px 0;
+}
+
+.wp-note {
+    background: #f0eaf8;
+    border-left: 4px solid #5C2D91;
+    border-radius: 4px;
+    padding: 10px 16px;
+    font-size: .84rem;
+    color: #3b1a6e;
+    margin-bottom: 20px;
+}
+
+.wp-dl-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    background: #5C2D91;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: .875rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.wp-dl-btn:hover {
+    background: #4a2278;
+}
+
+.wp-section {
+    margin-bottom: 28px;
+}
+
+.wp-section-head {
+    background: #5C2D91;
+    color: #fff;
+    font-weight: 700;
+    font-size: .9rem;
+    padding: 7px 14px;
+    border-radius: 4px 4px 0 0;
+}
+
+.wp-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .84rem;
+    border: 1px solid #ddd;
+    border-top: none;
+}
+
+.wp-table th {
+    background: #f0eaf8;
+    font-weight: 600;
+    padding: 7px 12px;
+    text-align: left;
+    border-bottom: 2px solid #5C2D91;
+    border-right: 1px solid #e0d4f0;
+    white-space: nowrap;
+}
+
+.wp-table td {
+    padding: 7px 12px;
+    border-bottom: 1px solid #eee;
+    border-right: 1px solid #eee;
+    vertical-align: top;
+}
+
+.wp-table tr:nth-child(even) td {
+    background: #fafafa;
+}
+
+.wp-table tr:hover td {
+    background: #f5f0fc;
+}
+
+.wp-kv-table td:first-child {
+    font-weight: 600;
+    width: 200px;
+    color: #444;
+}
+
+.wp-kv-table td:last-child {
+    color: #555;
+}
+
+.rule-num {
+    font-weight: 700;
+    color: #5C2D91;
+    text-align: center;
+    width: 40px;
+}
+
+.rule-cat {
+    font-style: italic;
+    color: #666;
+    white-space: nowrap;
+    width: 160px;
+}
+
+.rule-note {
+    color: #1a6e35;
+    font-weight: 600;
+}
+
+.rule-note.fatal {
+    color: #b91c1c;
+}
+
+.rule-script a {
+    color: #5C2D91;
+    text-decoration: none;
+    font-size: .8rem;
+}
+
+.rule-text {
+    white-space: pre-line;
+    font-size: .82rem;
+    line-height: 1.55;
+}
+
+.step-num {
+    font-weight: 700;
+    color: #5C2D91;
+    text-align: right;
+    width: 36px;
+    padding-right: 8px;
+}
+
+.steps-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #ddd;
+    border-top: none;
+}
+
+.steps-list li {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    padding: 7px 14px;
+    border-bottom: 1px solid #eee;
+    font-size: .84rem;
+}
+
+.steps-list li:nth-child(even) {
+    background: #fafafa;
+}
+
+.steps-list li:hover {
+    background: #f5f0fc;
+}
+
+.steps-list .step-body {
+    flex: 1;
+    color: #333;
+}
+
+.steps-list .step-body strong {
+    color: #5C2D91;
+}
+
+@@media (prefers-color-scheme: dark) {
+    .wp-note { background: #2a1a4a; border-color: #9b5cf6; color: #d4b8ff; }
+    .wp-section-head { background: #4a1f7a; }
+    .wp-table th { background: #2a1a4a; border-bottom-color: #9b5cf6; border-right-color: #3a2060; }
+    .wp-table td { border-bottom-color: #2a2a2a; border-right-color: #2a2a2a; }
+    .wp-table tr:nth-child(even) td { background: #1e1e2e; }
+    .wp-table tr:hover td { background: #2a1a4a; }
+    .wp-kv-table td:first-child { color: #ccc; }
+    .wp-kv-table td:last-child { color: #bbb; }
+    .wp-dl-btn { background: #7c3aed; }
+    .wp-dl-btn:hover { background: #6d28d9; }
+    .steps-list { border-color: #2a2a2a; }
+    .steps-list li { border-bottom-color: #2a2a2a; }
+    .steps-list li:nth-child(even) { background: #1e1e2e; }
+    .steps-list li:hover { background: #2a1a4a; }
+}
+
+:root[data-theme="dark"] .wp-note { background: #2a1a4a; border-color: #9b5cf6; color: #d4b8ff; }
+:root[data-theme="light"] .wp-note { background: #f0eaf8; border-color: #5C2D91; color: #3b1a6e; }
+</style>
+}
+
+<div class="wp-page">
+
+    <div class="wp-topbar">
+        <div class="wp-title-block">
+            <h1>TUT HEMIS Working Paper</h1>
+            <div style="font-size:.82rem;color:#888;">HEMIS audit guide — staff and student data analysis</div>
+        </div>
+        <a href="@downloadUrl" class="wp-dl-btn" data-track-download data-download-label="Downloading Working Paper" data-download-name="TUT_HEMIS_Working_Paper.xlsx">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 3v13M7 12l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M4 19h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            Download Excel
+        </a>
+    </div>
+
+    <div class="wp-note">
+        Note that use this WP as a guide as it it can be amended at anytime &mdash; this was developed as a guide only.
+    </div>
+
+    <!-- Engagement Information -->
+    <div class="wp-section">
+        <div class="wp-section-head">Engagement Information</div>
+        <table class="wp-table wp-kv-table">
+            <tbody>
+                <tr><td>Parent Name</td><td></td></tr>
+                <tr><td>Client Name</td><td></td></tr>
+                <tr><td>Engagement Name</td><td></td></tr>
+                <tr><td>System</td><td></td></tr>
+                <tr><td>Financial Year Start</td><td></td></tr>
+                <tr><td>Financial Year End</td><td></td></tr>
+                <tr><td>Period Reviewed Start</td><td>N/A</td></tr>
+                <tr><td>Period Reviewed End</td><td>N/A</td></tr>
+                <tr><td>Report Signing Date</td><td></td></tr>
+                <tr><td>Office</td><td>GAUTENG</td></tr>
+                <tr><td>Reporting Currency</td><td>N/A</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Working Paper -->
+    <div class="wp-section">
+        <div class="wp-section-head">Working Paper</div>
+        <table class="wp-table wp-kv-table">
+            <tbody>
+                <tr><td>Performed By</td><td></td><td style="font-weight:600;width:90px">Date</td><td></td></tr>
+                <tr><td>Final Review BY</td><td></td><td style="font-weight:600">Date</td><td></td></tr>
+                <tr><td>Report Date</td><td></td><td style="font-weight:600">Date</td><td></td></tr>
+                <tr><td>Analysis</td><td colspan="3">Data Analysis: Staff and Student Files</td></tr>
+                <tr><td>Script</td><td colspan="3"></td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Overall Audit Objective -->
+    <div class="wp-section">
+        <div class="wp-section-head">Overall Audit Objective</div>
+        <table class="wp-table">
+            <thead><tr><th style="width:70px">CAAT</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr>
+                    <td style="text-align:center;font-weight:700">1</td>
+                    <td>Perform analysis of the 2020 HEMIS directives on the TUT STAFF and STUDENT DATA by following the steps in the &ldquo;Analysis Steps&rdquo; section.</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Analysis Steps -->
+    <div class="wp-section">
+        <div class="wp-section-head">Analysis Steps</div>
+        <ol class="steps-list">
+            <li><span class="step-num">1</span><span class="step-body">Import data source H16QUAL into ACL</span></li>
+            <li><span class="step-num">2</span><span class="step-body">Import data source H16CRSE into ACL</span></li>
+            <li><span class="step-num">3</span><span class="step-body">Import data source H16CESM into ACL</span></li>
+            <li><span class="step-num">4</span><span class="step-body">Import data source H16CRED into ACL</span></li>
+            <li><span class="step-num">5</span><span class="step-body">Import data source H16STUD into ACL</span></li>
+            <li><span class="step-num">6</span><span class="step-body">Import data source H16CREG into ACL</span></li>
+            <li><span class="step-num">7</span><span class="step-body">Import data source H16PROF into ACL</span></li>
+            <li><span class="step-num">8</span><span class="step-body">Import data source dbo_QUAL into ACL</span></li>
+            <li><span class="step-num">9</span><span class="step-body">Import data source dbo_CRSE into ACL</span></li>
+            <li><span class="step-num">10</span><span class="step-body">Import data source dbo_CESM into ACL</span></li>
+            <li><span class="step-num">11</span><span class="step-body">Import data source dbo_CRED into ACL</span></li>
+            <li><span class="step-num">12</span><span class="step-body">Import data source dbo_STUD into ACL</span></li>
+            <li><span class="step-num">13</span><span class="step-body">Import data source dbo_CREG into ACL</span></li>
+            <li><span class="step-num">14</span><span class="step-body">Import data source dbo_PROF into ACL</span></li>
+            <li><span class="step-num">15</span><span class="step-body">Import data source dbo_QUAL_VALIDATION_DETAIL into ACL</span></li>
+            <li><span class="step-num">16</span><span class="step-body">Import data source dbo_CRSE_VALIDATION_DETAIL into ACL</span></li>
+            <li><span class="step-num">17</span><span class="step-body">Import data source dbo_CESM_VALIDATION_DETAIL into ACL</span></li>
+            <li><span class="step-num">18</span><span class="step-body">Import data source dbo_CRED_VALIDATION_DETAIL into ACL</span></li>
+            <li><span class="step-num">19</span><span class="step-body">Import data source dbo_STUD_VALIDATION_DETAIL into ACL</span></li>
+            <li><span class="step-num">20</span><span class="step-body">Import data source dbo_CREG_VALIDATION_DETAIL into ACL</span></li>
+            <li><span class="step-num">21</span><span class="step-body">Import data source dbo_PROF_VALIDATION_DETAIL into ACL</span></li>
+            <li><span class="step-num">22</span><span class="step-body">Import data source deceased.xlsx into ACL</span></li>
+            <li><span class="step-num">23</span><span class="step-body">Import data source 2024 CENSUS DATES.xlsx into ACL</span></li>
+            <li><span class="step-num">24</span><span class="step-body">Import data source Census Date list &ndash; Final Report.docx into ACL</span></li>
+            <li><span class="step-num">25</span><span class="step-body">Import data source MT-audit-prod-CRSE.xlsx into ACL</span></li>
+            <li><span class="step-num">26</span><span class="step-body">Import data source MT-audit-prod-QUAL.xlsx into ACL</span></li>
+            <li><span class="step-num">27</span><span class="step-body">Import data source MT-Audit-prod-std.xlsx into ACL</span></li>
+            <li><span class="step-num">28</span><span class="step-body">Import data source Foundation_Sample_Moira.FIL into ACL</span></li>
+            <li><span class="step-num">29</span><span class="step-body">Perform data integrity checks by applying rules <strong>#1&ndash;9</strong> outlined in <strong>Rules Applied (Rule Table)</strong></span></li>
+            <li><span class="step-num">30</span><span class="step-body">Prepare the data for analysis by applying rules <strong>#10</strong> outlined in <strong>Rules Applied (Rule Table)</strong></span></li>
+            <li><span class="step-num">31</span><span class="step-body">Select samples by applying rules <strong>#11&ndash;22</strong> outlined in <strong>Rules Applied (Rule Table)</strong></span></li>
+            <li><span class="step-num">32</span><span class="step-body">Reconcile the data by applying rules <strong>#23&ndash;26</strong> outlined in <strong>Rules Applied (Rule Table)</strong></span></li>
+            <li><span class="step-num">33</span><span class="step-body">Check for Fatal Errors in the data by applying rules <strong>#27&ndash;33</strong> outlined in <strong>Rules Applied (Rule Table)</strong></span></li>
+            <li><span class="step-num">34</span><span class="step-body">Census dates check by applying rules <strong>#34</strong> outlined in <strong>Rules Applied (Rule Table)</strong></span></li>
+            <li><span class="step-num">35</span><span class="step-body">Course coding check by applying rules <strong>#35</strong> outlined in <strong>Rules Applied (Rule Table)</strong></span></li>
+            <li><span class="step-num">36</span><span class="step-body">Deceased student check by applying rules <strong>#36</strong> outlined in <strong>Rules Applied (Rule Table)</strong></span></li>
+            <li><span class="step-num">37</span><span class="step-body">Report on the exceptions.</span></li>
+        </ol>
+    </div>
+
+    <!-- Rules Applied -->
+    <div class="wp-section">
+        <div class="wp-section-head">Rules Applied (Rule Table)</div>
+        <div style="overflow-x:auto">
+        <table class="wp-table">
+            <thead>
+                <tr>
+                    <th style="width:42px;text-align:center">#</th>
+                    <th style="width:170px">Rules / Calculation Rule</th>
+                    <th>Rule</th>
+                    <th style="width:210px">Note</th>
+                    <th style="width:190px">Script</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Data integrity checks -->
+                <tr>
+                    <td class="rule-num">1</td><td class="rule-cat">Data integrity checks</td>
+                    <td class="rule-text">The below filter was applied on dbo_QUAL to check if are there any qualifications with no qualification type.
+
+ISBLANK(005)</td>
+                    <td class="rule-note">No exceptions were identified</td>
+                    <td class="rule-script">Refer to Integrity Checks</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">2</td><td class="rule-cat">Data integrity checks</td>
+                    <td class="rule-text">The below filter was applied on dbo_QUAL to check if are there any qualifications with no approval status.
+
+ISBLANK(004)</td>
+                    <td class="rule-note">No exceptions were identified</td>
+                    <td class="rule-script">Refer to Integrity Checks</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">3</td><td class="rule-cat">Data integrity checks</td>
+                    <td class="rule-text">Checked for duplicates on dbo_QUAL using the 001 field.</td>
+                    <td class="rule-note">No exceptions were identified</td>
+                    <td class="rule-script">Refer to Integrity Checks</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">4</td><td class="rule-cat">Data integrity checks</td>
+                    <td class="rule-text">Checked for duplicates on dbo_CRSE using the 030 field.</td>
+                    <td class="rule-note">No exceptions were identified</td>
+                    <td class="rule-script">Refer to Integrity Checks</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">5</td><td class="rule-cat">Data integrity checks</td>
+                    <td class="rule-text">The below filter was applied on dbo_STUD to check if are there any students with invalid student numbers.
+
+NOT MAP(007, &quot;9999999&quot;)</td>
+                    <td class="rule-note">No exceptions were identified</td>
+                    <td class="rule-script">Refer to Integrity Checks</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">6</td><td class="rule-cat">Data integrity checks</td>
+                    <td class="rule-text">The below filter was applied on dbo_STUD to check if are there any students with no foundation indicator.
+
+ISBLANK(106)</td>
+                    <td class="rule-note">No exceptions were identified</td>
+                    <td class="rule-script">Refer to Integrity Checks</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">7</td><td class="rule-cat">Data integrity checks</td>
+                    <td class="rule-text">The below filter was applied on dbo_STUD and dbo_QUAL to check if are there any students linked to either no or invalid qualifications.
+
+ISBLANK(dbo_STUD.001) OR dbo_STUD.001 &lt;&gt; dbo_QUAL.001</td>
+                    <td class="rule-note">No exceptions were identified</td>
+                    <td class="rule-script">Refer to Integrity Checks</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">8</td><td class="rule-cat">Data integrity checks</td>
+                    <td class="rule-text">The below filter was applied on dbo_CRSE and dbo_CREG to check if are there any students enrolled for invalid courses.
+
+ISBLANK(dbo_CREG.030) OR dbo_CREG.030 &lt;&gt; dbo_CRSE.030</td>
+                    <td class="rule-note">No exceptions were identified</td>
+                    <td class="rule-script">Refer to Integrity Checks</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">9</td><td class="rule-cat">Data integrity checks</td>
+                    <td class="rule-text">The below filter was applied on dbo_STUD and dbo_CREG to check if are there any student course registration for ghost students.
+
+ISBLANK(dbo_CREG.007) OR dbo_CREG.007 &lt;&gt; dbo_STUD.007</td>
+                    <td class="rule-note">No exceptions were identified</td>
+                    <td class="rule-script">Refer to Integrity Checks</td>
+                </tr>
+
+                <!-- Joining Rules -->
+                <tr>
+                    <td class="rule-num">10</td><td class="rule-cat">Joining Rules</td>
+                    <td class="rule-text">The tables were joined on the following fields:
+1. dbo_CREG Key field(s): 030, 001+030
+2. dbo_CRSE Key field(s): 030
+3. dbo_STUD Key field(s): 007, 007+001
+4. dbo_QUAL Key field(s): 001
+5. dbo_CESM Key field(s): 001
+6. dbo_CRED Key field(s): 030, 001+030
+7. Census_dates Key field(s): BLOCK_CODE
+8. Census_dates_design Key field(s): BLOCK_CODE
+9. 2024H16STUD Key field(s): STUDNUM, STUDNUM+QUALCODE
+10. Prod_STUD Key field(s): IAGSTNO, IAGSTNO+IAGQUAL
+11. Prod_QUAL Key field(s): IAIQUAL
+12. 2024H16QUAL Key field(s): QUALCODE
+13. Prod_CRSE Key field(s): IALSUBJ
+14. 2024H16CRSE Key field(s): CRSECODE
+15. Employee_file Key field(s): Personnel_Number
+16. dbo_PROF Key field(s): 037
+17. Deceased_Students Key field(s): STUDENT_NUMBER</td>
+                    <td class="rule-note">N/A</td>
+                    <td class="rule-script">Refer to Integrity Checks</td>
+                </tr>
+
+                <!-- Sample Selection -->
+                <tr>
+                    <td class="rule-num">11</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_QUAL table, selected 40 undergraduate approved qualifications where the approval indicator is A (004 = &quot;A&quot;) and the qualification type is not postgraduate (NOT MATCH(dbo_QUAL_05, &quot;07&quot;,&quot;27&quot;,&quot;28&quot;,&quot;49&quot;,&quot;72&quot;,&quot;73&quot;,&quot;08&quot;,&quot;30&quot;,&quot;50&quot;,&quot;74&quot;,&quot;75&quot;) AND NOT MAP(dbo_QUAL_01,&quot;M?????&quot;)).
+
+* From the dbo_QUAL table, selected 5 postgraduate approved qualifications where the approval indicator is A (004 = &quot;A&quot;) and the qualification type is postgraduate (MATCH(dbo_QUAL_05,&quot;07&quot;,&quot;27&quot;,&quot;28&quot;,&quot;49&quot;,&quot;72&quot;,&quot;73&quot;,&quot;08&quot;,&quot;30&quot;,&quot;50&quot;,&quot;74&quot;,&quot;75&quot;)).</td>
+                    <td class="rule-note">Qualification File sample</td>
+                    <td class="rule-script">Refer to Qual Sample</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">12</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_CREG table, selected 40 courses</td>
+                    <td class="rule-note">Course Registration File sample</td>
+                    <td class="rule-script">Refer to Creg Sample</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">13</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_CESM table, selected 45 qualifications with a major field CESM (006 &lt;&gt; &quot;ZZZZZZ&quot;) and there is at least one student registered for the qualification (dbo_QUAL.001 = dbo_STUD.001)</td>
+                    <td class="rule-note">CESM File sample</td>
+                    <td class="rule-script">Refer to Cesm Sample</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">14</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_CRSE table, selected 55 approved courses where the approval indicator is A (031 = &quot;A&quot;) and there is at least one student registered for the course (dbo_CRSE.030 = dbo_CREG.030)</td>
+                    <td class="rule-note">Course File sample</td>
+                    <td class="rule-script">Refer to Crse Sample</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">15</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_CRED table, selected 40 courses for an approved qualification where the qualification approval indicator is A (004 = &quot;A&quot;) with at least one student registered for the course (dbo_CREG.001 = dbo_CRED.001 AND dbo_CREG.030 = dbo_CRED.030).</td>
+                    <td class="rule-note">Credit File sample</td>
+                    <td class="rule-script">Refer to Cred Sample</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">16</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_STUD table, selected 10 students where the qualification fulfilled indicator is N (025 = &quot;N&quot;), the foundation course indicator is Y (091 = &quot;Y&quot;).
+
+* From the dbo_STUD table, selected 3 students where the qualification fulfilled indicator is N (025 = &quot;N&quot;), the foundation course indicator is Y (091 = &quot;Y&quot;) and the distance learning indicator is D(024 = &quot;D&quot;).
+
+* From the dbo_STUD table, selected 47 students where the qualification fulfilled indicator is N (025 = &quot;N&quot;), the foundation course indicator is not Y (091 &lt;&gt; &quot;Y&quot;) and the distance learning indicator is D(024&lt;&gt;&quot;D&quot;).</td>
+                    <td class="rule-note">Student File sample</td>
+                    <td class="rule-script">Refer to Stud Sample</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">17</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_STUD table, selected 40 graduate students where the qualification fulfilled indicator is F (025 = &quot;F&quot;).</td>
+                    <td class="rule-note">Graduates File sample</td>
+                    <td class="rule-script">Refer to Grad Sample</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">18</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_STUD table, selected 5 NSFAS students where the NSFAS funded indicator is NS (019 = &quot;NS&quot;), and the foundation course indicator is Y (091 = &quot;Y&quot;).
+
+* From the dbo_STUD table, selected 3 NSFAS students where the NSFAS funded indicator is NS (019 = &quot;NS&quot;), and the foundation course indicator is Y (091 = &quot;Y&quot;) and the distance learning indicator is D(024=&quot;D&quot;).
+
+* From the dbo_STUD table, selected 32 NSFAS students where the NSFAS funded indicator is NS (019 = &quot;NS&quot;), and the foundation course indicator is not Y (091 &lt;&gt; &quot;Y&quot;) and the distance learning indicator is not D(024&lt;&gt;&quot;D&quot;).</td>
+                    <td class="rule-note">NSFAS File sample</td>
+                    <td class="rule-script">Refer to Nsfas Sample</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">19</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_STUD table, selected 10 Masters and PhD students where the qualification fulfilled indicator is F (025 = &quot;F&quot;) and the qualification type is masters and Doctoral (MATCH(dbo_QUAL.005,&quot;07&quot;,&quot;27&quot;,&quot;28&quot;,&quot;49&quot;,&quot;72&quot;,&quot;73&quot;,&quot;08&quot;,&quot;30&quot;,&quot;50&quot;,&quot;74&quot;,&quot;75&quot;)).</td>
+                    <td class="rule-note">Masters and Doctoral File sample</td>
+                    <td class="rule-script">Refer to M&amp;D Sample</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">20</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_STUD table, selected 10 foundation students where the Foundation Course and Student indicator is &quot;Y&quot; (_91 = &quot;Y&quot; AND _06 = &quot;Y&quot;)</td>
+                    <td class="rule-note">Foundation File sample</td>
+                    <td class="rule-script">Refer to Foundation Sample</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">21</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_STUD table, selected First Time Entering (FTEN) students where the student is registered for the first time in the current year.</td>
+                    <td class="rule-note">FTEN File sample</td>
+                    <td class="rule-script">Refer to Ften Sample</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">22</td><td class="rule-cat">Sample Selection</td>
+                    <td class="rule-text">* From the dbo_PROF table, selected staff members for audit testing.</td>
+                    <td class="rule-note">Staff File sample</td>
+                    <td class="rule-script">Refer to Staff Sample</td>
+                </tr>
+
+                <!-- Reconciliation -->
+                <tr>
+                    <td class="rule-num">23</td><td class="rule-cat">Reconciliation</td>
+                    <td class="rule-text">Reconcile the student count in dbo_STUD against the H16STUD file to confirm completeness.</td>
+                    <td class="rule-note">N/A</td>
+                    <td class="rule-script">Refer to Recon</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">24</td><td class="rule-cat">Reconciliation</td>
+                    <td class="rule-text">Reconcile the course registration count in dbo_CREG against the H16CREG file to confirm completeness.</td>
+                    <td class="rule-note">N/A</td>
+                    <td class="rule-script">Refer to Recon</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">25</td><td class="rule-cat">Reconciliation</td>
+                    <td class="rule-text">Reconcile the qualification count in dbo_QUAL against the H16QUAL file to confirm completeness.</td>
+                    <td class="rule-note">N/A</td>
+                    <td class="rule-script">Refer to Recon</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">26</td><td class="rule-cat">Reconciliation</td>
+                    <td class="rule-text">Reconcile the staff count in dbo_PROF against the H16PROF file to confirm completeness.</td>
+                    <td class="rule-note">N/A</td>
+                    <td class="rule-script">Refer to Recon</td>
+                </tr>
+
+                <!-- Fatal Errors -->
+                <tr>
+                    <td class="rule-num">27</td><td class="rule-cat">Fatal Errors</td>
+                    <td class="rule-text">Check for students with invalid qualification codes in the STUD file (dbo_STUD.001 not in dbo_QUAL.001).</td>
+                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-script">Refer to Fatal Errors</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">28</td><td class="rule-cat">Fatal Errors</td>
+                    <td class="rule-text">Check for students with invalid course registration records (dbo_CREG.030 not in dbo_CRSE.030).</td>
+                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-script">Refer to Fatal Errors</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">29</td><td class="rule-cat">Fatal Errors</td>
+                    <td class="rule-text">Check for staff members with missing or invalid personnel numbers in dbo_PROF.</td>
+                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-script">Refer to Fatal Errors</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">30</td><td class="rule-cat">Fatal Errors</td>
+                    <td class="rule-text">Check for qualifications with missing CESM codes (dbo_CESM.006 IS BLANK).</td>
+                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-script">Refer to Fatal Errors</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">31</td><td class="rule-cat">Fatal Errors</td>
+                    <td class="rule-text">Check for courses with missing credit values (dbo_CRED IS BLANK).</td>
+                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-script">Refer to Fatal Errors</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">32</td><td class="rule-cat">Fatal Errors</td>
+                    <td class="rule-text">Check for students with duplicate registration records in dbo_CREG.</td>
+                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-script">Refer to Fatal Errors</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">33</td><td class="rule-cat">Fatal Errors</td>
+                    <td class="rule-text">Check for staff records where the appointment date is after the census date.</td>
+                    <td class="rule-note fatal">Fatal errors identified</td>
+                    <td class="rule-script">Refer to Fatal Errors</td>
+                </tr>
+
+                <!-- Census / Course / Deceased -->
+                <tr>
+                    <td class="rule-num">34</td><td class="rule-cat">Census Date Check</td>
+                    <td class="rule-text">Census dates check: verify that all student and staff records fall within the approved census dates for the reporting period.</td>
+                    <td class="rule-note">N/A</td>
+                    <td class="rule-script">Refer to Census Date</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">35</td><td class="rule-cat">Course Code Check</td>
+                    <td class="rule-text">Course coding check: verify that all course codes in dbo_CRSE match the approved course codes in the H16CRSE master file.</td>
+                    <td class="rule-note">N/A</td>
+                    <td class="rule-script">Refer to Course Code</td>
+                </tr>
+                <tr>
+                    <td class="rule-num">36</td><td class="rule-cat">Deceased Student Check</td>
+                    <td class="rule-text">Deceased student check: verify that no deceased students are included in the HEMIS student population for the reporting period.</td>
+                    <td class="rule-note">N/A</td>
+                    <td class="rule-script">Refer to Deceased Students</td>
+                </tr>
+            </tbody>
+        </table>
+        </div>
+    </div>
+
+</div>
