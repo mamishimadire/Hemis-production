@@ -458,12 +458,17 @@ public class ClinicalEngagementLetterController : Controller
         body.Append(WordHelper.WPara("T:", afterPt: 0));
         body.Append(WordHelper.WPara("E:", afterPt: 12));
 
-        // Acceptance
-        body.Append(WordHelper.WPara("ACCEPTED AND AGREED on behalf of Tshwane University of Technology:", bold: true, afterPt: 6));
-        body.Append(WordHelper.WPara("Signature: _______________________________________________", afterPt: 4));
-        body.Append(WordHelper.WPara("Name: ___________________________________________________", afterPt: 4));
-        body.Append(WordHelper.WPara("Designation: ____________________________________________", afterPt: 4));
-        body.Append(WordHelper.WPara("Date: ___________________________________________________", afterPt: 4));
+        // 29. Acceptance of terms
+        body.Append(WordHelper.ELSection("29.", "Acceptance of terms"));
+        body.Append(WordHelper.WPara(
+            "The signatory to this engagement letter confirms he/she has the authority to accept its terms. When acting in a representative capacity, the signatory hereby confirms that he/she has been duly authorised in writing to act in such representative capacity and to bind the client authorizing the signatory to act as if the client was personally in a position to affix its signature.",
+            afterPt: 10));
+        body.Append(WordHelper.WPara(
+            "I acknowledge that the contents of this Contract accord with our arrangements with the auditor and that I am authorised to sign this contract on behalf of the client",
+            afterPt: 12));
+        body.Append(WordHelper.WPara("Name of Signatory     ___________________________", bold: true, afterPt: 10));
+        body.Append(WordHelper.WPara("Date     ___________________________", bold: true, afterPt: 10));
+        body.Append(WordHelper.WPara("Signature     ___________________________", bold: true, afterPt: 4));
 
         body.Append(WordHelper.PageSetup());
         main.Document.Append(body);
