@@ -54,7 +54,7 @@ public class WorkingPaperController : Controller
 
         // ── Note row ─────────────────────────────────────────────────────────
         var noteCell = ws.Cell("B2");
-        noteCell.Value = "Note that use this WP as a guide as it it can be amended at anytime this was develop as a guide";
+        noteCell.Value = "Please note that this working paper should be used as a guide only and may be amended at any time, as it was developed for guidance purposes.";
         noteCell.Style.Font.Bold = true;
         noteCell.Style.Font.FontSize = 12;
         ws.Range("B2:F2").Merge();
