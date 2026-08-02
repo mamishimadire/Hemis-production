@@ -675,6 +675,26 @@ app.MapControllerRoute(
     defaults: new { controller = "HemisDraftReport", action = "Download" });
 
 app.MapControllerRoute(
+    name: "hemisel-short",
+    pattern: "HemisEngagementLetter",
+    defaults: new { controller = "HemisEngagementLetter", action = "Index" });
+
+app.MapControllerRoute(
+    name: "hemisel-download",
+    pattern: "HemisEngagementLetter/Download",
+    defaults: new { controller = "HemisEngagementLetter", action = "Download" });
+
+app.MapControllerRoute(
+    name: "clinicalel-short",
+    pattern: "ClinicalEngagementLetter",
+    defaults: new { controller = "ClinicalEngagementLetter", action = "Index" });
+
+app.MapControllerRoute(
+    name: "clinicalel-download",
+    pattern: "ClinicalEngagementLetter/Download",
+    defaults: new { controller = "ClinicalEngagementLetter", action = "Download" });
+
+app.MapControllerRoute(
     name: "saqa-short",
     pattern: "Saqa",
     defaults: new { controller = "Saqa", action = "Index" });
