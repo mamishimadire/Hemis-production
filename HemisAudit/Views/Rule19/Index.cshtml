@@ -469,7 +469,7 @@
         }
 
         els.statusBadge.style.display = 'inline-block';
-        els.statusBadge.className = `rule-header__badge ${type === 'pass' ? 'badge--pass' : type === 'fail' ? 'badge--fail' : 'badge--neutral'}`;
+        els.statusBadge.className = 'rule-header__badge badge--neutral';
         els.statusBadge.textContent = text;
     }
 
@@ -733,9 +733,9 @@
                         <h4>Qualification Type Breakdown</h4>
                         <canvas id="rule19ChartBreakdown"></canvas>
                     </div>
-                    <div class="chart-card chart-card--status ${Number(summary.failCount || 0) > 0 ? 'chart-card--fail' : 'chart-card--pass'}">
+                    <div class="chart-card chart-card--status">
                         <h4>Run Status</h4>
-                        <div class="big-status">${htmlEscape(summary.status || '')}</div>
+                        <div class="big-status" style="font-size:1rem;color:#5a3188">Pending Audit Review</div><div style="font-size:.78rem;color:#666;margin-top:6px">Sample selected — final result to be determined by the Auditor</div>
                         <div class="summary-text" style="width:100%;margin-top:12px">
                             <div><span>Eligible Population</span><strong>${formatNumber(summary.totalValidated)}</strong></div>
                             <div><span>PASS Rate</span><strong>${passRate.toFixed(2)}%</strong></div>
@@ -900,7 +900,7 @@
             : /fail|error/i.test(statusText)
                 ? 'fail'
                 : 'neutral';
-        setStatusBadge(statusText, badgeType);
+        setStatusBadge('Sample Selected', 'neutral');
         els.downloadAllBtn.disabled = !summary;
         renderAnalysis(summary);
         renderResults(summary);

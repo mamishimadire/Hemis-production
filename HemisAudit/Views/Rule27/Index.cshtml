@@ -316,7 +316,7 @@
         }
 
         els.statusBadge.style.display = 'inline-block';
-        els.statusBadge.className = `rule-header__badge ${type === 'pass' ? 'badge--pass' : type === 'fail' ? 'badge--fail' : 'badge--neutral'}`;
+        els.statusBadge.className = 'rule-header__badge badge--neutral';
         els.statusBadge.textContent = text;
     }
 
@@ -404,7 +404,7 @@
         if (workspace.summary && resultsVisible) {
             state.summary = workspace.summary;
             renderSummary(workspace.summary);
-            setStatusBadge(workspace.summary.status, workspace.summary.matchingCount > 0 ? 'fail' : 'pass');
+            setStatusBadge('Sample Selected', 'neutral');
             els.downloadAllBtn.disabled = false;
             setWorkspaceInfo('success', 'Saved workspace loaded. The last analyst configuration and results are ready.');
         } else if (workspace.summary && !resultsVisible) {
@@ -700,7 +700,7 @@
             state.currentStatus = data.status || '';
             state.isDirty = false;
             renderSummary(data);
-            setStatusBadge(data.status, data.matchingCount > 0 ? 'fail' : 'pass');
+            setStatusBadge('Sample Selected', 'neutral');
             els.downloadAllBtn.disabled = false;
             setWorkspaceInfo('success', `Rule 27 run completed. ${data.matchingCount.toLocaleString()} matching record(s) found.`);
             els.workspaceRunLabel.textContent = data.savedRunId ? `Run #${data.savedRunId}` : 'Current session';
@@ -912,9 +912,9 @@
                             <div><span>Browser Preview</span><strong>${summary.displayedCount.toLocaleString()}</strong></div>
                         </div>
                     </div>
-                    <div class="chart-card chart-card--status ${summary.matchingCount > 0 ? 'chart-card--fail' : 'chart-card--pass'}">
+                    <div class="chart-card chart-card--status">
                         <h4>Run Status</h4>
-                        <div class="big-status">${escapeHtml(summary.status || '')}</div>
+                        <div class="big-status" style="font-size:1rem;color:#5a3188">Pending Audit Review</div><div style="font-size:.78rem;color:#666;margin-top:6px">Sample selected — final result to be determined by the Auditor</div>
                         <div class="summary-text" style="width:100%;margin-top:12px">
                             <div><span>Matches</span><strong>${summary.matchingCount.toLocaleString()}</strong></div>
                             <div><span>Rows Tested</span><strong>${summary.totalValidated.toLocaleString()}</strong></div>

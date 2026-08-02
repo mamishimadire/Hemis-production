@@ -480,8 +480,8 @@ function updateHeaderBadge(status) {
     if (!badge) return;
     if (!status) { badge.style.display = 'none'; badge.textContent = ''; return; }
     badge.style.display = 'inline-block';
-    badge.className = `rule-header__badge ${String(status).toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail'}`;
-    badge.textContent = String(status).toUpperCase();
+    badge.className = 'rule-header__badge badge--neutral';
+    badge.textContent = 'Sample Selected';
 }
 
 async function post(url, data) {
@@ -1332,8 +1332,9 @@ function renderCharts(r) {
         <div class="charts-grid">
             <div class="chart-card"><h4>Validation Results</h4><canvas id="chartPassFail"></canvas></div>
             <div class="chart-card"><h4>Exception Rate: ${rate.toFixed(2)}%</h4><canvas id="chartRate"></canvas></div>
-            <div class="chart-card chart-card--status ${r.status === 'PASS' ? 'chart-card--pass' : 'chart-card--fail'}">
-                <h4>Validation Status</h4><div class="big-status">${r.status === 'PASS' ? 'PASS' : 'FAIL'}</div>
+            <div class="chart-card chart-card--status">
+                <h4>Audit Status</h4><div class="big-status" style="font-size:1rem;color:#5a3188">Pending Audit Review</div>
+                <div style="font-size:.78rem;color:#666;margin-top:6px">Sample selected — final result to be determined by the Auditor</div>
             </div>
             <div class="chart-card"><h4>Summary</h4>
                 <div class="summary-text">

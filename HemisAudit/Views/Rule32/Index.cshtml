@@ -373,8 +373,8 @@
         }
 
         els.statusBadge.style.display = '';
-        els.statusBadge.textContent = status;
-        els.statusBadge.className = `rule-header__badge ${status === 'PASS' ? 'badge badge--pass' : status === 'FAIL' ? 'badge badge--fail' : 'badge badge--neutral'}`;
+        els.statusBadge.textContent = 'Sample Selected';
+        els.statusBadge.className = 'rule-header__badge badge badge--neutral';
     }
 
     function showSpinner(message) {

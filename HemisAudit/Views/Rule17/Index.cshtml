@@ -376,7 +376,7 @@
         }
 
         els.statusBadge.style.display = 'inline-block';
-        els.statusBadge.className = `rule-header__badge ${type === 'pass' ? 'badge--pass' : type === 'fail' ? 'badge--fail' : 'badge--neutral'}`;
+        els.statusBadge.className = 'rule-header__badge badge--neutral';
         els.statusBadge.textContent = text;
     }
 
@@ -492,7 +492,7 @@
         if (workspace.summary && resultsVisible) {
             state.summary = workspace.summary;
             renderSummary(workspace.summary);
-            setStatusBadge(workspace.summary.status, 'pass');
+            setStatusBadge('Sample Selected', 'neutral');
             els.downloadAllBtn.disabled = false;
             setWorkspaceInfo('success', 'Saved workspace loaded. The last analyst configuration and results are ready.');
         } else if (workspace.summary && !resultsVisible) {
@@ -804,7 +804,7 @@
                 els.workspaceSignoffComment.value = '';
             }
             renderSummary(data);
-            setStatusBadge(data.status, data.status === 'FAIL' ? 'fail' : 'pass');
+            setStatusBadge('Sample Selected', 'neutral');
             els.downloadAllBtn.disabled = false;
             setWorkspaceInfo('success', `Rule 17 run completed. Filtered: ${data.totalValidated.toLocaleString()} | PASS: ${data.passCount.toLocaleString()} | FAIL: ${data.failCount.toLocaleString()}. You can now save the workspace and sign off.`);
             els.workspaceRunLabel.textContent = data.savedRunId ? `Run #${data.savedRunId}` : 'Current session';

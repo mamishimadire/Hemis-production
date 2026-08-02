@@ -408,7 +408,7 @@ window.toggleAccordion = function (section) {
         }
 
         els.statusBadge.style.display = 'inline-block';
-        els.statusBadge.className = `rule-header__badge ${type === 'fail' ? 'badge--fail' : 'badge--pass'}`;
+        els.statusBadge.className = 'rule-header__badge badge--neutral';
         els.statusBadge.textContent = text;
     }
 
@@ -708,7 +708,7 @@ window.toggleAccordion = function (section) {
             els.workspaceRoleLabel.textContent = state.currentUserEngagementRole || currentSystemRole || '-';
         }
 
-        setStatusBadge(summary.status, summary.failCount > 0 ? 'fail' : 'pass');
+        setStatusBadge('Sample Selected', 'neutral');
         renderAnalysis(summary);
         renderResults();
         renderCharts(summary);

@@ -643,8 +643,8 @@ window.toggleAccordion = function (section) {
         }
 
         els.statusBadge.style.display = '';
-        els.statusBadge.textContent = status;
-        els.statusBadge.className = `rule-header__badge ${String(status).toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail'}`;
+        els.statusBadge.textContent = 'Sample Selected';
+        els.statusBadge.className = 'rule-header__badge badge--neutral';
     }
 
     function setWorkspaceState(message, type) {
@@ -920,9 +920,9 @@ window.toggleAccordion = function (section) {
                         <h4>Part FAIL Rate</h4>
                         <canvas id="rule20ChartFailRates"></canvas>
                     </div>
-                    <div class="chart-card chart-card--status ${String(summary.status).toUpperCase() === 'PASS' ? 'chart-card--pass' : 'chart-card--fail'}">
+                    <div class="chart-card chart-card--status">
                         <h4>Run Status</h4>
-                        <div class="big-status">${escapeHtml(summary.status || '')}</div>
+                        <div class="big-status" style="font-size:1rem;color:#5a3188">Pending Audit Review</div><div style="font-size:.78rem;color:#666;margin-top:6px">Sample selected — final result to be determined by the Auditor</div>
                         <div class="summary-text" style="width:100%;margin-top:12px">
                             <div><span>Foundation Students</span><strong>${formatNumber(summary.foundationStudentCount)}</strong></div>
                             <div><span>Validated Rows</span><strong>${formatNumber(summary.totalValidated)}</strong></div>
@@ -1065,7 +1065,7 @@ window.toggleAccordion = function (section) {
                 els.workspaceRoleLabel.textContent = state.currentUserEngagementRole || currentSystemRole || '-';
             }
         }
-        setStatusBadge(summary?.status || '');
+        setStatusBadge('Sample Selected');
         if (els.downloadAllBtn) els.downloadAllBtn.disabled = !summary;
         renderAnalysis(summary);
         renderResults();

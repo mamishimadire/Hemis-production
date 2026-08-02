@@ -449,8 +449,8 @@
             return;
         }
         els.statusBadge.style.display = 'inline-flex';
-        els.statusBadge.textContent = status;
-        els.statusBadge.className = `rule-header__badge ${status === 'PASS' ? 'rule-header__badge--success' : 'rule-header__badge--fail'}`;
+        els.statusBadge.textContent = 'Sample Selected';
+        els.statusBadge.className = 'rule-header__badge badge--neutral';
     }
 
     function setTab(name) {
@@ -547,9 +547,9 @@
                 <h3 class="section-title" style="margin-top:0">Rule 22 Visual Summary</h3>
                 <div class="charts-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">
                     ${controlCards}
-                    <div class="chart-card chart-card--status ${String(summary.status).toUpperCase() === 'PASS' ? 'chart-card--pass' : 'chart-card--fail'}">
+                    <div class="chart-card chart-card--status">
                         <h4>Run Status</h4>
-                        <div class="big-status">${escapeHtml(summary.status || '')}</div>
+                        <div class="big-status" style="font-size:1rem;color:#5a3188">Pending Audit Review</div><div style="font-size:.78rem;color:#666;margin-top:6px">Sample selected — final result to be determined by the Auditor</div>
                         <div class="summary-text" style="width:100%;margin-top:12px">
                             <div><span>Validated Rows</span><strong>${Number(summary.totalValidated || 0).toLocaleString()}</strong></div>
                             <div><span>PASS</span><strong class="text-success">${Number(summary.passCount || 0).toLocaleString()}</strong></div>
