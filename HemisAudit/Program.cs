@@ -16,7 +16,10 @@ CultureInfo.DefaultThreadCurrentCulture = new CultureInfo("en-US");
 CultureInfo.DefaultThreadCurrentUICulture = new CultureInfo("en-US");
 
 var builder = WebApplication.CreateBuilder(args);
-builder.WebHost.UseUrls("http://localhost:5080");
+// Render (and most container hosts) assign the listen port via PORT and route to 0.0.0.0;
+// local dev has no PORT set, so it falls back to the established 5080 on localhost.
+var listenPort = Environment.GetEnvironmentVariable("PORT");
+builder.WebHost.UseUrls(string.IsNullOrWhiteSpace(listenPort) ? "http://localhost:5080" : $"http://0.0.0.0:{listenPort}");
 var dataProtectionPath = Path.Combine(builder.Environment.ContentRootPath, ".run", "data-protection-keys");
 
 Directory.CreateDirectory(dataProtectionPath);
