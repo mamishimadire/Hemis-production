@@ -1,16 +1,20 @@
+using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using HemisAudit.Models;
 
 namespace HemisAudit.Data
 {
-    public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
+    // IDataProtectionKeyContext backs the antiforgery/auth-cookie key ring with this same
+    // Postgres database instead of the container's local disk - see Program.cs for why.
+    public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IDataProtectionKeyContext
     {
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
             : base(options) { }
 
         public DbSet<Firm>          Firms          { get; set; }
         public DbSet<FirmLicense>   FirmLicenses   { get; set; }
+        public DbSet<Microsoft.AspNetCore.DataProtection.EntityFrameworkCore.DataProtectionKey> DataProtectionKeys { get; set; }
 
         protected override void OnModelCreating(ModelBuilder builder)
         {

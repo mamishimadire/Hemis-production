@@ -21,9 +21,6 @@ var builder = WebApplication.CreateBuilder(args);
 // local dev has no PORT set, so it falls back to the established 5080 on localhost.
 var listenPort = Environment.GetEnvironmentVariable("PORT");
 builder.WebHost.UseUrls(string.IsNullOrWhiteSpace(listenPort) ? "http://localhost:5080" : $"http://0.0.0.0:{listenPort}");
-var dataProtectionPath = Path.Combine(builder.Environment.ContentRootPath, ".run", "data-protection-keys");
-
-Directory.CreateDirectory(dataProtectionPath);
 
 // Supabase-hosted Postgres database backing Identity and the new tenancy tables.
 // EnableRetryOnFailure + the idle-lifetime tuning in WithResiliencyDefaults protect against
@@ -36,8 +33,15 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(postgresConnectionString, npgsql =>
         npgsql.EnableRetryOnFailure(maxRetryCount: 3, maxRetryDelay: TimeSpan.FromSeconds(5), errorCodesToAdd: null)));
 
+// Keys were previously persisted to the container's local disk, which Render wipes on every
+// restart/redeploy and doesn't share across instances. Any auth/antiforgery token issued with an
+// old key set - e.g. a login page rendered just before a restart - fails validation afterward with
+// no visible error, silently bouncing the user back to a fresh login form. That's the most likely
+// explanation for "first login attempt is rejected, retry works": the retry gets a token minted
+// under the current key set. Persisting to the same Supabase database Identity already uses keeps
+// the key ring durable across restarts and consistent across every instance.
 builder.Services.AddDataProtection()
-    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionPath))
+    .PersistKeysToDbContext<ApplicationDbContext>()
     .SetApplicationName("HemisAudit");
 
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
