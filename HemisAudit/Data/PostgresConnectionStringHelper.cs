@@ -17,7 +17,14 @@ namespace HemisAudit.Data
                 ConnectionIdleLifetime = 60,
                 ConnectionPruningInterval = 10,
                 Timeout = 15,
-                CommandTimeout = commandTimeoutSeconds
+                CommandTimeout = commandTimeoutSeconds,
+                // Without a floor, the pool prunes down to zero connections after any ~60s gap in
+                // traffic (very likely for a freshly-deployed, low-traffic app). The next request -
+                // e.g. a login - then pays the full cost of a fresh TCP+TLS+Postgres handshake to
+                // Supabase from scratch, which is slow and occasionally times out outright, only to
+                // succeed on retry once a connection exists. Keeping one warm connection alive at all
+                // times avoids that cold-start tax entirely.
+                MinPoolSize = 1
             };
             return builder.ConnectionString;
         }
