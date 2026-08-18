@@ -907,7 +907,30 @@ WHERE ""ClientID"" = @ClientID
             await using var connection = await OpenConnectionAsync();
             await EnsureClientNotArchivedAsync(connection, clientId);
             await using var command = connection.CreateConfiguredCommand();
+            // Every table below has a foreign key on ClientID with no ON DELETE CASCADE, so each
+            // one that has ever gained a row for this client (a rule selection, a favorite, an
+            // uploaded dataset, a message thread) blocks the final DELETE FROM "Clients" with a
+            // foreign-key violation. Any real, actively-used engagement is virtually guaranteed to
+            // have rows in at least EngagementRuleScope, so this 500'd for any such client - not
+            // just this one. ThreadMessages/ThreadUserStates and their own children reference
+            // MessageThreads.ThreadID rather than ClientID directly, so they're cleared via the
+            // client's thread IDs first.
             command.CommandText = @"
+DELETE FROM ""ThreadMessageAttachments"" WHERE ""MessageID"" IN (
+    SELECT ""MessageID"" FROM ""ThreadMessages"" WHERE ""ThreadID"" IN (
+        SELECT ""ThreadID"" FROM ""MessageThreads"" WHERE ""ClientID"" = @ClientID));
+DELETE FROM ""ThreadMessageRecipients"" WHERE ""MessageID"" IN (
+    SELECT ""MessageID"" FROM ""ThreadMessages"" WHERE ""ThreadID"" IN (
+        SELECT ""ThreadID"" FROM ""MessageThreads"" WHERE ""ClientID"" = @ClientID));
+DELETE FROM ""ThreadMessages"" WHERE ""ThreadID"" IN (
+    SELECT ""ThreadID"" FROM ""MessageThreads"" WHERE ""ClientID"" = @ClientID);
+DELETE FROM ""ThreadUserStates"" WHERE ""ThreadID"" IN (
+    SELECT ""ThreadID"" FROM ""MessageThreads"" WHERE ""ClientID"" = @ClientID);
+DELETE FROM ""MessageThreads"" WHERE ""ClientID"" = @ClientID;
+DELETE FROM ""ClientFavorites"" WHERE ""ClientID"" = @ClientID;
+DELETE FROM ""EngagementRuleScope"" WHERE ""ClientID"" = @ClientID;
+DELETE FROM ""DatasetUploadJobs"" WHERE ""ClientID"" = @ClientID;
+DELETE FROM ""EngagementDatabases"" WHERE ""ClientID"" = @ClientID;
 DELETE FROM ""UserClientAssignments"" WHERE ""ClientID"" = @ClientID;
 DELETE FROM ""ReviewSignoffs"" WHERE ""ClientID"" = @ClientID;
 DELETE FROM ""ValidationRuns"" WHERE ""ClientID"" = @ClientID;
