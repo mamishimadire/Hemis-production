@@ -88,6 +88,82 @@ namespace HemisAudit.Controllers
             return Json(new { success = true, hasWorkspace = workspace != null, resultsVisible, workspace });
         }
 
+        [HttpGet]
+        public async Task<IActionResult> Run(int id)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            await _systemDb.NormalizeCompletedRunStatusesAsync();
+
+            var runRow = await _systemDb.GetRuleRunByIdAsync(id, 40);
+            if (runRow == null)
+                return NotFound();
+
+            if (!await _systemDb.CanAccessClientResultsAsync(runRow.ClientId, user, role))
+            {
+                TempData["Error"] = "You do not have access to this saved validation run.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+
+            var summary = await _rule40.GetFullSummaryByRunIdAsync(id);
+            if (summary == null)
+                return NotFound();
+
+            var clientDetail = await _systemDb.GetClientDetailAsync(runRow.ClientId, user, role);
+            var isArchived = clientDetail?.IsArchived == true;
+
+            var engagementRole = await _systemDb.GetEngagementRoleAsync(runRow.ClientId, user, role) ?? "";
+            var signoffs = await _systemDb.GetRuleRunSignoffsAsync(id, user?.Id);
+            var hasDataAnalystSignoff = signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+            var currentUserHasSignedOff = signoffs.Any(s => s.IsCurrentUser);
+
+            var review = new Rule40RunReviewViewModel
+            {
+                RunId                      = runRow.RunId,
+                ClientId                   = runRow.ClientId,
+                EngagementName             = runRow.EngagementName,
+                MaconomyNumber             = runRow.MaconomyNumber,
+                IsCurrentRun               = runRow.IsCurrent,
+                CurrentUserEngagementRole  = engagementRole,
+                HasDataAnalystSignoff      = hasDataAnalystSignoff,
+                CurrentUserHasSignedOff    = currentUserHasSignedOff,
+                CanCurrentUserSignOff      = runRow.IsCurrent && !isArchived && !currentUserHasSignedOff &&
+                                              ValidationRunAccessPolicy.CanCompleteReviewSignoff(role, engagementRole, hasDataAnalystSignoff),
+                CanCurrentUserRemoveSignoff= runRow.IsCurrent && !isArchived && currentUserHasSignedOff &&
+                                              ValidationRunAccessPolicy.CanAssignedUserRemoveSignoff(engagementRole),
+                Summary                    = summary,
+                Signoffs                   = signoffs
+            };
+
+            review.GeneratedSql = _rule40.GenerateSql(new Rule40ValidationRequest
+            {
+                ClientId     = review.ClientId,
+                ValpacTable  = summary.ValpacTable,
+                AsciiTable   = summary.AsciiTable,
+                ValpacKeyCol = summary.ValpacKeyCol,
+                AsciiKeyCol  = summary.AsciiKeyCol,
+                Pairs        = summary.Pairs
+            });
+
+            ViewBag.IsAdmin = string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+            ViewBag.CanManageEngagement =
+                string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(role, "Director", StringComparison.OrdinalIgnoreCase);
+            ViewBag.IsArchived = isArchived;
+            ViewBag.ModuleNavigation = ModuleSequenceNavigationHelper.BuildForSavedRun(40,
+                review.ClientId,
+                clientDetail?.ValidationRuns,
+                role,
+                engagementRole);
+            ViewBag.CanOpenWorkspace =
+                !isArchived &&
+                await _systemDb.CanAccessClientModuleAsync(review.ClientId, user, role) &&
+                (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(engagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+
+            return View(review);
+        }
+
         [HttpPost]
         public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model)
         {

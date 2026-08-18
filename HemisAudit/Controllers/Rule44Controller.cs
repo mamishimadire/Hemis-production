@@ -90,6 +90,61 @@ namespace HemisAudit.Controllers
             return Json(new { success = true, hasWorkspace = workspace != null, resultsVisible, workspace });
         }
 
+        [HttpGet]
+        public async Task<IActionResult> Run(int id)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            await _systemDb.NormalizeCompletedRunStatusesAsync();
+            var review = await _rule44.GetSavedRunAsync(id, user?.Email);
+            if (review == null)
+                return NotFound();
+
+            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
+            {
+                TempData["Error"] = "You do not have access to this saved validation run.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+
+            if (!CanViewSavedRun(review, role))
+            {
+                TempData["Error"] = "Only analyst-signed validation results are available for review.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+
+            review.Summary = BuildDisplaySummary(review.Summary);
+
+            ViewBag.IsAdmin = string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+            ViewBag.CanDownloadSavedRun = CanDownloadSavedRun(review, role);
+            ViewBag.CanManageEngagement =
+                string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(role, "Director", StringComparison.OrdinalIgnoreCase);
+            var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
+            var isArchived = clientDetail?.IsArchived == true;
+            ViewBag.IsArchived = isArchived;
+            ViewBag.ModuleNavigation = ModuleSequenceNavigationHelper.BuildForSavedRun(44,
+                review.ClientId,
+                clientDetail?.ValidationRuns,
+                role,
+                review.CurrentUserEngagementRole);
+            ViewBag.CanOpenWorkspace =
+                !isArchived &&
+                await _systemDb.CanAccessClientModuleAsync(review.ClientId, user, role) &&
+                (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+
+            review.GeneratedSql = _rule44.GenerateSql(new Rule44ValidationRequest
+            {
+                ClientId      = review.ClientId,
+                StudTable     = review.Summary.StudTable,
+                QualTable     = review.Summary.QualTable,
+                PqmTable      = review.Summary.PqmTable,
+                PgTypesText   = review.Summary.PgTypesText,
+                ColumnMapping = review.Summary.ColumnMapping
+            });
+            return View(review);
+        }
+
         [HttpPost]
         public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
             Json(await RequireDataAnalystAsync(async () => await _rule44.GetTablesAsync(model.ClientId)));
@@ -428,6 +483,45 @@ namespace HemisAudit.Controllers
         {
             if (workspace == null) return false;
             return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
+        }
+
+        private static bool CanViewSavedRun(Rule44RunReviewViewModel review, string systemRole)
+            => ValidationRunAccessPolicy.CanViewSignedResults(systemRole, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff);
+
+        private static bool CanDownloadSavedRun(Rule44RunReviewViewModel review, string systemRole)
+            => ValidationRunAccessPolicy.CanDownloadSignedResults(systemRole, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff);
+
+        private static Rule44ValidationSummary BuildDisplaySummary(Rule44ValidationSummary summary)
+        {
+            var pass = summary.PassRows ?? new List<Rule44ReviewRow>();
+            var fail = summary.FailRows ?? new List<Rule44ReviewRow>();
+
+            var copy = new Rule44ValidationSummary
+            {
+                Success         = summary.Success,
+                Error           = summary.Error,
+                Warning         = summary.Warning,
+                SavedRunId      = summary.SavedRunId,
+                ClientId        = summary.ClientId,
+                Timestamp       = summary.Timestamp,
+                StudTable       = summary.StudTable,
+                QualTable       = summary.QualTable,
+                PqmTable        = summary.PqmTable,
+                PgTypesText     = summary.PgTypesText,
+                ColumnMapping   = summary.ColumnMapping,
+                TotalCount      = summary.TotalCount,
+                PassCount       = summary.PassCount,
+                FailCount       = summary.FailCount,
+                MissingPqmCount = summary.MissingPqmCount,
+                ExceptionRate   = summary.ExceptionRate,
+                Status          = summary.Status,
+                PassRows        = pass.Take(10).ToList(),
+                FailRows        = fail.Take(10).ToList()
+            };
+            copy.IsPreviewOnly = pass.Count > copy.PassRows.Count || fail.Count > copy.FailRows.Count;
+            copy.PreviewLimit = 10;
+
+            return copy;
         }
 
         private async Task<bool> CanEditAsync(int clientId, ApplicationUser? user, string role)

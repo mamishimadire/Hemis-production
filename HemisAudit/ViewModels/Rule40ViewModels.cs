@@ -108,4 +108,25 @@ namespace HemisAudit.ViewModels
         public int?   RunId    { get; set; }
         public string Comment  { get; set; } = "";
     }
+
+    // Read-only view of a single saved Rule 40 run, used by the /Rule40/Run/{id} page.
+    // Built in the controller from GetRuleRunByIdAsync (run/engagement metadata),
+    // GetFullSummaryByRunIdAsync (result rows), and GetRuleRunSignoffsAsync (signoffs) —
+    // Rule 40 has no combined "saved run review" service method, unlike some other rules.
+    public class Rule40RunReviewViewModel
+    {
+        public int    RunId                     { get; set; }
+        public int    ClientId                  { get; set; }
+        public string EngagementName             { get; set; } = "";
+        public string MaconomyNumber             { get; set; } = "";
+        public bool   IsCurrentRun               { get; set; }
+        public string CurrentUserEngagementRole  { get; set; } = "";
+        public bool   HasDataAnalystSignoff      { get; set; }
+        public bool   CurrentUserHasSignedOff    { get; set; }
+        public bool   CanCurrentUserSignOff      { get; set; }
+        public bool   CanCurrentUserRemoveSignoff{ get; set; }
+        public string GeneratedSql               { get; set; } = "";
+        public Rule40ValidationSummary Summary   { get; set; } = new();
+        public List<HemisAudit.ViewModels.RunSignoffViewModel> Signoffs { get; set; } = new();
+    }
 }

@@ -98,6 +98,48 @@ namespace HemisAudit.Controllers
             return Json(new { success = true, hasWorkspace = workspace != null, resultsVisible, workspace });
         }
 
+        [HttpGet]
+        public async Task<IActionResult> Run(int id)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            await _systemDb.NormalizeCompletedRunStatusesAsync();
+
+            var review = await _rule48.GetSavedRunAsync(id, user?.Email);
+            if (review == null)
+                return NotFound();
+
+            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
+            {
+                TempData["Error"] = "You do not have access to this saved validation run.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+
+            if (!CanViewSavedRun(review, role))
+            {
+                TempData["Error"] = "Only analyst-signed validation results are available for review.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+
+            ViewBag.IsAdmin = string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+            ViewBag.CanDownloadSavedRun = CanDownloadSavedRun(review, role);
+            ViewBag.CanManageEngagement =
+                string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(role, "Director", StringComparison.OrdinalIgnoreCase);
+            var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
+            ViewBag.IsArchived = clientDetail?.IsArchived == true;
+            ViewBag.ModuleNavigation = ModuleSequenceNavigationHelper.BuildForSavedRun(
+                48, review.ClientId, clientDetail?.ValidationRuns, role, review.CurrentUserEngagementRole);
+            ViewBag.CanOpenWorkspace =
+                clientDetail?.IsArchived != true &&
+                await _systemDb.CanAccessClientModuleAsync(review.ClientId, user, role) &&
+                (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+
+            review.GeneratedSql = _rule48.GenerateSql(BuildRequestFromSummary(review.Summary!));
+            return View(review);
+        }
+
         [HttpPost]
         public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
             Json(await RequireDataAnalystAsync(async () => await _rule48.GetTablesAsync(model.ClientId)));
@@ -395,6 +437,12 @@ namespace HemisAudit.Controllers
             if (workspace == null) return false;
             return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
         }
+
+        private static bool CanDownloadSavedRun(Rule41RunReviewViewModel review, string systemRole)
+            => ValidationRunAccessPolicy.CanDownloadSignedResults(systemRole, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff);
+
+        private static bool CanViewSavedRun(Rule41RunReviewViewModel review, string systemRole)
+            => ValidationRunAccessPolicy.CanViewSignedResults(systemRole, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff);
 
         private async Task<string> GetCurrentSystemRoleAsync(ApplicationUser? user)
         {

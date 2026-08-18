@@ -1,0 +1,402 @@
+@model HemisAudit.ViewModels.Rule41RunReviewViewModel
+@{
+    ViewData["Title"] = $"Rule 47 Run {Model.RunId}";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    var isAdmin = ViewBag.IsAdmin is bool admin && admin;
+    var canDownload = ViewBag.CanDownloadSavedRun is bool allowed && allowed;
+    var canManageEngagement = ViewBag.CanManageEngagement is bool me && me;
+    var canOpenWorkspace = ViewBag.CanOpenWorkspace is bool owb && owb;
+    var isArchived = ViewBag.IsArchived is bool arch && arch;
+    var moduleNavigation = ViewBag.ModuleNavigation as HemisAudit.ViewModels.ModuleSequenceNavigationViewModel;
+    var s = Model.Summary;
+    var pairs = s?.Reconc?.Pairs ?? new List<HemisAudit.ViewModels.Rule41ColumnPair>();
+    var excRows = s?.Reconc?.ExceptionRows ?? new List<HemisAudit.ViewModels.Rule41ReconcRow>();
+    var clearRows = s?.Reconc?.Rows ?? new List<HemisAudit.ViewModels.Rule41ReconcRow>();
+}
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert--success" style="margin-bottom:16px">@TempData["Success"]</div>
+}
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">@TempData["Error"]</div>
+}
+
+@if (moduleNavigation != null)
+{
+    @await Html.PartialAsync("_ModuleSequenceNav", moduleNavigation)
+}
+
+<style>
+    .viz-grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); }
+    .viz-card { background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px; box-shadow:0 18px 40px rgba(15,23,42,.06); }
+    .code-panel { background:#0f172a; border-radius:18px; color:#e2e8f0; overflow:auto; padding:18px; }
+    .code-panel pre { margin:0; white-space:pre-wrap; word-break:break-word; }
+    .r47run-tbl { border-collapse:collapse; width:100%; font-size:.81rem; }
+    .r47run-tbl th { background:#1565A6; color:#fff; padding:5px 7px; text-align:center; border:1px solid #bbb; white-space:nowrap; }
+    .r47run-tbl td { padding:4px 6px; border:1px solid #ddd; text-align:center; vertical-align:middle; }
+    .r47run-tbl tr.agree    { background:#F1F8E9; }
+    .r47run-tbl tr.disagree { background:#FFEBEE; }
+    .r47run-tbl tr.missing  { background:#FFF3E0; }
+    .r47run-tbl td.oc { background:#DDEEFF; }
+    .r47run-agree { display:inline-block; padding:2px 7px; border-radius:4px; font-size:.75rem; font-weight:700; background:#E8F5E9; color:#1E8449; }
+    .r47run-exc   { display:inline-block; padding:2px 7px; border-radius:4px; font-size:.75rem; font-weight:700; background:#FFEBEE; color:#C0392B; }
+    .r47run-miss  { display:inline-block; padding:2px 7px; border-radius:4px; font-size:.75rem; font-weight:700; background:#FFF3E0; color:#E67E22; }
+</style>
+
+<div class="page-header">
+    <div>
+        <h1>Rule 47 — QUAL vs H16QUAL Agreement</h1>
+        <p>
+            @Model.EngagementName
+            <span style="padding:0 8px">|</span>
+            @Model.MaconomyNumber
+            <span style="padding:0 8px">|</span>
+            Run #@Model.RunId
+            <span style="padding:0 8px">|</span>
+            @(s?.Timestamp ?? "-")
+        </p>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+        @if (canOpenWorkspace)
+        {
+            <a href="/Rule47?clientId=@Model.ClientId" class="btn btn-primary">Open Workspace</a>
+        }
+        @if (canManageEngagement)
+        {
+            <a href="/Clients/Details/@Model.ClientId" class="btn btn-secondary">Manage Engagement</a>
+        }
+    </div>
+</div>
+
+@if (!Model.IsCurrentRun)
+{
+    <div class="alert alert--warning" style="margin-bottom:16px">
+        This is a historical run. A newer run exists for this engagement.
+        <a href="/Rule47?clientId=@Model.ClientId">Open current workspace</a>
+    </div>
+}
+
+@if (isArchived)
+{
+    <div class="alert alert--warning" style="margin-bottom:16px">
+        This engagement is archived. Results are read-only; signoff and removal are disabled.
+    </div>
+}
+
+@if (s == null)
+{
+    <div class="alert alert--error">This saved run has no stored results.</div>
+    return;
+}
+
+@if (!string.IsNullOrWhiteSpace(s.Warning))
+{
+    <div class="alert alert--info" style="margin-bottom:16px">@s.Warning</div>
+}
+
+<!-- Status Summary -->
+<div class="results-card" style="margin-bottom:24px">
+    <div class="viz-grid">
+        <div class="viz-card">
+            <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:6px">Total</div>
+            <div style="font-size:28px;font-weight:800">@s.TotalCount.ToString("N0")</div>
+        </div>
+        <div class="viz-card" style="border-left:4px solid #22C55E">
+            <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:6px">Agree</div>
+            <div style="font-size:28px;font-weight:800;color:#166534">@s.AgreeCount.ToString("N0")</div>
+        </div>
+        <div class="viz-card" style="border-left:4px solid #EF4444">
+            <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:6px">Disagree</div>
+            <div style="font-size:28px;font-weight:800;color:#C62828">@s.DisagreeCount.ToString("N0")</div>
+        </div>
+        <div class="viz-card" style="border-left:4px solid #F59E0B">
+            <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:6px">Missing</div>
+            <div style="font-size:28px;font-weight:800;color:#B45309">@s.MissingCount.ToString("N0")</div>
+        </div>
+        <div class="viz-card">
+            <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:6px">Exception Rate</div>
+            <div style="font-size:28px;font-weight:800">@s.ExceptionRate.ToString("F2")%</div>
+        </div>
+        <div class="viz-card" style="border-left:4px solid @(s.Status == "PASS" ? "#22C55E" : "#EF4444")">
+            <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:6px">Status</div>
+            <div style="font-size:28px;font-weight:800;color:@(s.Status == "PASS" ? "#166534" : "#C62828")">@s.Status</div>
+        </div>
+    </div>
+</div>
+
+<!-- Tabs -->
+<div class="results-panel">
+    <div class="results-tabs">
+        <button class="tab-btn active" onclick="switchTab('exceptions')">EXCEPTIONS (@((s.DisagreeCount + s.MissingCount).ToString("N0")))</button>
+        <button class="tab-btn" onclick="switchTab('clear')">AGREE (@s.AgreeCount.ToString("N0"))</button>
+        <button class="tab-btn" onclick="switchTab('config')">Configuration</button>
+        <button class="tab-btn" onclick="switchTab('signoffs')">Signoffs</button>
+        <button class="tab-btn" onclick="switchTab('sql')">SQL Code</button>
+        @if (canDownload)
+        {
+            <button class="tab-btn" onclick="switchTab('downloads')">Downloads</button>
+        }
+    </div>
+
+    <!-- Exceptions (DISAGREE + MISSING) rows -->
+    <div class="tab-pane active" id="tab-exceptions">
+        <h3 style="margin-bottom:1rem">Exception Rows (DISAGREE + MISSING)</h3>
+        @if (!excRows.Any())
+        {
+            <div class="alert alert--success">No exceptions — QUAL and H16QUAL agree for every reconciled record.</div>
+        }
+        else
+        {
+            <div class="results-table-shell">
+                <div class="table-wrapper">
+                    <table class="r47run-tbl">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Student No</th>
+                                @foreach (var p in pairs)
+                                {
+                                    <th style="background:#1565A6">QUAL @p.StudCol</th>
+                                    <th style="background:#0D6E2E">H16QUAL @p.H16Col</th>
+                                    <th>Match</th>
+                                }
+                                <th>Result</th>
+                                <th>Detail</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in excRows)
+                            {
+                                var cls = row.OverallResult == "DISAGREE" ? "disagree" : "missing";
+                                <tr class="@cls">
+                                    <td>@row.RowNumber</td>
+                                    <td style="font-weight:600;font-family:monospace">@row.StudentRef</td>
+                                    @foreach (var p in pairs)
+                                    {
+                                        var f = row.Fields.TryGetValue(p.Label, out var fv) ? fv : new HemisAudit.ViewModels.Rule41FieldValue();
+                                        <td>@f.StudValue</td>
+                                        <td class="oc">@f.H16Value</td>
+                                        <td>@f.Match</td>
+                                    }
+                                    <td>
+                                        @if (row.OverallResult == "DISAGREE")
+                                        {
+                                            <span class="r47run-exc">DISAGREE</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="r47run-miss">MISSING</span>
+                                        }
+                                    </td>
+                                    <td style="text-align:left;max-width:280px">@row.DisagreeDetail</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                @if (excRows.Count < s.DisagreeCount + s.MissingCount)
+                {
+                    <div class="table-footer">Showing @excRows.Count of @((s.DisagreeCount + s.MissingCount).ToString("N0")) exception rows. Download the Excel or CSV for the full list.</div>
+                }
+            </div>
+        }
+    </div>
+
+    <!-- AGREE rows -->
+    <div class="tab-pane" id="tab-clear">
+        <h3 style="margin-bottom:1rem">AGREE Rows</h3>
+        @if (!clearRows.Any())
+        {
+            <div class="alert alert--warning">No AGREE rows available in this saved run.</div>
+        }
+        else
+        {
+            <div class="results-table-shell">
+                <div class="table-wrapper">
+                    <table class="r47run-tbl">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Student No</th>
+                                @foreach (var p in pairs)
+                                {
+                                    <th style="background:#1565A6">QUAL @p.StudCol</th>
+                                    <th style="background:#0D6E2E">H16QUAL @p.H16Col</th>
+                                    <th>Match</th>
+                                }
+                                <th>Result</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in clearRows)
+                            {
+                                <tr class="agree">
+                                    <td>@row.RowNumber</td>
+                                    <td style="font-weight:600;font-family:monospace">@row.StudentRef</td>
+                                    @foreach (var p in pairs)
+                                    {
+                                        var f = row.Fields.TryGetValue(p.Label, out var fv) ? fv : new HemisAudit.ViewModels.Rule41FieldValue();
+                                        <td>@f.StudValue</td>
+                                        <td class="oc">@f.H16Value</td>
+                                        <td>@f.Match</td>
+                                    }
+                                    <td><span class="r47run-agree">AGREE</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                @if (clearRows.Count < s.AgreeCount)
+                {
+                    <div class="table-footer">Showing @clearRows.Count of @s.AgreeCount.ToString("N0") AGREE rows. Download the Excel or CSV for the full list.</div>
+                }
+            </div>
+        }
+    </div>
+
+    <!-- Configuration -->
+    <div class="tab-pane" id="tab-config">
+        <h3 style="margin-bottom:1rem">Run Configuration</h3>
+        <table class="data-table">
+            <tbody>
+                <tr><td style="font-weight:600">QUAL Table</td><td>@s.StudTable</td></tr>
+                <tr><td style="font-weight:600">H16QUAL Table</td><td>@s.H16Table</td></tr>
+                <tr><td style="font-weight:600">QUAL Join Key</td><td>@s.StudKey</td></tr>
+                <tr><td style="font-weight:600">H16QUAL Join Key</td><td>@s.H16Key</td></tr>
+                @if (!string.IsNullOrWhiteSpace(s.Reconc?.StudSecondaryKey)) { <tr><td style="font-weight:600">QUAL Secondary Key</td><td>@s.Reconc!.StudSecondaryKey</td></tr> }
+                @if (!string.IsNullOrWhiteSpace(s.Reconc?.H16SecondaryKey)) { <tr><td style="font-weight:600">H16QUAL Secondary Key</td><td>@s.Reconc!.H16SecondaryKey</td></tr> }
+                <tr>
+                    <td style="font-weight:600">Column Pairs</td>
+                    <td>
+                        @foreach (var p in pairs)
+                        {
+                            <div>@p.Label: <code>@p.StudCol</code> &harr; <code>@p.H16Col</code></div>
+                        }
+                    </td>
+                </tr>
+                <tr><td style="font-weight:600">Run Date</td><td>@s.Timestamp</td></tr>
+                <tr><td style="font-weight:600">Run ID</td><td>#@Model.RunId</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Signoffs -->
+    <div class="tab-pane" id="tab-signoffs">
+        <h3 style="margin-bottom:1rem">Signoffs</h3>
+        @if (!Model.Signoffs.Any())
+        {
+            <div class="alert alert--info">No signoffs recorded for this run yet.</div>
+        }
+        else
+        {
+            <div class="results-table-shell">
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead><tr><th>Role</th><th>Reviewer</th><th>Comment</th><th>Signed Off At</th><th>Your Record</th></tr></thead>
+                        <tbody>
+                            @foreach (var so in Model.Signoffs)
+                            {
+                                <tr class="@(so.IsCurrentUser ? "row-highlight" : "")">
+                                    <td><span class="badge badge--neutral badge--sm">@so.SignoffRole</span></td>
+                                    <td>@so.ReviewerName <small style="color:#64748b">@so.ReviewerEmail</small></td>
+                                    <td>@so.Comment</td>
+                                    <td>@so.SignedOffAt.ToString("yyyy-MM-dd HH:mm")</td>
+                                    <td>@(so.IsCurrentUser ? "✔" : "")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+
+        @if (Model.IsCurrentRun && !isArchived)
+        {
+            @if (Model.CanCurrentUserSignOff && !Model.CurrentUserHasSignedOff)
+            {
+                <div style="margin-top:1.5rem;max-width:600px">
+                    <div class="field-group">
+                        <label>Signoff Comment</label>
+                        <textarea id="r47RunSignoffComment" rows="3" placeholder="Enter your review comment..."></textarea>
+                    </div>
+                    <button type="button" class="btn btn-primary" style="margin-top:0.75rem" onclick="r47RunSignOff()">Sign Off Run #@Model.RunId</button>
+                </div>
+            }
+            @if (Model.CurrentUserHasSignedOff)
+            {
+                <button type="button" class="btn btn-warning" style="margin-top:1rem" onclick="r47RunRemoveSignoff()">Remove My Signoff</button>
+            }
+        }
+    </div>
+
+    <!-- SQL Code -->
+    <div class="tab-pane" id="tab-sql">
+        <h3 style="margin-bottom:1rem">Generated SQL</h3>
+        <div class="code-panel">
+            <pre>@Model.GeneratedSql</pre>
+        </div>
+    </div>
+
+    <!-- Downloads -->
+    @if (canDownload)
+    {
+        <div class="tab-pane" id="tab-downloads">
+            <h3 style="margin-bottom:1rem">Download Run #@Model.RunId</h3>
+            <div class="download-buttons download-buttons--wide">
+                <a href="/Rule47/DownloadExcel?runId=@Model.RunId" class="btn btn-success">Excel</a>
+                <a href="/Rule47/DownloadCsv?runId=@Model.RunId" class="btn btn-info">Full CSV</a>
+                <a href="/Rule47/DownloadExceptionsCsv?runId=@Model.RunId" class="btn btn-info">Exceptions CSV</a>
+                <a href="/Rule47/DownloadSql?runId=@Model.RunId" class="btn btn-primary">SQL Script</a>
+            </div>
+        </div>
+    }
+</div>
+
+<form id="r47RunAntiForgery" method="post" style="display:none">@Html.AntiForgeryToken()</form>
+
+<script>
+function switchTab(name) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    const btn = document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`);
+    if (btn) btn.classList.add('active');
+    const panel = document.getElementById(`tab-${name}`);
+    if (panel) panel.classList.add('active');
+}
+
+(function () {
+    var TOKEN = (document.querySelector('#r47RunAntiForgery input[name="__RequestVerificationToken"]') || {}).value || '';
+    var CLIENT_ID = @Model.ClientId;
+    var RUN_ID = @Model.RunId;
+
+    function post(url, body) {
+        return fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': TOKEN },
+            body: JSON.stringify(body)
+        }).then(function (r) { return r.json(); });
+    }
+
+    window.r47RunSignOff = function () {
+        var comment = (document.getElementById('r47RunSignoffComment') || {}).value || '';
+        post('/Rule47/SignOffWorkspace', { clientId: CLIENT_ID, runId: RUN_ID, comment: comment })
+            .then(function (d) {
+                if (!d.success) { alert(d.error || 'Signoff failed.'); return; }
+                window.location.reload();
+            })
+            .catch(function (e) { alert(e.message); });
+    };
+
+    window.r47RunRemoveSignoff = function () {
+        if (!confirm('Are you sure you want to remove your signoff from this run?')) return;
+        post('/Rule47/RemoveWorkspaceSignoff', { clientId: CLIENT_ID, runId: RUN_ID, comment: '' })
+            .then(function (d) {
+                if (!d.success) { alert(d.error || 'Failed to remove signoff.'); return; }
+                window.location.reload();
+            })
+            .catch(function (e) { alert(e.message); });
+    };
+})();
+</script>

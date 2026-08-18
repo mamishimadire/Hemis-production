@@ -67,6 +67,162 @@ namespace HemisAudit.Controllers
         }
 
         [HttpGet]
+        public async Task<IActionResult> Run(int id)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            await _systemDb.NormalizeCompletedRunStatusesAsync();
+            var review = await _rule46.GetSavedRunAsync(id, user?.Email);
+            if (review == null)
+                return NotFound();
+
+            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
+            {
+                TempData["Error"] = "You do not have access to this saved validation run.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+
+            if (!CanViewSavedRun(review, role))
+            {
+                TempData["Error"] = "Only analyst-signed validation results are available for review.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+
+            ViewBag.IsAdmin = string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+            ViewBag.CanDownloadSavedRun = CanDownloadSavedRun(review, role);
+            ViewBag.CanManageEngagement =
+                string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(role, "Director", StringComparison.OrdinalIgnoreCase);
+            var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
+            var isArchived = clientDetail?.IsArchived == true;
+            ViewBag.IsArchived = isArchived;
+            ViewBag.ModuleNavigation = ModuleSequenceNavigationHelper.BuildForSavedRun(46,
+                review.ClientId,
+                clientDetail?.ValidationRuns,
+                role,
+                review.CurrentUserEngagementRole);
+            ViewBag.CanOpenWorkspace =
+                !isArchived &&
+                await _systemDb.CanAccessClientModuleAsync(review.ClientId, user, role) &&
+                (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+
+            if (review.Summary != null)
+            {
+                review.GeneratedSql = _rule46.GenerateValidationSql(new Rule46ValidationRequest
+                {
+                    ClientId        = review.ClientId,
+                    StudTable       = review.Summary.StudTable,
+                    StudKey         = review.Summary.StudKey,
+                    StudIdCol       = review.Summary.StudIdCol,
+                    Stud007Col      = review.Summary.Stud007Col,
+                    Stud010Col      = review.Summary.Stud010Col,
+                    Stud012Col      = review.Summary.Stud012Col,
+                    Stud026Col      = review.Summary.Stud026Col,
+                    StudFilterCol   = review.Summary.StudFilterCol,
+                    StudFilterValue = review.Summary.StudFilterValue,
+                    QualTable       = review.Summary.QualTable,
+                    QualKey         = review.Summary.QualKey,
+                    QualNameCol     = review.Summary.QualNameCol,
+                    PqmTable        = review.Summary.PqmTable,
+                    PqmNameCol      = review.Summary.PqmNameCol
+                });
+            }
+
+            return View(review);
+        }
+
+        [HttpPost, ValidateAntiForgeryToken]
+        public async Task<IActionResult> AddSignoff(Rule46RunSignoffInputModel model)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            var review = await _rule46.GetSavedRunAsync(model.RunId, user?.Email);
+            if (review == null) return NotFound();
+
+            var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
+            if (clientDetail?.IsArchived == true)
+            {
+                TempData["Error"] = "Archived engagements are read-only. Signoff is disabled.";
+                return RedirectToAction(nameof(Run), new { id = model.RunId });
+            }
+
+            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
+            {
+                TempData["Error"] = "You do not have access to sign off this run.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+
+            if (!CanViewSavedRun(review, role))
+            {
+                TempData["Error"] = "Only analyst-signed validation results are available for review.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+
+            if (!review.IsCurrentRun)
+            {
+                TempData["Error"] = "History results are read-only. Signoff is only available on the current run.";
+                return RedirectToAction(nameof(Run), new { id = model.RunId });
+            }
+
+            if (!review.CanCurrentUserSignOff)
+            {
+                TempData["Error"] = "Only the assigned data analyst, manager, or director can sign off this run.";
+                return RedirectToAction(nameof(Run), new { id = model.RunId });
+            }
+
+            if (!ValidationRunAccessPolicy.CanCompleteReviewSignoff(role, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff))
+            {
+                TempData["Error"] = "The assigned data analyst must sign off before this review can be completed.";
+                return RedirectToAction(nameof(Run), new { id = model.RunId });
+            }
+
+            await _rule46.AddOrUpdateSignoffAsync(model.RunId, user!.Email!, model.Comment);
+            await _audit.LogAsync("signoff_validation_run", $"{review.CurrentUserEngagementRole} signed off Rule 46 run {model.RunId}", user.Id, user.Email);
+            TempData["Success"] = "Signoff saved.";
+            return RedirectToAction(nameof(Run), new { id = model.RunId });
+        }
+
+        [HttpPost, ValidateAntiForgeryToken]
+        public async Task<IActionResult> RemoveSignoff(int runId)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            var review = await _rule46.GetSavedRunAsync(runId, user?.Email);
+            if (review == null) return NotFound();
+
+            var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
+            if (clientDetail?.IsArchived == true)
+            {
+                TempData["Error"] = "Archived engagements are read-only. Signoff removal is disabled.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+
+            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
+            {
+                TempData["Error"] = "You do not have access to remove this signoff.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+
+            if (!review.IsCurrentRun)
+            {
+                TempData["Error"] = "History results are read-only. Signoff cannot be removed from a history run.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+
+            if (!review.CurrentUserHasSignedOff)
+            {
+                TempData["Error"] = "There is no signoff for your assigned engagement role to remove.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+
+            await _rule46.RemoveSignoffAsync(runId, user!.Email!);
+            await _audit.LogAsync("remove_validation_signoff", $"{review.CurrentUserEngagementRole} removed signoff for Rule 46 run {runId}", user.Id, user.Email);
+            TempData["Success"] = "Signoff removed.";
+            return RedirectToAction(nameof(Run), new { id = runId });
+        }
+
+        [HttpGet]
         public async Task<IActionResult> GetWorkspaceState(int clientId)
         {
             var user = await _users.GetUserAsync(User);
@@ -444,6 +600,12 @@ namespace HemisAudit.Controllers
             if (workspace == null) return false;
             return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
         }
+
+        private static bool CanViewSavedRun(Rule46RunReviewViewModel review, string systemRole)
+            => ValidationRunAccessPolicy.CanViewSignedResults(systemRole, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff);
+
+        private static bool CanDownloadSavedRun(Rule46RunReviewViewModel review, string systemRole)
+            => ValidationRunAccessPolicy.CanDownloadSignedResults(systemRole, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff);
 
         private async Task<string> GetCurrentSystemRoleAsync(ApplicationUser? user)
         {

@@ -1,0 +1,365 @@
+@model HemisAudit.ViewModels.Rule44RunReviewViewModel
+@{
+    ViewData["Title"] = $"Rule 44 Run {Model.RunId}";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    var isAdmin = ViewBag.IsAdmin is bool admin && admin;
+    var canDownload = ViewBag.CanDownloadSavedRun is bool allowed && allowed;
+    var canManageEngagement = ViewBag.CanManageEngagement is bool me && me;
+    var canOpenWorkspace = ViewBag.CanOpenWorkspace is bool owb && owb;
+    var isArchived = ViewBag.IsArchived is bool arch && arch;
+    var moduleNavigation = ViewBag.ModuleNavigation as HemisAudit.ViewModels.ModuleSequenceNavigationViewModel;
+    var s = Model.Summary;
+}
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert--success" style="margin-bottom:16px">@TempData["Success"]</div>
+}
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">@TempData["Error"]</div>
+}
+
+@if (moduleNavigation != null)
+{
+    @await Html.PartialAsync("_ModuleSequenceNav", moduleNavigation)
+}
+
+<style>
+    .viz-grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); }
+    .viz-card { background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:20px; box-shadow:0 18px 40px rgba(15,23,42,.06); }
+    .code-panel { background:#0f172a; border-radius:18px; color:#e2e8f0; overflow:auto; padding:18px; }
+    .code-panel pre { margin:0; white-space:pre-wrap; word-break:break-word; }
+</style>
+
+<div class="page-header">
+    <div>
+        <h1>Rule 44 — Masters &amp; PhD Research Time Validation</h1>
+        <p>
+            @Model.EngagementName
+            <span style="padding:0 8px">|</span>
+            @Model.MaconomyNumber
+            <span style="padding:0 8px">|</span>
+            Run #@Model.RunId
+            <span style="padding:0 8px">|</span>
+            @s.Timestamp
+        </p>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+        @if (canOpenWorkspace)
+        {
+            <a href="/Rule44?clientId=@Model.ClientId" class="btn btn-primary">Open Workspace</a>
+        }
+        @if (canManageEngagement)
+        {
+            <a href="/Clients/Details/@Model.ClientId" class="btn btn-secondary">Manage Engagement</a>
+        }
+    </div>
+</div>
+
+@if (!Model.IsCurrentRun)
+{
+    <div class="alert alert--warning" style="margin-bottom:16px">
+        This is a historical run. A newer run exists for this engagement.
+        <a href="/Rule44?clientId=@Model.ClientId">Open current workspace</a>
+    </div>
+}
+
+@if (isArchived)
+{
+    <div class="alert alert--warning" style="margin-bottom:16px">
+        This engagement is archived. Results are read-only; signoff and removal are disabled.
+    </div>
+}
+
+<!-- Status Summary -->
+<div class="results-card" style="margin-bottom:24px">
+    <div class="viz-grid">
+        <div class="viz-card">
+            <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:6px">Total Students</div>
+            <div style="font-size:28px;font-weight:800">@s.TotalCount.ToString("N0")</div>
+        </div>
+        <div class="viz-card" style="border-left:4px solid #22C55E">
+            <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:6px">PASS</div>
+            <div style="font-size:28px;font-weight:800;color:#166534">@s.PassCount.ToString("N0")</div>
+        </div>
+        <div class="viz-card" style="border-left:4px solid #EF4444">
+            <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:6px">FAIL</div>
+            <div style="font-size:28px;font-weight:800;color:#C62828">@s.FailCount.ToString("N0")</div>
+        </div>
+        <div class="viz-card" style="border-left:4px solid #EF4444">
+            <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:6px">Missing PQM</div>
+            <div style="font-size:28px;font-weight:800;color:#C62828">@s.MissingPqmCount.ToString("N0")</div>
+        </div>
+        <div class="viz-card" style="border-left:4px solid @(s.Status == "PASS" ? "#22C55E" : "#EF4444")">
+            <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;margin-bottom:6px">Status</div>
+            <div style="font-size:28px;font-weight:800;color:@(s.Status == "PASS" ? "#166534" : "#C62828")">@s.Status</div>
+            <div style="font-size:11px;color:#64748b">Rate: @s.ExceptionRate.ToString("F2")%</div>
+        </div>
+    </div>
+</div>
+
+@if (s.IsPreviewOnly)
+{
+    <div class="alert alert--info" style="margin-bottom:16px">
+        Browser preview only: showing up to @s.PreviewLimit rows per result set. Download Excel for the full population.
+    </div>
+}
+
+<!-- Tabs -->
+<div class="results-panel">
+    <div class="results-tabs">
+        <button class="tab-btn active" onclick="switchTab('flagged')">FLAGGED (@s.FailCount.ToString("N0"))</button>
+        <button class="tab-btn" onclick="switchTab('clear')">CLEAR (@s.PassCount.ToString("N0"))</button>
+        <button class="tab-btn" onclick="switchTab('config')">Configuration</button>
+        <button class="tab-btn" onclick="switchTab('signoffs')">Signoffs</button>
+        <button class="tab-btn" onclick="switchTab('sql')">SQL Code</button>
+        @if (canDownload)
+        {
+            <button class="tab-btn" onclick="switchTab('downloads')">Downloads</button>
+        }
+    </div>
+
+    <!-- FLAGGED (FAIL) rows -->
+    <div class="tab-pane active" id="tab-flagged">
+        <h3 style="margin-bottom:1rem">FLAGGED Rows</h3>
+        @if (!s.FailRows.Any())
+        {
+            <div class="alert alert--success">No FLAGGED rows — all Masters/PhD students passed the research time check.</div>
+        }
+        else
+        {
+            <div class="results-table-shell">
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Student No</th>
+                                <th>Student ID</th>
+                                <th>Qual Code</th>
+                                <th>Status</th>
+                                <th>Qualification Name</th>
+                                <th>Type</th>
+                                <th>STUD._073</th>
+                                <th>PQM.Research_1</th>
+                                <th>Result</th>
+                                <th>Explanation</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in s.FailRows)
+                            {
+                                <tr>
+                                    <td>@row.RowNumber</td>
+                                    <td><strong>@row.StudentNo</strong></td>
+                                    <td>@row.StudentId</td>
+                                    <td>@row.QualCode</td>
+                                    <td>@row.StudStatus</td>
+                                    <td>@row.QualName</td>
+                                    <td>@row.QualType</td>
+                                    <td style="text-align:center;font-weight:700">@row.StudResearchTime</td>
+                                    <td style="text-align:center;font-weight:700">@row.PqmResearchTime</td>
+                                    <td><span class="badge badge--fail">@row.ValidationResult</span></td>
+                                    <td>@row.ValidationExplanation</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                @if (s.FailRows.Count < s.FailCount)
+                {
+                    <div class="table-footer">Showing @s.FailRows.Count of @s.FailCount.ToString("N0") FLAGGED rows. Download the Excel or CSV for the full list.</div>
+                }
+            </div>
+        }
+    </div>
+
+    <!-- CLEAR (PASS) rows -->
+    <div class="tab-pane" id="tab-clear">
+        <h3 style="margin-bottom:1rem">CLEAR Rows</h3>
+        @if (!s.PassRows.Any())
+        {
+            <div class="alert alert--warning">No CLEAR rows available in this saved run.</div>
+        }
+        else
+        {
+            <div class="results-table-shell">
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Student No</th>
+                                <th>Student ID</th>
+                                <th>Qual Code</th>
+                                <th>Status</th>
+                                <th>Qualification Name</th>
+                                <th>Type</th>
+                                <th>STUD._073</th>
+                                <th>PQM.Research_1</th>
+                                <th>Result</th>
+                                <th>Explanation</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in s.PassRows)
+                            {
+                                <tr>
+                                    <td>@row.RowNumber</td>
+                                    <td><strong>@row.StudentNo</strong></td>
+                                    <td>@row.StudentId</td>
+                                    <td>@row.QualCode</td>
+                                    <td>@row.StudStatus</td>
+                                    <td>@row.QualName</td>
+                                    <td>@row.QualType</td>
+                                    <td style="text-align:center;font-weight:700">@row.StudResearchTime</td>
+                                    <td style="text-align:center;font-weight:700">@row.PqmResearchTime</td>
+                                    <td><span class="badge badge--pass">@row.ValidationResult</span></td>
+                                    <td>@row.ValidationExplanation</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                @if (s.PassRows.Count < s.PassCount)
+                {
+                    <div class="table-footer">Showing @s.PassRows.Count of @s.PassCount.ToString("N0") CLEAR rows. Download the Excel or CSV for the full list.</div>
+                }
+            </div>
+        }
+    </div>
+
+    <!-- Configuration -->
+    <div class="tab-pane" id="tab-config">
+        <h3 style="margin-bottom:1rem">Run Configuration</h3>
+        <table class="data-table">
+            <tbody>
+                <tr><td style="font-weight:600">STUD Table</td><td>@s.StudTable</td></tr>
+                <tr><td style="font-weight:600">QUAL Table (bridge)</td><td>@s.QualTable</td></tr>
+                <tr><td style="font-weight:600">PQM Table</td><td>@s.PqmTable</td></tr>
+                <tr><td style="font-weight:600">PG Type Codes</td><td>@s.PgTypesText</td></tr>
+                <tr><td style="font-weight:600">STUD Student No Column</td><td>@s.ColumnMapping.StudStudentNoCol</td></tr>
+                <tr><td style="font-weight:600">STUD Student ID Column</td><td>@s.ColumnMapping.StudIdCol</td></tr>
+                <tr><td style="font-weight:600">STUD Qual Code Column (join key)</td><td>@s.ColumnMapping.StudQualCodeCol</td></tr>
+                <tr><td style="font-weight:600">STUD Status Column</td><td>@s.ColumnMapping.StudStatusCol</td></tr>
+                <tr><td style="font-weight:600">STUD Research Time Column</td><td>@s.ColumnMapping.StudResearchTimeCol</td></tr>
+                <tr><td style="font-weight:600">QUAL Qual Code Column (join key)</td><td>@s.ColumnMapping.QualQualCodeCol</td></tr>
+                <tr><td style="font-weight:600">QUAL Name Column (join to PQM)</td><td>@s.ColumnMapping.QualNameCol</td></tr>
+                <tr><td style="font-weight:600">QUAL Type Column (filter)</td><td>@s.ColumnMapping.QualTypeCol</td></tr>
+                <tr><td style="font-weight:600">PQM Qualification Name Column</td><td>@s.ColumnMapping.PqmNameCol</td></tr>
+                <tr><td style="font-weight:600">PQM Research Time Column</td><td>@s.ColumnMapping.PqmResearchTimeCol</td></tr>
+                <tr><td style="font-weight:600">Run Date</td><td>@s.Timestamp</td></tr>
+                <tr><td style="font-weight:600">Run ID</td><td>#@Model.RunId</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Signoffs -->
+    <div class="tab-pane" id="tab-signoffs">
+        <h3 style="margin-bottom:1rem">Signoffs</h3>
+        @if (!Model.Signoffs.Any())
+        {
+            <div class="alert alert--info">No signoffs recorded for this run yet.</div>
+        }
+        else
+        {
+            <div class="results-table-shell">
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead><tr><th>Role</th><th>Reviewer</th><th>Comment</th><th>Signed Off At</th><th>Your Record</th></tr></thead>
+                        <tbody>
+                            @foreach (var so in Model.Signoffs)
+                            {
+                                <tr class="@(so.IsCurrentUser ? "row-highlight" : "")">
+                                    <td><span class="badge badge--neutral badge--sm">@so.SignoffRole</span></td>
+                                    <td>@so.ReviewerName <small style="color:#64748b">@so.ReviewerEmail</small></td>
+                                    <td>@so.Comment</td>
+                                    <td>@so.SignedOffAt.ToString("yyyy-MM-dd HH:mm")</td>
+                                    <td>@(so.IsCurrentUser ? "✔" : "")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+
+        @if (Model.IsCurrentRun && !isArchived)
+        {
+            @if (Model.CanCurrentUserSignOff && !Model.CurrentUserHasSignedOff)
+            {
+                <div class="field-group" style="max-width:600px;margin-top:1.5rem">
+                    <label>Signoff Comment</label>
+                    <textarea id="signoffComment" rows="3" placeholder="Enter your review comment..."></textarea>
+                </div>
+                <button type="button" class="btn btn-primary" id="signoffBtn" style="margin-top:0.75rem" onclick="submitSignoff()">Sign Off Run #@Model.RunId</button>
+            }
+            @if (Model.CanCurrentUserRemoveSignoff)
+            {
+                <button type="button" class="btn btn-warning" id="removeSignoffBtn" style="margin-top:1rem"
+                        onclick="if (confirm('Are you sure you want to remove your signoff from this run?')) submitRemoveSignoff();">Remove My Signoff</button>
+            }
+        }
+    </div>
+
+    <!-- SQL Code -->
+    <div class="tab-pane" id="tab-sql">
+        <h3 style="margin-bottom:1rem">Generated SQL</h3>
+        <div class="code-panel">
+            <pre>@Model.GeneratedSql</pre>
+        </div>
+    </div>
+
+    <!-- Downloads -->
+    @if (canDownload)
+    {
+        <div class="tab-pane" id="tab-downloads">
+            <h3 style="margin-bottom:1rem">Download Run #@Model.RunId</h3>
+            <div class="download-buttons download-buttons--wide">
+                <a href="/Rule44/DownloadSavedExcel?runId=@Model.RunId" class="btn btn-success">Excel</a>
+                <a href="/Rule44/DownloadSavedCsv?runId=@Model.RunId" class="btn btn-info">Full CSV</a>
+                <a href="/Rule44/DownloadSavedSql?runId=@Model.RunId" class="btn btn-primary">SQL Script</a>
+            </div>
+        </div>
+    }
+</div>
+
+<form id="antiForgeryForm" method="post" style="display:none">
+    @Html.AntiForgeryToken()
+</form>
+
+<script>
+function switchTab(name) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    const btn = document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`);
+    if (btn) btn.classList.add('active');
+    const panel = document.getElementById(`tab-${name}`);
+    if (panel) panel.classList.add('active');
+}
+
+const __rule44Token = document.querySelector('#antiForgeryForm input[name="__RequestVerificationToken"]')?.value || '';
+
+async function __rule44Post(url, payload) {
+    const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': __rule44Token },
+        body: JSON.stringify(payload)
+    });
+    return await r.json();
+}
+
+async function submitSignoff() {
+    const comment = document.getElementById('signoffComment')?.value || '';
+    const data = await __rule44Post('/Rule44/SignOffWorkspace', { clientId: @Model.ClientId, runId: @Model.RunId, comment });
+    if (!data.success) { alert(data.error || 'Signoff failed.'); return; }
+    window.location.reload();
+}
+
+async function submitRemoveSignoff() {
+    const data = await __rule44Post('/Rule44/RemoveWorkspaceSignoff', { clientId: @Model.ClientId, runId: @Model.RunId, comment: '' });
+    if (!data.success) { alert(data.error || 'Signoff removal failed.'); return; }
+    window.location.reload();
+}
+</script>
