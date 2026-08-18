@@ -66,10 +66,32 @@ namespace HemisAudit.Services
                 _configuration.GetConnectionString("Postgres")
                     ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured."),
                 commandTimeoutSeconds);
-            var connection = new NpgsqlConnection(connectionString);
-            await connection.OpenAsync();
-            return connection;
+
+            // Raw ADO.NET (not EF), so no automatic retry. Guards against Supabase's pooler having
+            // closed a pooled connection server-side between the time Npgsql handed it out and the
+            // time we actually open it - the same transient-failure retry SystemDatabaseService uses.
+            const int maxAttempts = 3;
+            for (var attempt = 1; ; attempt++)
+            {
+                var connection = new NpgsqlConnection(connectionString);
+                try
+                {
+                    await connection.OpenAsync();
+                    return connection;
+                }
+                catch (Exception ex) when (attempt < maxAttempts && IsTransientConnectionFailure(ex))
+                {
+                    await connection.DisposeAsync();
+                    await Task.Delay(200 * attempt);
+                }
+            }
         }
+
+        private static bool IsTransientConnectionFailure(Exception ex) =>
+            ex is NpgsqlException
+            || ex is System.Net.Sockets.SocketException
+            || ex is System.IO.IOException
+            || ex is TimeoutException;
 
         private static string SchemaFor(int clientId) => $"engagement_{clientId}";
 
