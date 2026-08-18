@@ -1681,6 +1681,47 @@
         }).catch(function () { });
     });
 
+    // "Review"/"Open"/Previous-Next-module links point at a specific saved run (e.g.
+    // /Rule17/Run/8864) that may no longer exist or may no longer be accessible - a deleted run,
+    // an old reference on an archived engagement, etc. Following the link straight through used to
+    // land on the browser's own bare crash page; ErrorController now renders something friendlier
+    // there, but that still means leaving the page just to be told "not found." Checking first and
+    // surfacing a toast in place keeps the user exactly where they were when that happens.
+    document.addEventListener('click', function (event) {
+        var link = event.target && event.target.closest ? event.target.closest('a.js-check-run') : null;
+        if (!link || event.defaultPrevented) return;
+        if (link.target && link.target !== '_self') return;
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        var url = link.getAttribute('href');
+        if (!url) return;
+
+        event.preventDefault();
+        if (link.dataset.checking === '1') return;
+        link.dataset.checking = '1';
+        var originalOpacity = link.style.opacity;
+        link.style.opacity = '0.6';
+
+        fetch(url, { method: 'GET', credentials: 'same-origin' })
+            .then(function (response) {
+                if (response.ok) {
+                    window.location.href = url;
+                    return;
+                }
+                link.style.opacity = originalOpacity;
+                link.dataset.checking = '';
+                window.showAppToast(
+                    response.status === 403
+                        ? "You don't have access to that record."
+                        : 'That record could not be found. It may have been removed or is no longer available.',
+                    'error');
+            })
+            .catch(function () {
+                link.style.opacity = originalOpacity;
+                link.dataset.checking = '';
+                window.showAppToast('Could not reach the server. Please check your connection and try again.', 'error');
+            });
+    });
+
 })();
 </script>
 @RenderSection("Scripts", required: false)

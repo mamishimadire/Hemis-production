@@ -202,7 +202,7 @@
             </p>
             <div style="display:flex;gap:10px;flex-wrap:wrap">
                 <a href="@RuleRouteHelper.GetRunUrl(Model.CurrentRunRuleNumber ?? 10, Model.CurrentRunId ?? 0)"
-                   class="btn btn-primary">
+                   class="btn btn-primary js-check-run">
                     Open Latest Results
                 </a>
                 <a asp-controller="@RuleRouteHelper.GetControllerName(Model.CurrentRunRuleNumber ?? 0)"
@@ -1189,7 +1189,7 @@
                                 <td>@run.RunAt.ToString("dd MMM yyyy HH:mm")</td>
                                 <td>
                                     <a href="@RuleRouteHelper.GetRunUrl(run.RuleNumber, run.Id)"
-                                       class="btn btn-sm btn-secondary">Review</a>
+                                       class="btn btn-sm btn-secondary js-check-run">Review</a>
                                 </td>
                             </tr>
                         }

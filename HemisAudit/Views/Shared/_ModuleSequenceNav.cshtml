@@ -23,13 +23,13 @@
                 }
                 @if (Model.Previous != null)
                 {
-                    <a href="@Model.Previous.Url" class="btn btn-secondary">
+                    <a href="@Model.Previous.Url" class="btn btn-secondary js-check-run">
                         Previous Module: @Model.Previous.RuleLabel
                     </a>
                 }
                 @if (Model.Next != null)
                 {
-                    <a href="@Model.Next.Url" class="btn btn-primary">
+                    <a href="@Model.Next.Url" class="btn btn-primary js-check-run">
                         Next Module: @Model.Next.RuleLabel
                     </a>
                 }

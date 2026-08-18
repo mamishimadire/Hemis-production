@@ -99,7 +99,7 @@
                                 @if (c.LatestRunId.HasValue)
                                 {
                                     <a href="@RuleRouteHelper.GetRunUrl(c.LatestRunRuleNumber ?? 10, c.LatestRunId.Value)"
-                                       class="btn btn-sm btn-secondary">Review</a>
+                                       class="btn btn-sm btn-secondary js-check-run">Review</a>
                                 }
                                 else
                                 {
