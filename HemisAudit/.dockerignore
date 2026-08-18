@@ -1,0 +1,8 @@
+bin/
+obj/
+.run/
+.vs/
+App_Data/
+*.log
+*.pid
+HemisAuditDb.db
