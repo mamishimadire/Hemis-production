@@ -2404,17 +2404,17 @@ code {
 
 :root {
     --sidebar-width: 304px;
-    --bg: #16233a;
-    --bg-soft: #1b2b45;
-    --surface: #21344f;
-    --surface-2: #263c59;
-    --surface-3: #2d4566;
-    --surface-4: #345074;
-    --border: rgba(213, 224, 235, 0.16);
-    --border-strong: rgba(213, 224, 235, 0.28);
-    --text: #f5f7fa;
-    --text-muted: #d4dce6;
-    --text-soft: #aebbca;
+    --bg: #1a1b1e;
+    --bg-soft: #202124;
+    --surface: #26272b;
+    --surface-2: #2c2d32;
+    --surface-3: #333439;
+    --surface-4: #3b3c42;
+    --border: rgba(210, 210, 215, 0.14);
+    --border-strong: rgba(210, 210, 215, 0.26);
+    --text: #f2f2f4;
+    --text-muted: #cfd0d4;
+    --text-soft: #a8a9ae;
     --brand: #1D73B9;
     --brand-2: #45A1E0;
     --brand-3: #79C7F8;
@@ -2521,8 +2521,8 @@ body {
 
 html:not(.light) body {
     background:
-        radial-gradient(circle at top right, rgba(91, 148, 214, 0.18), transparent 20%),
-        linear-gradient(180deg, #14273d 0%, var(--bg) 100%);
+        radial-gradient(circle at top right, rgba(160, 160, 165, 0.10), transparent 20%),
+        linear-gradient(180deg, #1f2023 0%, var(--bg) 100%);
 }
 
 a {
@@ -2763,7 +2763,7 @@ a {
 }
 
 html:not(.light) .topnav {
-    background: rgba(48, 31, 77, .82);
+    background: rgba(38, 39, 43, .86);
 }
 
 .topnav-search {
