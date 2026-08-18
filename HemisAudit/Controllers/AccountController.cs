@@ -75,20 +75,16 @@ namespace HemisAudit.Controllers
         // True if this user's firm has at least one ServiceProvider-role colleague — the same
         // "internal vs. leased firm" test FirmsController uses to keep the platform owner's own
         // org out of its client-management console (IsServiceProviderOwnedFirmAsync there).
-        private async Task<bool> IsInternalServiceProviderStaffAsync(ApplicationUser user)
-        {
-            if (user.FirmId == null)
-                return false;
+        private static readonly string[] InternalStaffRoles = { "Admin", "Director", "Manager", "DataAnalyst", "Trainee" };
 
-            var spRoleId = await _db.Roles.Where(r => r.Name == "ServiceProvider").Select(r => r.Id).FirstOrDefaultAsync();
-            if (spRoleId == null)
-                return false;
-
-            return await (from ur in _db.UserRoles
-                           join u in _db.Users on ur.UserId equals u.Id
-                           where ur.RoleId == spRoleId && u.FirmId == user.FirmId
-                           select ur).AnyAsync();
-        }
+        // A user with no FirmId isn't tied to any external leased firm at all - they're one of
+        // Mamishi's own internal team, regardless of which internal role they hold. A leased firm's
+        // own Admin/Manager/DataAnalyst always has FirmId set (stamped when their account is created
+        // under that firm), so FirmId being null is exactly what distinguishes "platform owner's own
+        // staff" from "a leased firm's staff" in this data model - it's the actual test, not sharing
+        // a FirmId with whoever happens to hold the literal ServiceProvider role.
+        private static bool IsInternalServiceProviderStaff(ApplicationUser user, IList<string> roles) =>
+            user.FirmId == null && roles.Any(r => InternalStaffRoles.Contains(r, StringComparer.OrdinalIgnoreCase));
 
         private void ClearLegacyBrowserState()
         {
@@ -158,7 +154,7 @@ namespace HemisAudit.Controllers
                 // Trainee all included), as opposed to a leased firm's external users. Internal
                 // staff share a FirmId with whichever account actually holds the ServiceProvider
                 // role, so that's the real test, not the caller's own specific role.
-                if (!roles.Contains("ServiceProvider") && !await IsInternalServiceProviderStaffAsync(user))
+                if (!roles.Contains("ServiceProvider") && !IsInternalServiceProviderStaff(user, roles))
                 {
                     ModelState.AddModelError("", "This isn't a service provider account — use the Client Login tab instead, with the client code your service provider gave you.");
                     return View(model);
