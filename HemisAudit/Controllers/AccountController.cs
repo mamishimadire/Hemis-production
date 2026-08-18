@@ -436,7 +436,7 @@ namespace HemisAudit.Controllers
 
             var candidate = returnUrl.Trim();
             if (Url.IsLocalUrl(candidate))
-                return candidate;
+                return RejectAccountReturnUrl(candidate);
 
             if (!Uri.TryCreate(candidate, UriKind.Absolute, out var absoluteUri))
                 return "/Dashboard";
@@ -453,7 +453,21 @@ namespace HemisAudit.Controllers
                 return "/Dashboard";
 
             var localPath = absoluteUri.PathAndQuery + absoluteUri.Fragment;
-            return Url.IsLocalUrl(localPath) ? localPath : "/Dashboard";
+            return Url.IsLocalUrl(localPath) ? RejectAccountReturnUrl(localPath) : "/Dashboard";
+        }
+
+        // A stale/expired auth cookie mid-flow (e.g. clicking Logout right as the session dies)
+        // makes the [Authorize] challenge redirect to Login with ReturnUrl pointing right back at
+        // the Account controller - e.g. "/Account/Logout". Following that after a fresh login would
+        // GET a POST-only action and 405. No legitimate post-login landing page is ever inside
+        // /Account/*, so treat any such target as unsafe and fall back to the dashboard.
+        private static string RejectAccountReturnUrl(string localPath)
+        {
+            var pathOnly = localPath.Split('?', '#')[0];
+            return pathOnly.TrimStart('/').StartsWith("Account/", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(pathOnly.Trim('/'), "Account", StringComparison.OrdinalIgnoreCase)
+                ? "/Dashboard"
+                : localPath;
         }
 
         private async Task SendPasswordResetLinkAsync(ApplicationUser user)
