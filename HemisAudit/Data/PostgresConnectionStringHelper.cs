@@ -24,7 +24,14 @@ namespace HemisAudit.Data
                 // Supabase from scratch, which is slow and occasionally times out outright, only to
                 // succeed on retry once a connection exists. Keeping one warm connection alive at all
                 // times avoids that cold-start tax entirely.
-                MinPoolSize = 1
+                MinPoolSize = 1,
+                // Every caller of this helper builds the exact same connection string, so they all
+                // share ONE Npgsql client-side pool. Without a ceiling it defaults to 100 - far above
+                // Supabase's session-mode pooler limit (pool_size: 15 on this project). Under any real
+                // concurrent load the app could burst past that and get hard-rejected with
+                // "XX000 EMAXCONNSESSION: max clients reached". Capping below 15 makes Npgsql queue
+                // extra demand client-side (up to Timeout=15s) instead of Supabase refusing it outright.
+                MaxPoolSize = 10
             };
             return builder.ConnectionString;
         }
