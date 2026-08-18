@@ -90,17 +90,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule46.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule46.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule46.GetTablesAsync(model.Server, model.Database, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] Rule37GetColumnsRequest model) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                await _rule46.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName)));
+        public async Task<IActionResult> GetColumns([FromBody] Rule46GetColumnsRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule46.GetColumnsAsync(model.ClientId, model.TableName, model.TableRole)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule46ValidationRequest request) =>
@@ -272,7 +267,8 @@ namespace HemisAudit.Controllers
                 TempData["Error"] = "The assigned data analyst must sign off before downloading.";
                 return RedirectToAction(nameof(Index));
             }
-            var bytes = BuildCombinedCsvBytes(review.Summary!);
+            var fullSummary = await _rule46.GetStoredSummaryAsync(runId) ?? review.Summary!;
+            var bytes = BuildCombinedCsvBytes(fullSummary);
             return File(bytes, "text/csv", $"Rule46_Foundation_Chain_Run_{runId}.csv");
         }
 
@@ -289,7 +285,8 @@ namespace HemisAudit.Controllers
                 return RedirectToAction(nameof(Index));
             }
 
-            var bytes = BuildExcelExport(review.Summary!);
+            var fullSummary = await _rule46.GetStoredSummaryAsync(runId) ?? review.Summary!;
+            var bytes = BuildExcelExport(fullSummary);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule46_Foundation_Chain_Run_{runId}.xlsx");
         }
 
@@ -303,7 +300,7 @@ namespace HemisAudit.Controllers
             var s = review.Summary!;
             var req = new Rule46ValidationRequest
             {
-                Database = s.Database, StudTable = s.StudTable, StudKey = s.StudKey, StudIdCol = s.StudIdCol,
+                StudTable = s.StudTable, StudKey = s.StudKey, StudIdCol = s.StudIdCol,
                 Stud007Col = s.Stud007Col,
                 Stud010Col = s.Stud010Col,
                 Stud012Col = s.Stud012Col,
@@ -317,31 +314,11 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule46_Foundation_Chain_Run_{runId}.sql");
         }
 
-        private static byte[] BuildCsvBytes(Rule46ValidationSummary summary)
-        {
-            using var ms = new System.IO.MemoryStream();
-            using var sw = new System.IO.StreamWriter(ms, System.Text.Encoding.UTF8);
-            sw.WriteLine($"\"HEMIS RULE 46 Ã¢â‚¬â€œ Foundation Student PQM Validation\"");
-            sw.WriteLine($"\"Database\",\"{summary.Database}\"");
-            sw.WriteLine($"\"Timestamp\",\"{summary.Timestamp}\"");
-            sw.WriteLine($"\"Total\",{summary.TotalValidated},\"Pass\",{summary.PassCount},\"Fail\",{summary.FailCount},\"Exception Rate\",{summary.ExceptionRate:0.00}%");
-            sw.WriteLine();
-            sw.WriteLine("\"Row\",\"Stud_ID\",\"Stud_Filter\",\"Qual_ID\",\"Qual_Name\",\"PQM_Name\",\"Result\",\"Detail\"");
-            foreach (var row in summary.ValidationRows)
-            {
-                static string Q(string? v) => "\"" + (v ?? "").Replace("\"", "\"\"") + "\"";
-                sw.WriteLine($"{row.RowNumber},{Q(row.StudId)},{Q(row.StudFilterValue)},{Q(row.QualId)},{Q(row.QualName)},{Q(row.PqmName)},{Q(row.ValidationResult)},{Q(row.ResultDetail)}");
-            }
-            sw.Flush();
-            return ms.ToArray();
-        }
-
         private static byte[] BuildCombinedCsvBytes(Rule46ValidationSummary summary)
         {
             using var ms = new System.IO.MemoryStream();
             using var sw = new System.IO.StreamWriter(ms, System.Text.Encoding.UTF8);
-            sw.WriteLine($"\"HEMIS RULE 46 - Foundation Student Chain Validation\"");
-            sw.WriteLine($"\"Database\",\"{summary.Database}\"");
+            sw.WriteLine("\"HEMIS RULE 46 - Foundation Student Chain Validation\"");
             sw.WriteLine($"\"Timestamp\",\"{summary.Timestamp}\"");
             sw.WriteLine($"\"Total\",{summary.TotalValidated},\"Pass\",{summary.PassCount},\"Fail\",{summary.FailCount},\"Exception Rate\",{summary.ExceptionRate:0.00}%");
             sw.WriteLine();
@@ -367,7 +344,6 @@ namespace HemisAudit.Controllers
 
             var summaryRows = new (string Label, string Value)[]
             {
-                ("Database", summary.Database),
                 ("Timestamp", summary.Timestamp),
                 ("STUD Table", summary.StudTable),
                 ("STUD Key", summary.StudKey),

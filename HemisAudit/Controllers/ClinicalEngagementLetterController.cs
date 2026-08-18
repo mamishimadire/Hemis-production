@@ -125,7 +125,7 @@ public class ClinicalEngagementLetterController : Controller
             "•   it has been advised of the purpose and reason for the collection and processing of the Client Data; and",
             leftTwips: 360, afterPt: 2));
         body.Append(WordHelper.IndentPara(
-            "•   the audit tools, software and methodology of Grant Thornton International Limited is used in the conduct of the audit by the Auditor and, as a result, the Auditor will transfer and subsequently Process the Client Data at a Microsoft Azure data centres located in Europe.",
+            "•   the audit tools, software and methodology of Audit Firm is used in the conduct of the audit by the Auditor and, as a result, the Auditor will transfer and subsequently Process the Client Data at a Microsoft Azure data centres located in Europe.",
             leftTwips: 360, afterPt: 4));
         body.Append(WordHelper.WPara(
             "¹ “Personal Information” has the meaning given to it POPIA.",
@@ -195,7 +195,7 @@ public class ClinicalEngagementLetterController : Controller
         // 10. AI Tools
         body.Append(WordHelper.ELSection("10.", "Usage of Artificial Intelligence (AI) Tools"));
         body.Append(WordHelper.WPara(
-            "In performing the services under this engagement, SizweNtsalubaGobodo Grant Thornton may, where appropriate, use artificial intelligence (“AI”) technologies and tools to assist with information analysis and review, data analytics, drafting, research, or other tasks that enhance efficiency and quality. The use of such tools will be subject to the following limitations:",
+            "In performing the services under this engagement, Audit Firm may, where appropriate, use artificial intelligence (“AI”) technologies and tools to assist with information analysis and review, data analytics, drafting, research, or other tasks that enhance efficiency and quality. The use of such tools will be subject to the following limitations:",
             afterPt: 4));
         body.Append(WordHelper.IndentPara("i.   AI that exist within business applications commonly used", leftTwips: 360, bold: true, afterPt: 2));
         body.Append(WordHelper.IndentPara(
@@ -207,11 +207,11 @@ public class ClinicalEngagementLetterController : Controller
             leftTwips: 540, afterPt: 4));
         body.Append(WordHelper.IndentPara("iii.   Confidentiality and Data Security", leftTwips: 360, bold: true, afterPt: 2));
         body.Append(WordHelper.IndentPara(
-            "Any client data shared with or processed through AI tools will be handled in accordance with applicable data protection laws and SizweNtsalubaGobodo Grant Thornton confidentiality obligations. No confidential or personal data will be used in third-party AI tools unless adequate safeguards and contractual protections are in place.",
+            "Any client data shared with or processed through AI tools will be handled in accordance with applicable data protection laws and Audit Firm confidentiality obligations. No confidential or personal data will be used in third-party AI tools unless adequate safeguards and contractual protections are in place.",
             leftTwips: 540, afterPt: 4));
         body.Append(WordHelper.IndentPara("iv.   Transparency and Responsibility", leftTwips: 360, bold: true, afterPt: 2));
         body.Append(WordHelper.IndentPara(
-            "SizweNtsalubaGobodo Grant Thornton remains fully responsible for the services provided and any advice or deliverables generated, regardless of whether AI tools were used in their development.",
+            "Audit Firm remains fully responsible for the services provided and any advice or deliverables generated, regardless of whether AI tools were used in their development.",
             leftTwips: 540, afterPt: 4));
         body.Append(WordHelper.IndentPara("v.   Exclusions", leftTwips: 360, bold: true, afterPt: 2));
         body.Append(WordHelper.IndentPara(
@@ -219,7 +219,7 @@ public class ClinicalEngagementLetterController : Controller
             leftTwips: 540, afterPt: 4));
         body.Append(WordHelper.IndentPara("vi.   Client Consent", leftTwips: 360, bold: true, afterPt: 2));
         body.Append(WordHelper.IndentPara(
-            "By signing this engagement letter, the client acknowledges and consents to the appropriate use of AI tools in service delivery, as described above. If the client wishes to restrict the use of AI tools entirely or in specific areas, they may notify SizweNtsalubaGobodo Grant Thornton in writing. If the client does not provide written notification to SizweNtsalubaGobodo Grant Thornton, restricting or prohibiting the use of AI tools, it will be assumed that no restriction or prohibition applies.",
+            "By signing this engagement letter, the client acknowledges and consents to the appropriate use of AI tools in service delivery, as described above. If the client wishes to restrict the use of AI tools entirely or in specific areas, they may notify Audit Firm in writing. If the client does not provide written notification to Audit Firm, restricting or prohibiting the use of AI tools, it will be assumed that no restriction or prohibition applies.",
             leftTwips: 540, afterPt: 6));
 
         // 11. Meetings
@@ -244,7 +244,7 @@ public class ClinicalEngagementLetterController : Controller
             "We will not accept or assume responsibility (legal or otherwise) or accept liability for or in connection with any other purpose for which our report may be used, or to any other person to whom our report is shown or into whose hands it may come, and no other persons shall be entitled to rely on our report save where they have obtained our prior written consent that they may do so. If we have to accept responsibility to the third party, we will require their acceptance of limitation of liability as a condition of providing a report to them and reserve the right to charge additional fees.",
             afterPt: 4));
         body.Append(WordHelper.WPara(
-            "You will indemnify SizweNtsalubaGobodo Grant Thornton contracting party and any SizweNtsalubaGobodo Grant Thornton persons and hold them harmless against any loss, damage, expense or liability incurred by the parties and/or persons as a result of, arising from, or in connection with a combination of the following two circumstances:",
+            "You will indemnify Audit Firm contracting party and any Audit Firm persons and hold them harmless against any loss, damage, expense or liability incurred by the parties and/or persons as a result of, arising from, or in connection with a combination of the following two circumstances:",
             afterPt: 2));
         body.Append(WordHelper.IndentPara("a.   Any breach by you of your obligations under the service contract; and", leftTwips: 360, afterPt: 2));
         body.Append(WordHelper.IndentPara("b.   Any claim made by a third party or any other beneficiaries which results from or arises from or is connected with any such breach.", leftTwips: 360, afterPt: 6));
@@ -258,7 +258,7 @@ public class ClinicalEngagementLetterController : Controller
             "We recognise that systems and procedures cannot be a guarantee that transmissions will be unaffected by such hazards. We confirm that we each accept the risks of and authorise electronic communications between us. We each agree to use commercially reasonable procedures to check for the then most commonly known viruses before sending information electronically and to safeguard the security and confidentiality of the information transmitted, but we cannot guarantee that the transmission will be free of infection nor its security and confidentiality.",
             afterPt: 4));
         body.Append(WordHelper.WPara(
-            "We shall each be responsible for protecting our own systems and interests in relation to electronic communications and the Entity and SizweNtsalubaGobodo Grant Thornton (in each case including our respective partners/directors, employees or agents) shall have no liability to each other on any basis, whether in contract, delict (including negligence) or otherwise, in respect of any error, damage, loss or omission arising from or in connection with the electronic communication of information between us and our reliance on such information.",
+            "We shall each be responsible for protecting our own systems and interests in relation to electronic communications and the Entity and Audit Firm (in each case including our respective partners/directors, employees or agents) shall have no liability to each other on any basis, whether in contract, delict (including negligence) or otherwise, in respect of any error, damage, loss or omission arising from or in connection with the electronic communication of information between us and our reliance on such information.",
             afterPt: 4));
         body.Append(WordHelper.WPara(
             "The exclusion of liability in the previous clause shall not apply to the extent that any liability arises out of acts, omissions or misrepresentations which are in any case criminal, dishonest or fraudulent on the part of our respective partners/directors, employees, or agents. If our communication relates to a matter of significance on which you wish to rely and you are concerned about the possible effects of electronic transmission, you should request a hard copy of such transmission from us. If you wish us to password protect all or certain documents transmitted, you may request us to do so.",
@@ -345,13 +345,13 @@ public class ClinicalEngagementLetterController : Controller
             afterPt: 4));
         body.Append(WordHelper.WPara("All payments will be allocated first as to interest, then as to outlays, then to the longest outstanding fee.", afterPt: 4));
         body.Append(WordHelper.WPara(
-            "Should any invoice remain unpaid for more than 90 (ninety) days, SizweNtsaluba Gobodo Grant Thornton Inc reserves the right to initiate formal recovery procedures.",
+            "Should any invoice remain unpaid for more than 90 (ninety) days, Audit Firm reserves the right to initiate formal recovery procedures.",
             afterPt: 4));
         body.Append(WordHelper.WPara(
             "This may include (but is not limited to) the issuing of letters of demand, followed by legal action to recover any outstanding amounts, including accrued interest and reasonable legal costs incurred in the recovery process.",
             afterPt: 4));
         body.Append(WordHelper.WPara(
-            "The client acknowledges and agrees that SizweNtsaluba Gobodo Grant Thornton Inc may, without prejudice to any other rights in law, suspend or terminate the provision of services in the event of amounts invoiced being overdue.",
+            "The client acknowledges and agrees that Audit Firm may, without prejudice to any other rights in law, suspend or terminate the provision of services in the event of amounts invoiced being overdue.",
             afterPt: 6));
 
         // 19. Quality of service
@@ -431,7 +431,7 @@ public class ClinicalEngagementLetterController : Controller
         // 27. Standard terms and conditions
         body.Append(WordHelper.ELSection("27.", "Standard terms and conditions"));
         body.Append(WordHelper.WPara(
-            "The general conditions as set out in the terms of business attached hereto, apply to all work undertaken by SizweNtsalubaGobodo Grant Thornton for you pursuant to this engagement letter. All references in or to this letter include the standard terms and conditions and any other appendices hereto together with any other documents or other terms applicable to the services to which specific contractual reference is made in this engagement letter, all of which together form and are referred to as the “agreement” or the “engagement letter”. Once the terms of the engagement set out in this letter have been agreed, they will remain effective until this letter is replaced and/or renewed by amendment or otherwise, in which case we will obtain your agreement thereon.",
+            "The general conditions as set out in the terms of business attached hereto, apply to all work undertaken by Audit Firm for you pursuant to this engagement letter. All references in or to this letter include the standard terms and conditions and any other appendices hereto together with any other documents or other terms applicable to the services to which specific contractual reference is made in this engagement letter, all of which together form and are referred to as the “agreement” or the “engagement letter”. Once the terms of the engagement set out in this letter have been agreed, they will remain effective until this letter is replaced and/or renewed by amendment or otherwise, in which case we will obtain your agreement thereon.",
             afterPt: 6));
 
         // 28. Agreement of terms
@@ -454,7 +454,7 @@ public class ClinicalEngagementLetterController : Controller
         body.Append(WordHelper.WPara("Yours faithfully", afterPt: 10));
         body.Append(WordHelper.WPara("Mamishi  CA(SA) RA", bold: true, color: WordHelper.Purple, afterPt: 0));
         body.Append(WordHelper.WPara("Division: Assurance", afterPt: 0));
-        body.Append(WordHelper.WPara("SizweNtsalubaGobodo Grant Thornton", bold: true, afterPt: 0));
+        body.Append(WordHelper.WPara("Audit Firm", bold: true, afterPt: 0));
         body.Append(WordHelper.WPara("T:", afterPt: 0));
         body.Append(WordHelper.WPara("E:", afterPt: 12));
 

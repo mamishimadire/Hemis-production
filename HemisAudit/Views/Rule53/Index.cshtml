@@ -1,33 +1,27 @@
 @using HemisAudit.Models
-@using HemisAudit.ViewModels
 @{
     ViewData["Title"] = "Rule 53 - dbo_CRSE Subject Code in MT-audit-prod-CRSE";
     Layout = "~/Views/Shared/_Layout.cshtml";
     var clients = ViewBag.Clients as List<Client> ?? new();
-    var selectedClientId = ViewBag.ClientId is int currentClientId ? currentClientId : 0;
+    var selectedClientId = ViewBag.ClientId is int cid ? cid : 0;
     var currentSystemRole = ViewBag.CurrentSystemRole as string ?? "";
     var isResultsOnlyRole =
         string.Equals(currentSystemRole, "Manager", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(currentSystemRole, "Director", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(currentSystemRole, "Trainee", StringComparison.OrdinalIgnoreCase);
-    var moduleNavigation = ViewBag.ModuleNavigation as ModuleSequenceNavigationViewModel;
+    var moduleNavigation = ViewBag.ModuleNavigation as HemisAudit.ViewModels.ModuleSequenceNavigationViewModel;
 }
 
 <style>
-    .R53-results-wrap { display:grid; gap:24px; }
-    .R53-table-wrap { overflow-x:auto; border:1px solid var(--rule15-table-border); border-radius:14px; background:var(--rule15-card-alt); }
-    .R53-grid { width:100%; min-width:500px; border-collapse:collapse; table-layout:fixed; }
-    .R53-grid th, .R53-grid td { border:1px solid var(--rule15-table-border); padding:8px 10px; text-align:left; white-space:normal; word-break:normal; overflow-wrap:anywhere; vertical-align:top; font-family:Consolas,"Courier New",monospace; font-size:12px; color:var(--text); }
-    .R53-grid .group-valpac { background:var(--rule15-group-stud); }
-    .R53-grid .group-prod   { background:var(--rule15-group-bridge); }
-    .R53-grid .group-final  { background:var(--rule15-group-final); }
-    .R53-grid .is-pass { color:var(--rule15-pass); font-weight:800; }
-    .R53-grid .is-fail { color:var(--rule15-fail); font-weight:800; }
-    .R53-grid .result-text  { font-weight:800; margin-bottom:4px; display:block; }
-    .R53-grid .message-text { display:block; }
-    .R53-filterbar { display:flex; gap:12px; flex-wrap:wrap; align-items:end; margin-bottom:18px; }
-    .R53-filterbar label { font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:6px; }
-    .R53-summary-grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); }
+.r53-tbl { border-collapse: collapse; width: 100%; font-size: .82rem; }
+.r53-tbl th { background: #1B5E20; color: #fff; padding: 5px 8px; border: 1px solid #bbb; white-space: nowrap; text-align: center; }
+.r53-tbl td { padding: 4px 7px; border: 1px solid #ddd; vertical-align: middle; }
+.r53-tbl tr.pass-row { background: #F1F8E9; }
+.r53-tbl tr.fail-row { background: #FFEBEE; }
+.r53-pass { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: .74rem; font-weight: 700; background: #E8F5E9; color: #1E8449; }
+.r53-fail { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: .74rem; font-weight: 700; background: #FFEBEE; color: #C0392B; }
+.workspace-signoff-actions { display: flex; gap: 10px; flex-wrap: wrap; padding-top: 4px; }
+.col-mapping-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 </style>
 
 <div id="app" class="rule-page-shell">
@@ -37,9 +31,9 @@
     }
 
     <div class="engagement-selector">
-        <label for="clientId">Engagement</label>
-        <select id="clientId">
-            <option value="">Select engagement (results saved here)</option>
+        <label for="r53ClientId">Engagement</label>
+        <select id="r53ClientId" onchange="r53OnClientChange(this.value)">
+            <option value="">Select engagement</option>
             @foreach (var client in clients)
             {
                 <option value="@client.Id" selected="@(client.Id == selectedClientId ? "selected" : null)">
@@ -47,84 +41,79 @@
                 </option>
             }
         </select>
-        <small>Rule 53 checks that all values in <code>_030</code> from <code>dbo_CRSE</code> exist as <code>IALSUBJ</code> in <code>MT-audit-prod-CRSE</code>.</small>
     </div>
 
     <div class="rule-header">
         <div class="rule-header__icon">R53</div>
         <div>
-            <h1 class="rule-header__title">HEMIS Rule 53: dbo_CRSE Subject Code in MT-audit-prod-CRSE</h1>
-            <p class="rule-header__sub">Every <code>_030</code> value in <code>dbo_CRSE</code> must exist as <code>IALSUBJ</code> in <code>MT-audit-prod-CRSE</code>. PASS when found; FAIL when missing.</p>
+            <h1 class="rule-header__title">HEMIS RULE 53: dbo_CRSE Subject Code in MT-audit-prod-CRSE</h1>
+            <p class="rule-header__sub">
+                Rule 53 checks that every distinct subject code in <code>dbo_CRSE</code>
+                exists as a matching code in <code>MT-audit-prod-CRSE</code>.
+            </p>
         </div>
-        <div class="rule-header__badge" id="statusBadge" style="display:none"></div>
+        <div class="rule-header__badge" id="r53StatusBadge" style="display:none"></div>
     </div>
 
     @if (!isResultsOnlyRole)
     {
         <div class="accordion-stack">
             <div class="accordion-item">
-                <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
-                    <span class="acc-icon">DB</span><span>Database Connection</span><span class="acc-chevron">v</span>
+                <button class="accordion-toggle" type="button" onclick="toggleAccordion('r53-conn')">
+                    <span class="acc-icon">DB</span><span>Engagement Dataset</span><span class="acc-chevron">v</span>
                 </button>
-                <div class="accordion-body" id="body-connection">
-                    <div class="form-grid">
-                        <div class="field-group"><label for="server">Server Name</label><input id="server" type="text" placeholder="e.g. MYSERVER\INSTANCE" /></div>
-                        <div class="field-group">
-                            <label for="driver">Driver</label>
-                            <select id="driver">
-                                <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                                <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                                <option value="SQL Server">SQL Server</option>
-                            </select>
-                        </div>
-                        <div class="field-group"><label for="database">Database</label><select id="database"></select></div>
-                    </div>
-                    <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                        <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
-                    </div>
-                    <div id="connectionOutput" class="status-output"></div>
-                </div>
-            </div>
-
-            <div class="accordion-item">
-                <button class="accordion-toggle" type="button" onclick="toggleAccordion('config')">
-                    <span class="acc-icon">CF</span><span>Rule Configuration</span><span class="acc-chevron">v</span>
-                </button>
-                <div class="accordion-body" id="body-config" style="display:none">
-                    <div class="info-box info-box--red">
-                        <strong>Rule 53 Logic:</strong><br />
-                        Select all <code>_030</code> values from <strong>dbo_CRSE</strong> and check if each exists as <code>IALSUBJ</code> in <strong>MT-audit-prod-CRSE</strong>.<br />
-                        Mapped column: <code>_030 &lt;&gt; IALSUBJ</code>
-                    </div>
-                    <div class="form-grid">
-                        <div class="field-group"><label for="valpacTable">Source Table <small>(dbo_CRSE)</small></label><select id="valpacTable" onchange="loadCols('valpac', this.value)"></select></div>
-                        <div class="field-group"><label for="prodTable">Target Table <small>(MT-audit-prod-CRSE)</small></label><select id="prodTable" onchange="loadCols('prod', this.value)"></select></div>
-                    </div>
-                    <div class="form-grid" style="margin-top:12px">
-                        <div class="field-group"><label>Source Subject Column <small>(_030)</small></label><select id="valpacSubjCol"><option value="_030">_030</option></select></div>
-                        <div class="field-group"><label>Target Subject Column <small>(IALSUBJ)</small></label><select id="prodSubjCol"><option value="IALSUBJ">IALSUBJ</option></select></div>
+                <div class="accordion-body" id="body-r53-conn">
+                    <div class="alert alert--info" id="r53DatasetStatusAlert">
+                        Select an engagement above to load its uploaded tables.
                     </div>
                     <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
-                        <button type="button" class="btn btn-secondary" onclick="autoDetectColumns()">Auto-Detect Columns</button>
+                        <a class="btn btn-secondary" id="r53DatasetsLink" href="#">Manage Datasets</a>
+                        <button type="button" class="btn btn-primary" onclick="r53LoadTables()">Refresh Tables</button>
                     </div>
-                    <div class="alert alert--info" style="margin-top:16px">
-                        <strong>Control 1:</strong> All <code>[_030]</code> values in <code>dbo_CRSE</code> must exist as <code>[IALSUBJ]</code> in <code>MT-audit-prod-CRSE</code>.<br />
-                        Use Auto-Detect after connecting to populate column dropdowns.
-                    </div>
-                    <div id="configOutput" class="status-output"></div>
+                    <div id="r53ConnOut" class="status-output"></div>
                 </div>
             </div>
 
             <div class="accordion-item">
-                <button class="accordion-toggle" type="button" onclick="toggleAccordion('downloads')">
-                    <span class="acc-icon">DL</span><span>Export Options</span><span class="acc-chevron">v</span>
+                <button class="accordion-toggle" type="button" onclick="toggleAccordion('r53-cfg')">
+                    <span class="acc-icon">CF</span><span>Table &amp; Column Configuration</span><span class="acc-chevron">v</span>
                 </button>
-                <div class="accordion-body" id="body-downloads" style="display:none">
-                    <div class="checkbox-row">
-                        <label class="checkbox-label"><input type="checkbox" id="chkExcel" checked /> Excel</label>
-                        <label class="checkbox-label"><input type="checkbox" id="chkCsv" checked /> CSV</label>
-                        <label class="checkbox-label"><input type="checkbox" id="chkSql" checked /> SQL</label>
+                <div class="accordion-body" id="body-r53-cfg" style="display:none">
+                    <div class="info-box info-box--red" style="margin-bottom:14px">
+                        <strong>Rule 53 Logic:</strong><br />
+                        Select all distinct subject codes from <code>dbo_CRSE</code>.<br />
+                        Each code must exist as a matching code in <code>MT-audit-prod-CRSE</code>.<br />
+                        PASS when a match is found; FAIL when no match is found. All columns and tables are configurable.
                     </div>
+
+                    <h4 style="margin:0 0 10px;font-size:.9rem;color:#555">dbo_CRSE Table</h4>
+                    <div class="col-mapping-grid" style="margin-bottom:16px">
+                        <div class="field-group">
+                            <label for="r53ValpacTable">dbo_CRSE Table</label>
+                            <select id="r53ValpacTable" onchange="r53LoadCols('valpac',this.value)"></select>
+                        </div>
+                        <div class="field-group">
+                            <label for="r53ValpacSubjCol">Subject Code Column <small>(_030)</small></label>
+                            <select id="r53ValpacSubjCol"></select>
+                        </div>
+                    </div>
+
+                    <h4 style="margin:0 0 10px;font-size:.9rem;color:#555">MT-audit-prod-CRSE Table</h4>
+                    <div class="col-mapping-grid" style="margin-bottom:16px">
+                        <div class="field-group">
+                            <label for="r53ProdTable">MT-audit-prod-CRSE Table</label>
+                            <select id="r53ProdTable" onchange="r53LoadCols('prod',this.value)"></select>
+                        </div>
+                        <div class="field-group">
+                            <label for="r53ProdSubjCol">Subject Code Column <small>(IALSUBJ)</small></label>
+                            <select id="r53ProdSubjCol"></select>
+                        </div>
+                    </div>
+
+                    <div class="action-bar" style="justify-content:flex-start;margin:4px 0">
+                        <button type="button" class="btn btn-info" onclick="r53Verify()">Verify Tables</button>
+                    </div>
+                    <div id="r53CfgOut" class="status-output"></div>
                 </div>
             </div>
         </div>
@@ -134,531 +123,720 @@
         <div class="workspace-signoff-card__header">
             <div>
                 <div class="workspace-signoff-card__title">Saved Workspace</div>
-                <div class="workspace-signoff-card__subtitle">The latest Rule 53 connection, results, and signoffs reload automatically for this engagement.</div>
+                <div class="workspace-signoff-card__subtitle">The last saved Rule 53 configuration, results, and signoffs reload here automatically.</div>
             </div>
-            <div id="workspaceRunState" class="badge badge--neutral badge--sm">No saved run loaded</div>
+            <div id="r53RunState" class="badge badge--neutral badge--sm">No saved run loaded</div>
         </div>
         <div id="workspaceInfo" class="alert alert--info">Select an engagement to load the saved Rule 53 workspace.</div>
         <div class="workspace-signoff-grid">
-            <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Current Run</div><div id="workspaceRunLabel">No saved run yet</div></div>
-            <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Status</div><div id="workspaceStatusLabel">-</div></div>
-            <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Last Edited</div><div id="workspaceEditedLabel">-</div></div>
-            <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Your Role</div><div id="workspaceRoleLabel">@(string.IsNullOrWhiteSpace(currentSystemRole) ? "-" : currentSystemRole)</div></div>
-            <div class="field-group" style="grid-column:1 / -1"><label for="workspaceSignoffComment">Signoff Comment</label><textarea id="workspaceSignoffComment" rows="3" placeholder="Add review or completion notes"></textarea></div>
+            <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Current Run</div><div id="r53RunLabel">No saved run yet</div></div>
+            <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Status</div><div id="r53StatusLabel">-</div></div>
+            <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Last Edited</div><div id="r53EditedLabel">-</div></div>
+            <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Your Role</div><div id="r53RoleLabel">@(string.IsNullOrWhiteSpace(currentSystemRole) ? "-" : currentSystemRole)</div></div>
+            <div class="field-group" style="grid-column:1/-1">
+                <label for="r53SignoffComment">Signoff Comment</label>
+                <textarea id="r53SignoffComment" rows="2" placeholder="Add the final review note confirming this validation is complete."></textarea>
+            </div>
         </div>
         <div class="workspace-signoff-actions">
             @if (!isResultsOnlyRole)
             {
-                <button type="button" class="btn btn-secondary" id="beginEditBtn">Begin Edit</button>
-                <button type="button" class="btn btn-success" id="saveWorkspaceBtn">Save Workspace</button>
+                <button class="btn btn-success" id="r53SaveBtn" onclick="r53SaveWorkspace()">Save Workspace</button>
             }
-            <button type="button" class="btn btn-primary" id="signoffBtn">Save Signoff</button>
-            <button type="button" class="btn btn-warning" id="removeSignoffBtn">Remove Signoff</button>
+            <button class="btn btn-primary" id="r53SignoffBtn" onclick="r53SignOff()">Sign Off</button>
+            <button class="btn btn-warning" id="r53RemoveSignoffBtn" onclick="r53RemoveSignoff()" style="display:none">Remove Signoff</button>
         </div>
     </div>
 
-    @if (!isResultsOnlyRole)
-    {
-        <div class="action-bar">
-            <button type="button" class="btn btn-info" id="verifyBtn">Verify Tables</button>
-            <button type="button" class="btn btn-success" id="runBtn">Run Rule 53</button>
-            <button type="button" class="btn btn-primary" id="sqlBtn">Generate SQL</button>
-            <button type="button" class="btn btn-warning" id="downloadAllBtn" disabled>Download All</button>
-        </div>
-    }
+    <div class="action-bar">
+        @if (!isResultsOnlyRole)
+        {
+            <button class="btn btn-success" onclick="r53Run()">&#9654; Run Rule 53</button>
+            <button class="btn btn-primary" onclick="r53GenSql()">Generate SQL</button>
+        }
+        <button class="btn btn-success" id="r53DlExcelBtn" onclick="r53DlExcel()" disabled>Download Excel</button>
+        <button class="btn btn-warning" id="r53DlCsvBtn" onclick="r53DlCsv()" disabled>Download CSV</button>
+        <button class="btn btn-secondary" id="r53DlSqlBtn" onclick="r53DlSql()" disabled>Download SQL</button>
+    </div>
 
     <div class="results-panel">
         <div class="results-tabs">
-            <button class="tab-btn active" type="button" data-tab="analysis">Analysis</button>
-            <button class="tab-btn" type="button" data-tab="results">Results</button>
-            <button class="tab-btn" type="button" data-tab="sql">SQL</button>
-            <button class="tab-btn" type="button" data-tab="downloads">Downloads</button>
+            <button class="tab-btn active" type="button" data-tab="r53-analysis" onclick="r53Tab('r53-analysis')">Analysis</button>
+            <button class="tab-btn" type="button" data-tab="r53-results" onclick="r53Tab('r53-results')">Results</button>
+            <button class="tab-btn" type="button" data-tab="r53-sql" onclick="r53Tab('r53-sql')">SQL Code</button>
         </div>
-        <div class="tab-pane active" data-tab-panel="analysis" id="analysisPane"></div>
-        <div class="tab-pane" data-tab-panel="results" id="resultsPane"></div>
-        <div class="tab-pane" data-tab-panel="sql"><textarea id="sqlText" rows="18" readonly></textarea></div>
-        <div class="tab-pane" data-tab-panel="downloads">
-            <div class="alert alert--info" style="margin-bottom:16px">Excel and CSV export the full result set with PASS/FAIL per row. SQL shows the single-column join query.</div>
-            <div class="action-bar" style="justify-content:flex-start;margin:0">
-                <button type="button" class="btn btn-info" id="downloadExcelBtn">Excel</button>
-                <button type="button" class="btn btn-info" id="downloadCsvBtn">CSV</button>
-                <button type="button" class="btn btn-secondary" id="downloadSqlBtn">SQL</button>
+        <div class="tab-pane active" data-tab-panel="r53-analysis">
+            <div id="r53AnalysisPane"><div class="empty-state"><p>Run Rule 53 to see results here.</p></div></div>
+        </div>
+        <div class="tab-pane" data-tab-panel="r53-results">
+            <div class="results-filter-bar" style="padding:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <label style="font-size:.85rem">Filter:</label>
+                <button class="btn btn-sm btn-secondary r53-filter-btn active" data-filter="ALL" onclick="r53SetFilter(this)">All</button>
+                <button class="btn btn-sm btn-secondary r53-filter-btn" data-filter="PASS" onclick="r53SetFilter(this)">PASS only</button>
+                <button class="btn btn-sm btn-secondary r53-filter-btn" data-filter="FAIL" onclick="r53SetFilter(this)">FAIL only</button>
             </div>
+            <div id="r53ResultsPane"><div class="empty-state"><p>Run validation first.</p></div></div>
+        </div>
+        <div class="tab-pane" data-tab-panel="r53-sql">
+            <textarea id="r53SqlText" rows="22" readonly style="width:100%;font-family:monospace;font-size:12px"></textarea>
         </div>
     </div>
 
-    <div id="spinner" class="spinner-overlay" style="display:none">
-        <div class="spinner-box"><div class="spinner-ring"></div><p id="spinnerMsg">Processing...</p></div>
+    <div id="r53Spinner" class="spinner-overlay" style="display:none">
+        <div class="spinner-box"><div class="spinner-ring"></div><p id="r53SpinMsg">Processing...</p></div>
     </div>
 </div>
 
-<form id="antiForgeryForm" method="post" style="display:none">@Html.AntiForgeryToken()</form>
+<form id="r53AntiForgery" method="post" style="display:none">@Html.AntiForgeryToken()</form>
 
 <script>
-window.toggleAccordion = function (section) {
-    const body = document.getElementById(`body-${section}`);
+window.toggleAccordion = window.toggleAccordion || function(section) {
+    var body = document.getElementById('body-' + section);
     if (body) body.style.display = body.style.display === 'none' ? '' : 'none';
 };
 
-(() => {
-    const apiBase = '/Rule53';
-    const currentSystemRole = '@currentSystemRole';
-    const isResultsOnlyRole = @(isResultsOnlyRole.ToString().ToLowerInvariant());
-    const token = document.querySelector('#antiForgeryForm input[name="__RequestVerificationToken"]')?.value || '';
+window.r53Tab = function(tab) {
+    document.querySelectorAll('#app .results-panel .tab-btn').forEach(function(btn) {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+    document.querySelectorAll('#app .results-panel .tab-pane').forEach(function(panel) {
+        panel.classList.toggle('active', panel.dataset.tabPanel === tab);
+    });
+    if (tab === 'r53-results') renderRule53Results();
+};
 
-    const state = {
+(function() {
+    var API = '/Rule53';
+    var ROLE = '@currentSystemRole';
+    var IS_RESULTS_ONLY = @(isResultsOnlyRole.ToString().ToLowerInvariant());
+    var TOKEN = (document.querySelector('#r53AntiForgery input[name="__RequestVerificationToken"]') || {}).value || '';
+
+    var st = {
         clientId: @(selectedClientId > 0 ? selectedClientId : 0),
-        currentRunId: null, summary: null, sql: '',
-        resultsVisible: false, hasPendingValidation: false,
-        currentUserEngagementRole: '', currentUserHasSignedOff: false,
-        isWorkspaceSaved: false, hasDataAnalystSignoff: false,
-        currentStatus: '', resultFilter: 'ALL'
+        runId: null,
+        summary: null,
+        isWorkspaceSaved: false,
+        currentUserHasSignedOff: false,
+        resultsVisible: false,
+        currentUserEngagementRole: '',
+        filterResult: 'ALL'
     };
 
-    const els = {
-        clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'), driver: document.getElementById('driver'), database: document.getElementById('database'),
-        valpacTable: document.getElementById('valpacTable'), prodTable: document.getElementById('prodTable'),
-        valpacSubjCol: document.getElementById('valpacSubjCol'), prodSubjCol: document.getElementById('prodSubjCol'),
-        connectionOutput: document.getElementById('connectionOutput'), configOutput: document.getElementById('configOutput'),
-        analysisPane: document.getElementById('analysisPane'), resultsPane: document.getElementById('resultsPane'),
-        sqlText: document.getElementById('sqlText'), downloadAllBtn: document.getElementById('downloadAllBtn'),
-        workspaceInfo: document.getElementById('workspaceInfo'), workspaceRunState: document.getElementById('workspaceRunState'),
-        workspaceRunLabel: document.getElementById('workspaceRunLabel'), workspaceStatusLabel: document.getElementById('workspaceStatusLabel'),
-        workspaceEditedLabel: document.getElementById('workspaceEditedLabel'), workspaceRoleLabel: document.getElementById('workspaceRoleLabel'),
-        workspaceSignoffComment: document.getElementById('workspaceSignoffComment'),
-        beginEditBtn: document.getElementById('beginEditBtn'), saveWorkspaceBtn: document.getElementById('saveWorkspaceBtn'),
-        signoffBtn: document.getElementById('signoffBtn'), removeSignoffBtn: document.getElementById('removeSignoffBtn'),
-        statusBadge: document.getElementById('statusBadge')
-    };
-
-    const tabButtons = Array.from(document.querySelectorAll('.tab-btn'));
-    tabButtons.forEach(btn => btn.addEventListener('click', () => setActiveTab(btn.dataset.tab)));
-
-    function showSpinner(msg) { document.getElementById('spinnerMsg').textContent = msg || 'Processing...'; document.getElementById('spinner').style.display = 'flex'; }
-    function hideSpinner() { document.getElementById('spinner').style.display = 'none'; }
-    function escapeHtml(v) { return String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'); }
-    function formatNumber(v) { return Number(v || 0).toLocaleString(); }
-    function normalizeRole(v) { return String(v || '').replace(/[^a-z0-9]+/gi,'').toLowerCase(); }
-    function setAlert(target, type, message) { if (target) target.innerHTML = `<div class="alert alert--${type}">${message}</div>`; }
-    function setWorkspaceState(message, type) { els.workspaceInfo.className = `alert alert--${type}`; els.workspaceInfo.textContent = message || ''; }
-    function setStatusBadge(text, type) {
-        if (!text) { els.statusBadge.style.display='none'; return; }
-        els.statusBadge.style.display='inline-block';
-        els.statusBadge.className=`rule-header__badge ${type==='fail'?'badge--fail':'badge--pass'}`;
-        els.statusBadge.textContent=text;
-    }
-    function setActiveTab(tab) {
-        tabButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
-        document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.toggle('active', pane.dataset.tabPanel === tab));
-        if (tab === 'results') setTimeout(() => renderResults(true), 0);
-    }
-    function getActiveTab() { return document.querySelector('.tab-btn.active')?.dataset.tab || 'analysis'; }
-
-    async function postJson(url, data) {
-        return await window.fetchJsonWithProgress(url, { method:'POST', headers:{'Content-Type':'application/json','RequestVerificationToken':token}, body:JSON.stringify(data) });
-    }
-    async function downloadBlob(url, payload, defaultName) {
-        await window.downloadFileWithProgress({ url, method:'POST', headers:{'Content-Type':'application/json','RequestVerificationToken':token}, body:JSON.stringify(payload), defaultFileName:defaultName, label:'Downloading' });
+    function g(id) { return document.getElementById(id); }
+    function gv(id) { var el = g(id); return el ? el.value : ''; }
+    function show(id, visible) { var el = g(id); if (el) el.style.display = visible ? '' : 'none'; }
+    function fmt(n) { return Number(n || 0).toLocaleString(); }
+    function esc(v) {
+        return String(v == null ? '' : v)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
     }
 
-    function populateSelect(sel, values, selected) {
-        if (!sel) return;
-        sel.innerHTML = '<option value="">Select table</option>';
-        values.forEach(v => { const o = document.createElement('option'); o.value = o.textContent = v; sel.appendChild(o); });
-        if (selected) { if (![...sel.options].some(o => o.value === selected)) { const o = document.createElement('option'); o.value = o.textContent = selected; sel.appendChild(o); } sel.value = selected; }
-    }
-    function fillColSel(selEl, cols, preferred) {
-        if (!selEl) return;
-        const cur = selEl.value; selEl.innerHTML = '';
-        (cols || []).forEach(c => { const o = document.createElement('option'); o.value = o.textContent = c; if (c === (preferred || cur)) o.selected = true; selEl.appendChild(o); });
-        if (!selEl.value && cols.length) selEl.value = cols[0];
-    }
-    function setColSel(selEl, value) {
-        if (!selEl || !value) return;
-        if (![...selEl.options].some(o => o.value === value)) { const o = document.createElement('option'); o.value = o.textContent = value; selEl.appendChild(o); }
-        selEl.value = value;
+    function setWorkspaceMessage(message, type) {
+        var el = g('workspaceInfo');
+        if (!el) return;
+        el.className = 'alert alert--' + (type || 'info');
+        el.textContent = message;
     }
 
-    function getRequest() {
+    function setStatusOutput(id, message, type) {
+        var el = g(id);
+        if (!el) return;
+        el.className = 'alert alert--' + (type || 'info');
+        el.textContent = message;
+    }
+
+    function spin(message) {
+        var label = g('r53SpinMsg');
+        if (label) label.textContent = message || 'Processing...';
+        show('r53Spinner', true);
+    }
+
+    function unspin() {
+        show('r53Spinner', false);
+    }
+
+    function fillSelect(idOrElement, items, selected) {
+        var select = typeof idOrElement === 'string' ? g(idOrElement) : idOrElement;
+        if (!select) return;
+        select.innerHTML = '';
+        (items || []).forEach(function(item) {
+            var option = document.createElement('option');
+            option.value = item;
+            option.textContent = item;
+            if (selected && selected === item) option.selected = true;
+            select.appendChild(option);
+        });
+    }
+
+    // Only ever selects a column that actually exists in the uploaded table. Never fabricates
+    // an option for a hardcoded default that isn't really there.
+    function fillColumnSelect(id, columns, preferred, autoSelected) {
+        var select = g(id);
+        if (!select) return;
+        var cols = columns || [];
+        var val = (preferred && cols.includes(preferred)) ? preferred
+                : (autoSelected && cols.includes(autoSelected)) ? autoSelected
+                : '';
+        select.innerHTML = '<option value="">Select column</option>';
+        cols.forEach(function(c) {
+            var o = document.createElement('option');
+            o.value = c; o.textContent = c;
+            if (c === val) o.selected = true;
+            select.appendChild(o);
+        });
+    }
+
+    async function post(url, body) {
+        return await window.fetchJsonWithProgress(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'RequestVerificationToken': TOKEN
+            },
+            body: JSON.stringify(body)
+        });
+    }
+
+    function setStatusBadge(status) {
+        var badge = g('r53StatusBadge');
+        if (!badge) return;
+        if (!status) {
+            badge.style.display = 'none';
+            return;
+        }
+        badge.style.display = '';
+        badge.textContent = status;
+        badge.className = 'rule-header__badge ' + (String(status).toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail');
+    }
+
+    function buildReq() {
         return {
-            clientId: parseInt(els.clientId.value||'0',10)||0,
-            runId: state.currentRunId,
-            server: els.server?.value.trim()||'',
-            database: els.database?.value||'',
-            driver: els.driver?.value||'ODBC Driver 17 for SQL Server',
-            valpacTable:   els.valpacTable?.value||'dbo_CRSE',
-            prodTable:     els.prodTable?.value||'MT-audit-prod-CRSE',
-            valpacSubjCol: els.valpacSubjCol?.value||'_030',
-            prodSubjCol:   els.prodSubjCol?.value||'IALSUBJ'
+            clientId: st.clientId,
+            runId: st.runId,
+            valpacTable: gv('r53ValpacTable') || 'dbo_CRSE',
+            valpacSubjCol: gv('r53ValpacSubjCol') || '_030',
+            prodTable: gv('r53ProdTable') || 'MT-audit-prod-CRSE',
+            prodSubjCol: gv('r53ProdSubjCol') || 'IALSUBJ'
         };
     }
 
-    async function loadCols(role, tableName) {
-        const server = els.server?.value?.trim(); const db = els.database?.value;
-        if (!server || !db || !tableName) return;
-        try {
-            const data = await postJson(`${apiBase}/GetColumns`, { server, database: db, driver: els.driver?.value||'ODBC Driver 17 for SQL Server', valpacTable: tableName });
-            if (!data.success || !data.columns) return;
-            const cols = data.columns || [];
-            if (role === 'valpac') fillColSel(els.valpacSubjCol, cols, '_030');
-            else fillColSel(els.prodSubjCol, cols, 'IALSUBJ');
-            setAlert(els.configOutput, 'success', `Columns loaded for ${tableName}.`);
-        } catch (e) { /* silently ignore */ }
-    }
+    function updateButtons() {
+        var engRole = (st.currentUserEngagementRole || ROLE || '').toLowerCase();
+        var systemRole = (ROLE || '').toLowerCase();
+        var canEdit = !IS_RESULTS_ONLY && (systemRole === 'dataanalyst' || engRole === 'dataanalyst');
+        var canSign = !!st.runId && !!st.isWorkspaceSaved &&
+            (engRole === 'dataanalyst' || (st.resultsVisible && (engRole === 'manager' || engRole === 'director')));
+        var signed = !!st.currentUserHasSignedOff;
 
-    window.autoDetectColumns = async function() {
-        await Promise.all([loadCols('valpac', els.valpacTable?.value), loadCols('prod', els.prodTable?.value)]);
-    };
+        var saveBtn = g('r53SaveBtn');
+        if (saveBtn) saveBtn.disabled = signed || !canEdit || !st.runId;
 
-    function updateWorkspaceButtons() {
-        const role = state.currentUserEngagementRole || currentSystemRole || '';
-        const normalizedRole = normalizeRole(role); const normalizedSystemRole = normalizeRole(currentSystemRole);
-        const hasUnsaved = !!state.summary && (!!state.hasPendingValidation || (!state.currentRunId && !state.isWorkspaceSaved));
-        const canEdit = !isResultsOnlyRole && (normalizedSystemRole==='dataanalyst'||normalizedRole==='dataanalyst'||hasUnsaved);
-        const canSign = !state.hasPendingValidation && !!state.currentRunId && !!state.isWorkspaceSaved &&
-            (normalizedRole==='dataanalyst' || (state.resultsVisible && (normalizedRole==='manager'||normalizedRole==='director')));
-        const signoffLocked = !!state.currentUserHasSignedOff;
-        window.ruleWorkspaceUi.setReadonlyShell('app', !canEdit||signoffLocked);
-        window.ruleWorkspaceUi.setFormSectionReadonly('.accordion-stack', !canEdit||signoffLocked);
-        window.ruleWorkspaceUi.applyStates([
-            {target:'connectBtn',disabled:!canEdit||signoffLocked},{target:'verifyBtn',disabled:!canEdit||signoffLocked},
-            {target:'runBtn',disabled:!canEdit||signoffLocked},{target:'sqlBtn',disabled:!canEdit||signoffLocked},
-            {target:els.beginEditBtn,disabled:signoffLocked||!canEdit||!state.currentRunId||state.hasPendingValidation},
-            {target:els.saveWorkspaceBtn,disabled:signoffLocked||!canEdit||!hasUnsaved},
-            {target:els.signoffBtn,disabled:signoffLocked||!canSign,text:state.currentUserHasSignedOff?`Signed Off as ${role||currentSystemRole}`:'Save Signoff'},
-            {target:els.removeSignoffBtn,show:state.currentUserHasSignedOff,display:'',disabled:!state.currentUserHasSignedOff},
-            {target:els.workspaceSignoffComment,disabled:signoffLocked||!canSign},
-            {target:els.downloadAllBtn,disabled:!state.summary}
-        ]);
-        window.ruleWorkspaceUi.setButtonGroupReadonly(['.workspace-signoff-actions','.action-bar'],signoffLocked,{allow:['#downloadAllBtn','#downloadExcelBtn','#downloadCsvBtn','#downloadSqlBtn','#removeSignoffBtn']});
-        applyWorkspaceAccessMode(canEdit);
-    }
+        var signBtn = g('r53SignoffBtn');
+        if (signBtn) {
+            signBtn.disabled = signed || !canSign;
+            signBtn.textContent = signed ? 'Signed Off' : 'Sign Off';
+        }
 
-    function applyWorkspaceAccessMode(canEditWorkspace) {
-        ['body-connection', 'body-config'].forEach(function(id) {
-            var body = document.getElementById(id);
-            if (!body) return;
-            body.style.opacity = canEditWorkspace ? '' : '0.45';
-            body.style.filter = canEditWorkspace ? '' : 'grayscale(0.15)';
-            body.querySelectorAll('input, select, textarea, button').forEach(function(el) {
-                el.disabled = !canEditWorkspace;
-            });
+        show('r53RemoveSignoffBtn', signed);
+
+        var excelBtn = g('r53DlExcelBtn');
+        if (excelBtn) excelBtn.disabled = !st.runId;
+
+        var csvBtn = g('r53DlCsvBtn');
+        if (csvBtn) csvBtn.disabled = !st.runId;
+
+        var sqlBtn = g('r53DlSqlBtn');
+        if (sqlBtn) sqlBtn.disabled = !st.runId;
+        window.ruleWorkspaceUi?.setReadonlyShell('app', signed);
+        window.ruleWorkspaceUi?.setFormSectionReadonly('.accordion-stack', signed);
+        window.ruleWorkspaceUi?.setButtonGroupReadonly(['.workspace-signoff-actions', '.action-bar'], signed, {
+            allow: ['#r53RemoveSignoffBtn', '#r53DlExcelBtn', '#r53DlCsvBtn', '#r53DlSqlBtn']
         });
     }
 
-    function applySummary(summary, options = {}) {
-        state.summary = summary;
-        if (!options.fromWorkspace) state.currentRunId = summary?.savedRunId||state.currentRunId;
-        state.currentStatus = summary?.status||state.currentStatus;
-        state.resultsVisible = !!summary||state.resultsVisible;
-        if (!summary) { els.analysisPane.innerHTML='<div class="empty-card"><p>No Rule 53 results loaded.</p></div>'; els.resultsPane.innerHTML='<div class="empty-card"><p>No Rule 53 results loaded.</p></div>'; setStatusBadge('','pass'); updateWorkspaceButtons(); return; }
-        if (state.hasPendingValidation) { els.workspaceRunState.textContent=`Pending save | ${summary.status||'Completed'}`; els.workspaceRunLabel.textContent='Unsaved Rule 53 validation'; els.workspaceStatusLabel.textContent='Pending Save'; }
-        else { els.workspaceRunState.textContent=state.currentRunId?`Run #${state.currentRunId} | ${state.currentStatus||'Completed'}`:'No saved run loaded'; els.workspaceRunLabel.textContent=state.currentRunId?`Run #${state.currentRunId}`:'No saved run yet'; els.workspaceStatusLabel.textContent=state.currentStatus||'-'; }
-        setStatusBadge(summary.status, summary.failCount>0?'fail':'pass');
-        renderAnalysis(summary); renderResults(); updateWorkspaceButtons();
+    function applyWsMeta(ws) {
+        st.isWorkspaceSaved = !!ws.isWorkspaceSaved;
+        st.currentUserHasSignedOff = !!ws.currentUserHasSignedOff;
+        st.currentUserEngagementRole = ws.currentUserEngagementRole || st.currentUserEngagementRole;
+
+        var runState = g('r53RunState');
+        if (runState) runState.textContent = ws.runId ? 'Run #' + ws.runId : 'No saved run loaded';
+
+        var runLabel = g('r53RunLabel');
+        if (runLabel) runLabel.textContent = ws.runId ? 'Rule 53 Run #' + ws.runId : 'No saved run yet';
+
+        var statusLabel = g('r53StatusLabel');
+        if (statusLabel) statusLabel.textContent = ws.currentStatus || '-';
+
+        var editedLabel = g('r53EditedLabel');
+        if (editedLabel) editedLabel.textContent = ws.lastEditedAt ? new Date(ws.lastEditedAt).toLocaleString() : '-';
+
+        var roleLabel = g('r53RoleLabel');
+        if (roleLabel) roleLabel.textContent = ws.currentUserEngagementRole || ROLE || '-';
+
+        var comment = g('r53SignoffComment');
+        if (comment) comment.value = ws.currentUserSignoffComment || '';
+
+        updateButtons();
     }
 
-    function applyWorkspace(workspace, resultsVisible, preserveExistingSummary = false) {
-        if (!workspace) {
-            state.currentRunId=null;state.currentStatus='';state.currentUserEngagementRole='';state.currentUserHasSignedOff=false;state.isWorkspaceSaved=false;state.hasDataAnalystSignoff=false;state.resultsVisible=false;state.hasPendingValidation=false;
-            els.workspaceRunState.textContent='No saved run loaded';els.workspaceRunLabel.textContent='No saved run yet';els.workspaceStatusLabel.textContent='-';els.workspaceEditedLabel.textContent='-';
-            setWorkspaceState('No saved Rule 53 workspace exists for this engagement yet.','info');
-            if (!preserveExistingSummary) applySummary(null); else updateWorkspaceButtons();
+    function renderRule53Analysis(summary) {
+        var pane = g('r53AnalysisPane');
+        if (!pane) return;
+        if (!summary) {
+            pane.innerHTML = '<div class="empty-state"><p>Run Rule 53 to see results here.</p></div>';
             return;
         }
-        state.clientId=workspace.clientId||state.clientId;state.currentRunId=workspace.runId||null;state.currentStatus=workspace.currentStatus||'';
-        state.currentUserEngagementRole=workspace.currentUserEngagementRole||currentSystemRole||'';state.currentUserHasSignedOff=!!workspace.currentUserHasSignedOff;
-        state.isWorkspaceSaved=!!workspace.isWorkspaceSaved;state.hasDataAnalystSignoff=!!workspace.hasDataAnalystSignoff;state.resultsVisible=!!resultsVisible;state.hasPendingValidation=false;
-        if (els.server) els.server.value=workspace.server||'';
-        if (els.driver) els.driver.value=workspace.driver||'ODBC Driver 17 for SQL Server';
-        populateSelect(els.database, workspace.database?[workspace.database]:[], workspace.database);
-        populateSelect(els.valpacTable, workspace.valpacTable?[workspace.valpacTable]:[], workspace.valpacTable||'dbo_CRSE');
-        populateSelect(els.prodTable, [workspace.prodTable||'MT-audit-prod-CRSE'], workspace.prodTable||'MT-audit-prod-CRSE');
-        if (workspace.valpacSubjCol) setColSel(els.valpacSubjCol, workspace.valpacSubjCol);
-        if (workspace.prodSubjCol)   setColSel(els.prodSubjCol,   workspace.prodSubjCol);
-        els.workspaceRunState.textContent=workspace.runId?`Run #${workspace.runId}`:'No saved run loaded';
-        els.workspaceRunLabel.textContent=workspace.runId?`Rule 53 Run #${workspace.runId}`:'No saved run yet';
-        els.workspaceStatusLabel.textContent=workspace.currentStatus||'-';
-        els.workspaceEditedLabel.textContent=workspace.lastEditedAt?new Date(workspace.lastEditedAt).toLocaleString():'-';
-        els.workspaceRoleLabel.textContent=workspace.currentUserEngagementRole||currentSystemRole||'-';
-        els.workspaceSignoffComment.value=workspace.currentUserSignoffComment||'';
-        if (!resultsVisible) { setWorkspaceState('Saved Rule 53 results are not available for your engagement role.','info'); if (!preserveExistingSummary) applySummary(null); else updateWorkspaceButtons(); return; }
-        setWorkspaceState(workspace.summary?'Saved workspace loaded.':'Rule 53 workspace loaded. Run validation to generate results.','success');
-        if (workspace.summary) applySummary(workspace.summary,{fromWorkspace:true}); else if (!preserveExistingSummary) applySummary(null); else updateWorkspaceButtons();
+
+        var statusClass = String(summary.status || '').toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail';
+        var previewHtml = summary.warning
+            ? '<div class="alert alert--warning" style="margin-bottom:12px">' + esc(summary.warning) + '</div>'
+            : '';
+        var controlSummary = (summary.controlSummaries || [])[0] || null;
+        var controlHtml = controlSummary
+            ? '<div class="card" style="padding:14px;margin-bottom:10px">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+                '<strong style="font-size:.88rem">' + esc(controlSummary.controlLabel) + '</strong>' +
+                '<span class="badge ' + (String(controlSummary.status || '').toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail') + '">' + esc(controlSummary.status) + '</span>' +
+                '</div>' +
+                '<div style="font-size:.8rem;color:#666;margin-bottom:4px">' + esc(controlSummary.criteriaText) + '</div>' +
+                '<div style="display:flex;gap:16px;font-size:.82rem;flex-wrap:wrap">' +
+                '<span>Total: <strong>' + fmt(controlSummary.totalCount) + '</strong></span>' +
+                '<span style="color:#1E8449">Pass: <strong>' + fmt(controlSummary.passCount) + '</strong></span>' +
+                '<span style="color:#C0392B">Fail: <strong>' + fmt(controlSummary.failCount) + '</strong></span>' +
+                '<span>Exception Rate: <strong>' + Number(controlSummary.exceptionRate || 0).toFixed(2) + '%</strong></span>' +
+                '</div>' +
+              '</div>'
+            : '';
+
+        pane.innerHTML =
+            previewHtml +
+            '<div class="stats-grid" style="margin-bottom:16px">' +
+                statCard('VALPAC Population', fmt(summary.valpacRecordCount || 0), '') +
+                statCard('PROD Population', fmt(summary.prodRecordCount || 0), '') +
+                statCard('Total Tested', fmt(summary.totalValidated || 0), '') +
+                statCard('Pass', fmt(summary.passCount || 0), 'pass') +
+                statCard('Fail', fmt(summary.failCount || 0), (summary.failCount || 0) > 0 ? 'fail' : '') +
+                statCard('Exception Rate', Number(summary.exceptionRate || 0).toFixed(2) + '%', (summary.exceptionRate || 0) > 0 ? 'fail' : 'pass') +
+                statCard('Overall', '<span class="badge ' + statusClass + '">' + esc(summary.status) + '</span>', '') +
+            '</div>' +
+            '<div class="card" style="padding:12px;margin-bottom:16px">' +
+                '<div class="form-grid">' +
+                    '<div><div class="stat-label">dbo_CRSE Table</div><div>' + esc(summary.valpacTable || '') + '</div></div>' +
+                    '<div><div class="stat-label">Subject Code Column</div><div>' + esc(summary.valpacTable || '') + '.' + esc(summary.valpacSubjCol || '_030') + '</div></div>' +
+                    '<div><div class="stat-label">MT-audit-prod-CRSE Table</div><div>' + esc(summary.prodTable || '') + ' (' + esc(summary.prodSubjCol || 'IALSUBJ') + ')</div></div>' +
+                    '<div><div class="stat-label">Timestamp</div><div>' + esc(summary.timestamp || '') + '</div></div>' +
+                '</div>' +
+            '</div>' +
+            controlHtml;
     }
 
-    async function loadWorkspace() {
-        state.clientId=Number(els.clientId?.value||0);
-        if (!state.clientId) { applyWorkspace(null,false); return; }
-        const data = await window.fetchJsonWithProgress(`${apiBase}/GetWorkspaceState?clientId=${state.clientId}`,{method:'GET'});
-        if (!data.success) throw new Error(data.error||'Failed to load workspace.');
-        applyWorkspace(data.workspace, data.resultsVisible);
-    }
+    function renderRule53Results() {
+        var pane = g('r53ResultsPane');
+        if (!pane) return;
+        if (!st.summary) {
+            pane.innerHTML = '<div class="empty-state"><p>Run validation first.</p></div>';
+            return;
+        }
 
-    async function connect() {
-        const server = els.server?.value?.trim();
-        if (!server) throw new Error('Enter the SQL Server name first.');
-        showSpinner('Loading databases...');
-        try {
-            const data = await postJson(`${apiBase}/GetDatabases`, {server, driver:els.driver.value});
-            if (!data.success) throw new Error(data.error||'Connection failed.');
-            els.database.innerHTML='<option value="">Select database</option>';
-            data.databases.forEach(db => { const o=document.createElement('option');o.value=o.textContent=db;els.database.appendChild(o); });
-            setAlert(els.connectionOutput,'success',`Connected. Found ${data.databases.length} database(s).`);
-            if ((data.databases||[]).length) await loadTables();
-        } finally { hideSpinner(); }
-    }
+        var rows = st.summary.validationRows || [];
+        var filtered = st.filterResult === 'ALL'
+            ? rows
+            : rows.filter(function(row) { return String(row.validationResult || '').toUpperCase() === st.filterResult; });
 
-    async function loadTables() {
-        if (!els.database.value) return;
-        const data = await postJson(`${apiBase}/GetTables`, {server:els.server.value.trim(), database:els.database.value, driver:els.driver.value});
-        if (!data.success) throw new Error(data.error||'Could not load tables.');
-        populateSelect(els.valpacTable, data.tables||[], data.autoValpacTable);
-        populateSelect(els.prodTable, data.tables||[], data.autoProdTable);
-        setAlert(els.configOutput,'success',`Loaded ${data.tables.length} table(s).`);
-    }
+        if (!filtered.length) {
+            pane.innerHTML = '<div class="empty-state"><p>No rows match the selected filter.</p></div>';
+            return;
+        }
 
-    async function verifyTables() {
-        showSpinner('Verifying Rule 53 tables...');
-        try {
-            const data = await postJson(`${apiBase}/VerifyTables`, getRequest());
-            if (!data.success) throw new Error(data.error||'Verification failed.');
-            els.configOutput.innerHTML=`<div class="alert alert--success">dbo_CRSE rows: <strong>${formatNumber(data.valpacRecordCount)}</strong> | MT-audit-prod-CRSE rows: <strong>${formatNumber(data.prodRecordCount)}</strong> | Total tested: <strong>${formatNumber(data.totalTested)}</strong> | Matched: <strong>${formatNumber(data.matchedCount)}</strong> | Missing: <strong>${formatNumber(data.missingCount)}</strong></div>`;
-        } finally { hideSpinner(); }
-    }
-
-    async function runValidation() {
-        const request = getRequest();
-        if (!request.clientId) { setWorkspaceState('Select the approved engagement assigned to you before running this rule.','warning'); return; }
-        try {
-            showSpinner('Running Rule 53: checking _030 values in MT-audit-prod-CRSE...');
-            const data = await postJson(`${apiBase}/RunValidation`, request);
-            if (!data.success) throw new Error(data.error||'Rule 53 failed.');
-            state.hasPendingValidation=true;state.currentRunId=null;state.currentStatus=data.status||'';state.currentUserHasSignedOff=false;state.isWorkspaceSaved=false;state.hasDataAnalystSignoff=false;state.resultsVisible=true;state.currentUserEngagementRole=state.currentUserEngagementRole||currentSystemRole||'DataAnalyst';
-            applySummary(data);
-            setWorkspaceState(`Rule 53 completed. Total tested: ${formatNumber(data.totalValidated)} | Found in PRODUCTION: ${formatNumber(data.passCount)} | Missing: ${formatNumber(data.failCount)}. Click Save Workspace before signoff.`,'success');
-        } finally { hideSpinner(); }
-    }
-
-    async function generateSql() {
-        showSpinner('Generating SQL...');
-        try { const data=await postJson(`${apiBase}/GenerateSql`,getRequest()); if(!data.success) throw new Error(data.error||'SQL generation failed.'); state.sql=data.sql||''; els.sqlText.value=state.sql; setActiveTab('sql'); } finally { hideSpinner(); }
-    }
-
-    async function beginEdit() {
-        showSpinner('Preparing workspace edit...');
-        try { const data=await postJson(`${apiBase}/BeginWorkspaceEdit`,getRequest()); if(!data.success) throw new Error(data.error||'Could not begin editing.'); applyWorkspace(data.workspace,!!data.workspace?.resultsVisible,true); setWorkspaceState(data.message||'Workspace ready for editing.','warning'); } finally { hideSpinner(); }
-    }
-
-    async function saveWorkspace() {
-        showSpinner('Saving workspace...');
-        try { const data=await postJson(`${apiBase}/SaveWorkspace`,getRequest()); if(!data.success) throw new Error(data.error||'Could not save workspace.'); state.hasPendingValidation=false; applyWorkspace(data.workspace,!!data.workspace?.resultsVisible,true); setWorkspaceState(data.message||'Workspace saved.',data.signoffsCleared?'warning':'success'); } finally { hideSpinner(); }
-    }
-
-    async function signoffWorkspace() {
-        showSpinner('Saving signoff...');
-        try { const data=await postJson(`${apiBase}/SignOffWorkspace`,{clientId:state.clientId,runId:state.currentRunId,comment:els.workspaceSignoffComment.value.trim()}); if(!data.success) throw new Error(data.error||'Signoff failed.'); state.currentUserHasSignedOff=true; applyWorkspace(data.workspace,!!data.workspace?.resultsVisible,true); setWorkspaceState(data.message||'Signoff saved.','success'); } finally { hideSpinner(); }
-    }
-
-    async function removeWorkspaceSignoff() {
-        showSpinner('Removing signoff...');
-        try { const prevRunId=state.currentRunId; const data=await postJson(`${apiBase}/RemoveWorkspaceSignoff`,{clientId:state.clientId,runId:state.currentRunId,comment:''}); if(!data.success) throw new Error(data.error||'Could not remove signoff.'); state.currentUserHasSignedOff=false;state.isWorkspaceSaved=false; applyWorkspace(data.workspace,!!data.workspace?.resultsVisible,!!(data.workspace&&prevRunId&&data.workspace.runId===prevRunId)); setWorkspaceState(data.message||'Signoff removed.','warning'); } finally { hideSpinner(); }
-    }
-
-    function renderAnalysis(summary) {
-        if (!summary) { els.analysisPane.innerHTML='<div class="empty-card"><p>No Rule 53 results loaded.</p></div>'; return; }
-        const controlRows = (summary.controlSummaries||[]).map(i=>`<tr><td>${escapeHtml(i.controlLabel)}</td><td>${escapeHtml(i.criteriaText)}</td><td>${i.totalCount.toLocaleString()}</td><td>${i.passCount.toLocaleString()}</td><td>${i.failCount.toLocaleString()}</td><td>${escapeHtml(i.status)}</td></tr>`).join('');
-        const failRows = (summary.reviewRows||[]).filter(r=>String(r.validationResult||'').toUpperCase()==='FAIL');
-        const passRows = (summary.reviewRows||[]).filter(r=>String(r.validationResult||'').toUpperCase()==='PASS');
-        const vSubj = summary.valpacSubjCol||'_030'; const pSubj = summary.prodSubjCol||'IALSUBJ';
-
-        const failRowHtml = failRows.map(row=>{
-            const v=Object.fromEntries(Object.entries(row.displayValues||{}).map(([k,val])=>[k.toUpperCase(),val]));
-            return `<tr style="background:#FFF3F3">
-                <td>${row.validationNumber}</td>
-                <td style="font-weight:700;color:var(--rule15-fail)">${escapeHtml(v.VALPAC_SUBJ||'')}</td>
-                <td style="color:var(--rule15-fail);font-style:italic">Not found in MT-audit-prod-CRSE</td>
-            </tr>`;
+        var body = filtered.map(function(row) {
+            var isPass = String(row.validationResult || '').toUpperCase() === 'PASS';
+            var rowClass = isPass ? 'pass-row' : 'fail-row';
+            var badge = isPass
+                ? '<span class="r53-pass">&#10003; PASS</span>'
+                : '<span class="r53-fail">&#10007; FAIL</span>';
+            return '<tr class="' + rowClass + '">' +
+                '<td>' + esc(row.valpacSubj) + '</td>' +
+                '<td>' + esc(row.prodSubj) + '</td>' +
+                '<td>' + badge + '</td>' +
+                '<td style="font-size:.75rem">' + esc(row.resultDetail) + '</td>' +
+            '</tr>';
         }).join('');
 
-        const passRowHtml = passRows.map(row=>{
-            const v=Object.fromEntries(Object.entries(row.displayValues||{}).map(([k,val])=>[k.toUpperCase(),val]));
-            return `<tr style="background:#F3FFF3">
-                <td>${row.validationNumber}</td>
-                <td style="font-weight:700;color:var(--rule15-pass,#2e7d32)">${escapeHtml(v.VALPAC_SUBJ||'')}</td>
-                <td>${escapeHtml(v.PROD_SUBJ||'')}</td>
-            </tr>`;
-        }).join('');
-
-        els.analysisPane.innerHTML = `
-            ${summary.isPreviewOnly?`<div class="alert alert--warning" style="margin-bottom:16px">Browser shows a preview of ${summary.previewLimit.toLocaleString()} rows (split FAIL/PASS). Download for complete result set.</div>`:''}
-            <div class="R53-summary-grid">
-                <div class="stat-card"><div class="stat-card__label">dbo_CRSE Records</div><div class="stat-card__value">${(summary.valpacRecordCount||0).toLocaleString()}</div></div>
-                <div class="stat-card"><div class="stat-card__label">MT-audit-prod-CRSE Records</div><div class="stat-card__value">${(summary.prodRecordCount||0).toLocaleString()}</div></div>
-                <div class="stat-card"><div class="stat-card__label">Total Tested</div><div class="stat-card__value">${summary.totalValidated.toLocaleString()}</div></div>
-                <div class="stat-card stat-card--pass"><div class="stat-card__label">Found in PRODUCTION (PASS)</div><div class="stat-card__value">${summary.passCount.toLocaleString()}</div></div>
-                <div class="stat-card stat-card--fail"><div class="stat-card__label">Missing from PRODUCTION (FAIL)</div><div class="stat-card__value">${summary.failCount.toLocaleString()}</div></div>
-            </div>
-
-            ${summary.failCount > 0 ? `
-            <div class="card" style="padding:20px;margin-top:20px;border-left:4px solid var(--rule15-fail,#c62828)">
-                <h3 class="section-title" style="margin-top:0;color:var(--rule15-fail,#c62828)">
-                    Missing from MT-audit-prod-CRSE (FAIL) — ${formatNumber(summary.failCount)} value(s) not found
-                    ${summary.isPreviewOnly ? `<small style="font-weight:normal;font-size:13px"> (showing ${failRows.length} in preview)</small>` : ''}
-                </h3>
-                ${failRows.length === 0
-                    ? `<div class="alert alert--info">No FAIL rows in this browser preview. Download for full list of ${formatNumber(summary.failCount)} missing value(s).</div>`
-                    : `<div class="table-wrapper" style="overflow-x:auto">
-                        <table class="data-table" style="min-width:400px;font-size:12px;font-family:Consolas,monospace">
-                            <thead><tr>
-                                <th>#</th>
-                                <th style="background:#c62828;color:#fff">dbo_CRSE [${escapeHtml(vSubj)}]</th>
-                                <th>MT-audit-prod-CRSE [${escapeHtml(pSubj)}]</th>
-                            </tr></thead>
-                            <tbody>${failRowHtml}</tbody>
-                        </table>
-                    </div>`
-                }
-                <div style="margin-top:12px">
-                    <button type="button" class="btn btn-info" onclick="document.querySelector('[data-tab=\\'results\\']')?.click()">View in Results tab &rarr;</button>
-                    <button type="button" class="btn btn-info" id="dlFailBtn" style="margin-left:8px">Download FAIL rows (CSV)</button>
-                </div>
-            </div>` : `
-            <div class="alert alert--success" style="margin-top:16px">
-                All ${formatNumber(summary.totalValidated)} [${escapeHtml(vSubj)}] values from dbo_CRSE were found in MT-audit-prod-CRSE. No missing values.
-            </div>`}
-
-            ${summary.passCount > 0 ? `
-            <div class="card" style="padding:20px;margin-top:20px;border-left:4px solid var(--rule15-pass,#2e7d32)">
-                <h3 class="section-title" style="margin-top:0;color:var(--rule15-pass,#2e7d32)">
-                    Found in MT-audit-prod-CRSE (PASS) — ${formatNumber(summary.passCount)} value(s) matched
-                    ${summary.isPreviewOnly ? `<small style="font-weight:normal;font-size:13px"> (showing ${passRows.length} in preview)</small>` : ''}
-                </h3>
-                ${passRows.length === 0
-                    ? `<div class="alert alert--info">No PASS rows in this browser preview (preview splits FAIL/PASS). Download for all ${formatNumber(summary.passCount)} matched value(s).</div>`
-                    : `<div class="table-wrapper" style="overflow-x:auto">
-                        <table class="data-table" style="min-width:400px;font-size:12px;font-family:Consolas,monospace">
-                            <thead><tr>
-                                <th>#</th>
-                                <th style="background:#2e7d32;color:#fff">dbo_CRSE [${escapeHtml(vSubj)}]</th>
-                                <th>MT-audit-prod-CRSE [${escapeHtml(pSubj)}]</th>
-                            </tr></thead>
-                            <tbody>${passRowHtml}</tbody>
-                        </table>
-                    </div>`
-                }
-            </div>` : ''}
-
-            <div class="card" style="padding:20px;margin-top:20px">
-                <h3 class="section-title" style="margin-top:0">Run Summary</h3>
-                <div class="form-grid">
-                    <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Database</div><div>${escapeHtml(summary.database)}</div></div>
-                    <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Source Table</div><div>${escapeHtml(summary.valpacTable||'')}</div></div>
-                    <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Target Table</div><div>${escapeHtml(summary.prodTable||'')}</div></div>
-                    <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Status</div><div>${escapeHtml(summary.status)}</div></div>
-                </div>
-                <div style="margin-top:18px"><table class="data-table"><thead><tr><th>Control</th><th>Criteria</th><th>Rows Tested</th><th>PASS</th><th>FAIL</th><th>Status</th></tr></thead><tbody>${controlRows}</tbody></table></div>
-            </div>`;
-
-        document.getElementById('dlFailBtn')?.addEventListener('click', () => {
-            if (state.summary) downloadBlob(`${apiBase}/DownloadCsv`, state.summary, 'Rule53_Missing_from_MT-audit-prod-CRSE.csv').catch(err=>setWorkspaceState(err.message,'error'));
-        });
+        pane.innerHTML =
+            '<div style="overflow-x:auto">' +
+                '<table class="r53-tbl">' +
+                    '<thead><tr>' +
+                        '<th>dbo_CRSE Code</th>' +
+                        '<th>MT-audit-prod-CRSE Code</th>' +
+                        '<th>Result</th>' +
+                        '<th>Detail</th>' +
+                    '</tr></thead>' +
+                    '<tbody>' + body + '</tbody>' +
+                '</table>' +
+                '<p style="font-size:.78rem;color:#777;padding:4px 0">Showing ' + fmt(filtered.length) + ' row(s) from ' + fmt(st.summary.totalValidated || rows.length) + ' total validated row(s).</p>' +
+            '</div>';
     }
 
-    function renderResults(force = false) {
-        if (!state.summary) { els.resultsPane.innerHTML='<div class="empty-card"><p>No Rule 53 results loaded.</p></div>'; return; }
-        if (!force && getActiveTab()!=='results') { els.resultsPane.innerHTML='<div class="empty-card"><p>Open the Results tab to load the browser preview.</p></div>'; return; }
-        const summary = state.summary;
-        const rows = (summary.reviewRows||[]).filter(r => state.resultFilter==='ALL'||String(r.validationResult||'').toUpperCase()===state.resultFilter);
-        const valpacTable = summary.valpacTable||'dbo_CRSE';
-        const prodTable   = summary.prodTable||'MT-audit-prod-CRSE';
-        const vSubj = summary.valpacSubjCol||'_030'; const pSubj = summary.prodSubjCol||'IALSUBJ';
-
-        const rowHtml = rows.map(row => {
-            const v=Object.fromEntries(Object.entries(row.displayValues||{}).map(([k,val])=>[k.toUpperCase(),val]));
-            const isFail=String(row.validationResult||'').toUpperCase()==='FAIL';
-            return `<tr>
-                <td class="group-valpac">${escapeHtml(v.VALPAC_SUBJ||'')}</td>
-                <td class="group-prod ${isFail?'is-fail':''}">${escapeHtml(v.PROD_SUBJ||'')}</td>
-                <td class="group-final ${isFail?'is-fail':'is-pass'}">
-                    <span class="result-text">${escapeHtml(isFail?'FAIL':'PASS')}</span>
-                    <span class="message-text">${escapeHtml(v.FINAL_RESULT_MESSAGE||'')}</span>
-                </td>
-            </tr>`;
-        }).join('');
-
-        els.resultsPane.innerHTML=`
-            <div class="R53-filterbar">
-                <div class="field-group" style="margin:0;min-width:180px">
-                    <label>Result Filter</label>
-                    <select id="liveResultFilter">
-                        <option value="ALL">All results (PASS &amp; FAIL)</option>
-                        <option value="FAIL">FAIL — Missing from MT-audit-prod-CRSE</option>
-                        <option value="PASS">PASS — Found in MT-audit-prod-CRSE</option>
-                    </select>
-                </div>
-            </div>
-            <div class="alert alert--${rows.length===0&&state.resultFilter==='FAIL'?'success':'info'}" style="margin-bottom:16px">
-                ${state.resultFilter==='FAIL'
-                    ? `Showing <strong>${formatNumber(rows.length)}</strong> value(s) missing from MT-audit-prod-CRSE (FAIL).${summary.isPreviewOnly?' <em>Browser preview — download for full list.</em>':''}`
-                    : state.resultFilter==='PASS'
-                        ? `Showing <strong>${formatNumber(rows.length)}</strong> value(s) found in MT-audit-prod-CRSE (PASS).${summary.isPreviewOnly?' <em>Browser preview — download for full list.</em>':''}`
-                        : `Showing <strong>${formatNumber(rows.length)}</strong> result row(s) — <span style="color:var(--rule15-pass,#2e7d32);font-weight:700">${formatNumber(summary.passCount||0)} PASS</span> / <span style="color:var(--rule15-fail,#c62828);font-weight:700">${formatNumber(summary.failCount||0)} FAIL</span>.${summary.isPreviewOnly?' <em>Browser preview — download for full list.</em>':''}`
-                }
-            </div>
-            ${summary.isPreviewOnly?`<div class="alert alert--warning" style="margin-bottom:12px">Browser preview splits FAIL and PASS rows. Downloads keep the full result set.</div>`:''}
-            <div class="R53-results-wrap">
-                <div class="R53-table-wrap">
-                    <table class="R53-grid">
-                        <thead>
-                            <tr>
-                                <th class="group-valpac">${escapeHtml(valpacTable)}</th>
-                                <th class="group-prod">${escapeHtml(prodTable)}</th>
-                                <th class="group-final">Final Results</th>
-                            </tr>
-                            <tr>
-                                <th class="group-valpac">${escapeHtml(vSubj)} (_030)</th>
-                                <th class="group-prod">${escapeHtml(pSubj)} (IALSUBJ)</th>
-                                <th class="group-final" style="width:240px">pass/fail</th>
-                            </tr>
-                        </thead>
-                        <tbody>${rowHtml}</tbody>
-                    </table>
-                </div>
-            </div>`;
-
-        const liveFilter = document.getElementById('liveResultFilter');
-        if (liveFilter) { liveFilter.value=state.resultFilter; liveFilter.addEventListener('change',()=>{state.resultFilter=liveFilter.value;renderResults(true);}); }
+    function statCard(label, value, modifier) {
+        var className = modifier === 'pass'
+            ? ' stat-card--pass'
+            : modifier === 'fail'
+                ? ' stat-card--fail'
+                : '';
+        return '<div class="stat-card' + className + '"><div class="stat-card__label">' + label + '</div><div class="stat-card__value">' + value + '</div></div>';
     }
 
-    if (!isResultsOnlyRole) {
-        els.database?.addEventListener('change', () => loadTables().catch(err => { els.configOutput.innerHTML=`<div class="alert alert--error">${escapeHtml(err.message)}</div>`; }));
-        document.getElementById('connectBtn')?.addEventListener('click', () => connect().catch(err => { hideSpinner(); els.connectionOutput.innerHTML=`<div class="alert alert--error">${escapeHtml(err.message)}</div>`; }));
-        document.getElementById('verifyBtn')?.addEventListener('click', () => verifyTables().catch(err => { hideSpinner(); els.configOutput.innerHTML=`<div class="alert alert--error">${escapeHtml(err.message)}</div>`; }));
-        document.getElementById('runBtn')?.addEventListener('click', () => runValidation().catch(err => { hideSpinner(); setWorkspaceState(err.message,'error'); }));
-        document.getElementById('sqlBtn')?.addEventListener('click', () => generateSql().catch(err => { hideSpinner(); els.sqlText.value=err.message; }));
-        els.beginEditBtn?.addEventListener('click', () => beginEdit().catch(err => { hideSpinner(); setWorkspaceState(err.message,'error'); }));
-        els.saveWorkspaceBtn?.addEventListener('click', () => saveWorkspace().catch(err => { hideSpinner(); setWorkspaceState(err.message,'error'); }));
-        els.downloadAllBtn?.addEventListener('click', async () => {
+    function applySummary(summary, options) {
+        options = options || {};
+        st.summary = summary || null;
+        if (summary && !options.fromWorkspace) {
+            st.runId = summary.savedRunId || st.runId;
+        }
+
+        setStatusBadge(summary ? summary.status : '');
+        renderRule53Analysis(summary);
+        renderRule53Results();
+
+        if (summary) {
+            st.resultsVisible = true;
+            var runState = g('r53RunState');
+            if (runState) runState.textContent = st.runId ? 'Run #' + st.runId : 'No saved run loaded';
+        }
+
+        updateButtons();
+    }
+
+    async function loadTables(options) {
+        options = options || {};
+        if (!st.clientId) return;
+        var data = await post(API + '/GetTables', { clientId: st.clientId });
+        if (!data.success) {
+            var alertEl = g('r53DatasetStatusAlert');
+            if (alertEl) { alertEl.className = 'alert alert--error'; alertEl.textContent = data.error || 'Failed to load tables.'; }
+            setStatusOutput('r53CfgOut', data.error || 'Failed to load tables.', 'error');
+            return;
+        }
+        var tables = data.tables || [];
+        fillSelect('r53ValpacTable', tables, options.preferredValpacTable || data.autoValpacTable);
+        fillSelect('r53ProdTable', tables, options.preferredProdTable || data.autoProdTable);
+        show('body-r53-cfg', true);
+        var alertEl2 = g('r53DatasetStatusAlert');
+        if (alertEl2) { alertEl2.className = 'alert alert--success'; alertEl2.textContent = 'Loaded ' + tables.length + " table(s) from this engagement's dataset."; }
+        setStatusOutput('r53CfgOut', 'Loaded ' + tables.length + ' table(s). Detecting columns...', 'success');
+        await Promise.all([
+            loadColumnsForTable(gv('r53ValpacTable'), [
+                { selectEl: 'r53ValpacSubjCol', role: 'valpac_subj', preferred: options.preferredValpacSubjCol }
+            ]),
+            loadColumnsForTable(gv('r53ProdTable'), [
+                { selectEl: 'r53ProdSubjCol', role: 'prod_subj', preferred: options.preferredProdSubjCol }
+            ])
+        ]);
+        if (!options.silent) setStatusOutput('r53CfgOut', 'Column mapping detected from selected tables.', 'success');
+    }
+
+    async function loadColumnsForTable(tableName, groups) {
+        if (!tableName || !st.clientId) return;
+        for (var i = 0; i < groups.length; i++) {
+            var group = groups[i];
             try {
-                if (!state.summary) throw new Error('Run Rule 53 first.');
-                if (document.getElementById('chkExcel')?.checked) await downloadBlob(`${apiBase}/DownloadExcel`,state.summary,'Rule53_dbo_CRSE_in_MT-audit-prod-CRSE.xlsx');
-                if (document.getElementById('chkCsv')?.checked)   await downloadBlob(`${apiBase}/DownloadCsv`,state.summary,'Rule53_dbo_CRSE_in_MT-audit-prod-CRSE.csv');
-                if (document.getElementById('chkSql')?.checked)   await downloadBlob(`${apiBase}/DownloadSql`,getRequest(),'Rule53_dbo_CRSE_in_MT-audit-prod-CRSE.sql');
-            } catch (err) { setWorkspaceState(err.message||'Download failed.','error'); }
-        });
+                var data = await post(API + '/GetColumns', { clientId: st.clientId, tableName: tableName, tableRole: group.role });
+                if (!data.success || !Array.isArray(data.columns)) continue;
+                fillColumnSelect(group.selectEl, data.columns, group.preferred, data.autoSelected);
+            } catch (e) {}
+        }
     }
 
-    els.signoffBtn?.addEventListener('click', () => signoffWorkspace().catch(err => { hideSpinner(); setWorkspaceState(err.message,'error'); }));
-    els.removeSignoffBtn?.addEventListener('click', () => removeWorkspaceSignoff().catch(err => { hideSpinner(); setWorkspaceState(err.message,'error'); }));
-    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => state.summary&&downloadBlob(`${apiBase}/DownloadExcel`,state.summary,'Rule53_dbo_CRSE_in_MT-audit-prod-CRSE.xlsx').catch(err=>setWorkspaceState(err.message,'error')));
-    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => state.summary&&downloadBlob(`${apiBase}/DownloadCsv`,state.summary,'Rule53_dbo_CRSE_in_MT-audit-prod-CRSE.csv').catch(err=>setWorkspaceState(err.message,'error')));
-    document.getElementById('downloadSqlBtn')?.addEventListener('click', () => downloadBlob(`${apiBase}/DownloadSql`,getRequest(),'Rule53_dbo_CRSE_in_MT-audit-prod-CRSE.sql').catch(err=>setWorkspaceState(err.message,'error')));
-    els.clientId?.addEventListener('change', () => loadWorkspace().catch(err => setWorkspaceState(err.message,'error')));
+    window.r53LoadTables = function() { loadTables().catch(function(e) { setStatusOutput('r53CfgOut', e.message, 'error'); }); };
 
-    renderAnalysis(null); renderResults(); updateWorkspaceButtons();
-    if (state.clientId) loadWorkspace().catch(err => setWorkspaceState(err.message,'error'));
-    else if (isResultsOnlyRole) setWorkspaceState('Select an engagement to load the saved Rule 53 results.','info');
+    window.r53LoadCols = function(role, tableName) {
+        var map = {
+            valpac: [
+                { selectEl: 'r53ValpacSubjCol', role: 'valpac_subj' }
+            ],
+            prod: [
+                { selectEl: 'r53ProdSubjCol', role: 'prod_subj' }
+            ]
+        };
+        loadColumnsForTable(tableName, map[role] || []);
+    };
+
+    window.r53Verify = function() {
+        spin('Verifying tables...');
+        post(API + '/VerifyTables', buildReq())
+            .then(function(data) {
+                unspin();
+                if (!data.success) {
+                    setStatusOutput('r53CfgOut', data.error || 'Verification failed.', 'error');
+                    return;
+                }
+                setStatusOutput(
+                    'r53CfgOut',
+                    'dbo_CRSE: ' + fmt(data.valpacRecordCount) + ' rows | MT-audit-prod-CRSE: ' + fmt(data.prodRecordCount) + ' rows',
+                    'success');
+            })
+            .catch(function(error) {
+                unspin();
+                setStatusOutput('r53CfgOut', error.message, 'error');
+            });
+    };
+
+    window.r53Run = async function() {
+        if (!st.clientId) {
+            setWorkspaceMessage('Select an engagement before running Rule 53.', 'warning');
+            return;
+        }
+
+        try {
+            spin('Running Rule 53...');
+            var data = await post(API + '/RunValidation', buildReq());
+            unspin();
+            if (!data.success) {
+                setWorkspaceMessage(data.error || 'Rule 53 failed.', 'error');
+                return;
+            }
+            st.runId = data.savedRunId || st.runId;
+            st.currentUserHasSignedOff = false;
+            st.isWorkspaceSaved = false;
+            st.resultsVisible = true;
+            applySummary(data);
+            setWorkspaceMessage(
+                'Rule 53 complete. Total: ' + fmt(data.totalValidated) + ' | Pass: ' + fmt(data.passCount) + ' | Fail: ' + fmt(data.failCount) + ' | Status: ' + data.status,
+                String(data.status || '').toUpperCase() === 'PASS' ? 'success' : 'warning');
+        } catch(error) {
+            unspin();
+            setWorkspaceMessage(error.message, 'error');
+        }
+    };
+
+    window.r53GenSql = function() {
+        spin('Generating SQL...');
+        post(API + '/GenerateSql', buildReq())
+            .then(function(data) {
+                unspin();
+                if (!data.success) {
+                    setWorkspaceMessage(data.error || 'SQL generation failed.', 'error');
+                    return;
+                }
+                g('r53SqlText').value = data.sql || '';
+                r53Tab('r53-sql');
+            })
+            .catch(function(error) {
+                unspin();
+                setWorkspaceMessage(error.message, 'error');
+            });
+    };
+
+    window.r53SaveWorkspace = function() {
+        spin('Saving workspace...');
+        post(API + '/SaveWorkspace', buildReq())
+            .then(function(data) {
+                unspin();
+                if (!data.success) {
+                    setWorkspaceMessage(data.error || 'Workspace save failed.', 'error');
+                    return;
+                }
+                if (data.workspace) applyWsMeta(data.workspace);
+                setWorkspaceMessage(data.message || 'Workspace saved.', data.signoffsCleared ? 'warning' : 'success');
+            })
+            .catch(function(error) {
+                unspin();
+                setWorkspaceMessage(error.message, 'error');
+            });
+    };
+
+    window.r53SignOff = function() {
+        spin('Saving signoff...');
+        post(API + '/SignOffWorkspace', {
+            clientId: st.clientId,
+            runId: st.runId,
+            comment: gv('r53SignoffComment')
+        }).then(function(data) {
+            unspin();
+            if (!data.success) {
+                setWorkspaceMessage(data.error || 'Signoff failed.', 'error');
+                return;
+            }
+            st.currentUserHasSignedOff = true;
+            if (data.workspace) applyWsMeta(data.workspace);
+            setWorkspaceMessage(data.message || 'Signoff saved.', 'success');
+            updateButtons();
+        }).catch(function(error) {
+            unspin();
+            setWorkspaceMessage(error.message, 'error');
+        });
+    };
+
+    window.r53RemoveSignoff = function() {
+        spin('Removing signoff...');
+        post(API + '/RemoveWorkspaceSignoff', {
+            clientId: st.clientId,
+            runId: st.runId,
+            comment: ''
+        }).then(function(data) {
+            unspin();
+            if (!data.success) {
+                setWorkspaceMessage(data.error || 'Signoff removal failed.', 'error');
+                return;
+            }
+            st.currentUserHasSignedOff = false;
+            if (data.workspace) applyWsMeta(data.workspace);
+            setWorkspaceMessage(data.message || 'Signoff removed.', 'warning');
+            updateButtons();
+        }).catch(function(error) {
+            unspin();
+            setWorkspaceMessage(error.message, 'error');
+        });
+    };
+
+    window.r53SetFilter = function(button) {
+        document.querySelectorAll('.r53-filter-btn').forEach(function(item) {
+            item.classList.remove('active');
+        });
+        button.classList.add('active');
+        st.filterResult = String(button.dataset.filter || 'ALL').toUpperCase();
+        renderRule53Results();
+    };
+
+    window.r53DlCsv = async function() {
+        if (!st.runId) return;
+        await window.downloadFileWithProgress({
+            url: API + '/DownloadCsv?runId=' + st.runId,
+            method: 'GET',
+            defaultFileName: 'Rule53_CRSE_Production_Run_' + st.runId + '.csv',
+            label: 'Downloading CSV'
+        });
+    };
+
+    window.r53DlExcel = async function() {
+        if (!st.runId) return;
+        await window.downloadFileWithProgress({
+            url: API + '/DownloadExcel?runId=' + st.runId,
+            method: 'GET',
+            defaultFileName: 'Rule53_CRSE_Production_Run_' + st.runId + '.xlsx',
+            label: 'Downloading Excel'
+        });
+    };
+
+    window.r53DlSql = async function() {
+        if (!st.runId) return;
+        await window.downloadFileWithProgress({
+            url: API + '/DownloadSql?runId=' + st.runId,
+            method: 'GET',
+            defaultFileName: 'Rule53_CRSE_Production_Run_' + st.runId + '.sql',
+            label: 'Downloading SQL'
+        });
+    };
+
+    function applyWorkspace(ws, resultsVisible) {
+        var datasetsLinkEl = g('r53DatasetsLink');
+        if (datasetsLinkEl) datasetsLinkEl.href = st.clientId ? '/EngagementDatasets?clientId=' + st.clientId : '#';
+
+        if (!ws) {
+            st.runId = null;
+            st.summary = null;
+            st.isWorkspaceSaved = false;
+            st.currentUserHasSignedOff = false;
+            st.resultsVisible = false;
+            st.currentUserEngagementRole = '';
+            setWorkspaceMessage('No saved Rule 53 workspace for this engagement yet.', 'info');
+            var runState = g('r53RunState');
+            if (runState) runState.textContent = 'No saved run loaded';
+            var runLabel = g('r53RunLabel');
+            if (runLabel) runLabel.textContent = 'No saved run yet';
+            var statusLabel = g('r53StatusLabel');
+            if (statusLabel) statusLabel.textContent = '-';
+            var editedLabel = g('r53EditedLabel');
+            if (editedLabel) editedLabel.textContent = '-';
+            applySummary(null);
+            if (!IS_RESULTS_ONLY) loadTables().catch(function() {});
+            return;
+        }
+
+        st.runId = ws.runId || null;
+        st.resultsVisible = !!resultsVisible;
+        st.currentUserEngagementRole = ws.currentUserEngagementRole || '';
+
+        if (!IS_RESULTS_ONLY) {
+            loadTables({
+                preferredValpacTable: ws.valpacTable,
+                preferredProdTable: ws.prodTable,
+                preferredValpacSubjCol: ws.valpacSubjCol,
+                preferredProdSubjCol: ws.prodSubjCol,
+                silent: true
+            }).catch(function() {});
+        }
+
+        applyWsMeta(ws);
+
+        if (!resultsVisible) {
+            setWorkspaceMessage('Saved Rule 53 results are not available for your role.', 'info');
+            applySummary(null);
+            return;
+        }
+
+        setWorkspaceMessage(ws.summary ? 'Saved Rule 53 workspace loaded.' : 'Rule 53 workspace loaded. Run validation to generate results.', 'success');
+        applySummary(ws.summary || null, { fromWorkspace: true });
+    }
+
+    function loadWorkspace() {
+        if (!st.clientId) {
+            applyWorkspace(null, false);
+            return Promise.resolve();
+        }
+
+        setWorkspaceMessage('Loading saved workspace...', 'info');
+        var fetcher = window.fetchJsonWithProgress || function(url, options) {
+            return fetch(url, options).then(function(response) { return response.json(); });
+        };
+
+        return fetcher(API + '/GetWorkspaceState?clientId=' + st.clientId, { method: 'GET' })
+            .then(function(data) {
+                if (!data.success) throw new Error(data.error || 'Failed to load workspace.');
+                applyWorkspace(data.workspace, data.resultsVisible);
+            });
+    }
+
+    window.r53OnClientChange = function(value) {
+        st.clientId = parseInt(value, 10) || 0;
+        if (!st.clientId) {
+            applyWorkspace(null, false);
+            return;
+        }
+        loadWorkspace().catch(function(error) {
+            setWorkspaceMessage(error.message, 'error');
+        });
+    };
+
+    renderRule53Analysis(null);
+    renderRule53Results();
+    updateButtons();
+
+    if (st.clientId) {
+        loadWorkspace().catch(function(error) {
+            setWorkspaceMessage(error.message, 'error');
+        });
+    }
+        const __ruleRApiBase = typeof apiBasePath !== 'undefined'
+        ? apiBasePath
+        : (typeof apiBase !== 'undefined'
+            ? apiBase
+            : (typeof API !== 'undefined'
+                ? API
+                : ((window.location.pathname.match(/^\/Rule\d+/i) || [null])[0])));
+    const __ruleRRequestBuilder = typeof getRequest === 'function' ? getRequest : (typeof buildRequest === 'function' ? buildRequest : (typeof buildReq === 'function' ? buildReq : null));
+    const __ruleRPost = typeof postJson === 'function' ? postJson : (typeof post === 'function' ? post : null);
+    if (__ruleRApiBase && __ruleRRequestBuilder && __ruleRPost && window.ruleRScriptUi) {
+        window.ruleRScriptUi.install({
+            apiBase: __ruleRApiBase,
+            requestBuilder: __ruleRRequestBuilder,
+            postJson: __ruleRPost,
+            showSpinner: typeof showSpinner === 'function' ? showSpinner : (typeof spin === 'function' ? spin : null),
+            hideSpinner: typeof hideSpinner === 'function' ? hideSpinner : (typeof unspin === 'function' ? unspin : null)
+        });
+    }
 })();
 </script>

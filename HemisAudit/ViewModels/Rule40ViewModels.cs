@@ -27,9 +27,6 @@ namespace HemisAudit.ViewModels
     {
         public int    ClientId      { get; set; }
         public int?   RunId         { get; set; }
-        public string Server        { get; set; } = "";
-        public string Database      { get; set; } = "";
-        public string Driver        { get; set; } = "ODBC Driver 17 for SQL Server";
         public string ValpacTable   { get; set; } = "";
         public string AsciiTable    { get; set; } = "";
         public string ValpacKeyCol  { get; set; } = "_037";
@@ -45,8 +42,6 @@ namespace HemisAudit.ViewModels
         public int     ClientId              { get; set; }
         public string  Status               { get; set; } = "";
         public string  Timestamp            { get; set; } = "";
-        public string  Server               { get; set; } = "";
-        public string  Database             { get; set; } = "";
         public string  ValpacTable          { get; set; } = "";
         public string  AsciiTable           { get; set; } = "";
         public string  ValpacKeyCol         { get; set; } = "_037";
@@ -60,13 +55,12 @@ namespace HemisAudit.ViewModels
         public List<Rule40ColumnPair> Pairs      { get; set; } = new();
         public List<Rule40ReconcRow>  ReviewRows  { get; set; } = new();
         public List<Rule40ReconcRow>  AgreeSample { get; set; } = new();
+        public string? Warning { get; set; }
     }
 
     public class Rule40VerifyRequest
     {
-        public string Server      { get; set; } = "";
-        public string Database    { get; set; } = "";
-        public string Driver      { get; set; } = "ODBC Driver 17 for SQL Server";
+        public int    ClientId    { get; set; }
         public string ValpacTable { get; set; } = "";
         public string AsciiTable  { get; set; } = "";
     }
@@ -92,9 +86,6 @@ namespace HemisAudit.ViewModels
     {
         public int       ClientId                  { get; set; }
         public int?      RunId                     { get; set; }
-        public string    Server                    { get; set; } = "";
-        public string    Database                  { get; set; } = "";
-        public string    Driver                    { get; set; } = "ODBC Driver 17 for SQL Server";
         public string    ValpacTable               { get; set; } = "";
         public string    AsciiTable                { get; set; } = "";
         public string    ValpacKeyCol              { get; set; } = "_037";
@@ -116,13 +107,5 @@ namespace HemisAudit.ViewModels
         public int    ClientId { get; set; }
         public int?   RunId    { get; set; }
         public string Comment  { get; set; } = "";
-    }
-
-    public class Rule40GetColumnsRequest
-    {
-        public string Server    { get; set; } = "";
-        public string Database  { get; set; } = "";
-        public string Driver    { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string TableName { get; set; } = "";
     }
 }

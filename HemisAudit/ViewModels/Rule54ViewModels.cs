@@ -13,23 +13,20 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
         // CRED table
-        public string CredTable { get; set; } = "";
-        public string CredIdCol { get; set; } = "";
-        public string CredCourseCol { get; set; } = "";
-        public string CredCreditCol { get; set; } = "";
-        public string CredResearch1Col { get; set; } = "";
+        public string CredTable { get; set; } = "dbo_CRED";
+        public string CredIdCol { get; set; } = "_001";
+        public string CredCourseCol { get; set; } = "_030";
+        public string CredCreditCol { get; set; } = "_036";
+        public string CredResearch1Col { get; set; } = "_050";
         // QUAL table
-        public string QualTable { get; set; } = "";
-        public string QualIdCol { get; set; } = "";
-        public string QualNameCol { get; set; } = "";
+        public string QualTable { get; set; } = "dbo_QUAL";
+        public string QualIdCol { get; set; } = "_001";
+        public string QualNameCol { get; set; } = "_003";
         // PQM table
-        public string PqmTable { get; set; } = "";
-        public string PqmNameCol { get; set; } = "";
-        public string PqmResearch1Col { get; set; } = "";
+        public string PqmTable { get; set; } = "PQM";
+        public string PqmNameCol { get; set; } = "Authorised_Qualification_Name";
+        public string PqmResearch1Col { get; set; } = "Research_1";
     }
 
     public class Rule54ValidationRow
@@ -75,35 +72,23 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string CredTable { get; set; } = "";
-        public string QualTable { get; set; } = "";
-        public string PqmTable { get; set; } = "";
-        public string CredIdCol { get; set; } = "";
-        public string CredCourseCol { get; set; } = "";
-        public string CredCreditCol { get; set; } = "";
-        public string CredResearch1Col { get; set; } = "";
-        public string QualIdCol { get; set; } = "";
-        public string QualNameCol { get; set; } = "";
-        public string PqmNameCol { get; set; } = "";
-        public string PqmResearch1Col { get; set; } = "";
+        public string CredTable { get; set; } = "dbo_CRED";
+        public string QualTable { get; set; } = "dbo_QUAL";
+        public string PqmTable { get; set; } = "PQM";
+        public string CredIdCol { get; set; } = "_001";
+        public string CredCourseCol { get; set; } = "_030";
+        public string CredCreditCol { get; set; } = "_036";
+        public string CredResearch1Col { get; set; } = "_050";
+        public string QualIdCol { get; set; } = "_001";
+        public string QualNameCol { get; set; } = "_003";
+        public string PqmNameCol { get; set; } = "Authorised_Qualification_Name";
+        public string PqmResearch1Col { get; set; } = "Research_1";
         public int ClientId { get; set; }
         public int? SavedRunId { get; set; }
         public List<Rule54ValidationRow> ValidationRows { get; set; } = new();
         public List<Rule54ExceptionRecord> Exceptions { get; set; } = new();
+        public string? Warning { get; set; }
         public string? Error { get; set; }
-    }
-
-    public class Rule54VerifyRequest
-    {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
-        public string CredTable { get; set; } = "";
-        public string QualTable { get; set; } = "";
-        public string PqmTable { get; set; } = "";
-        public string CredIdCol { get; set; } = "";
-        public string QualIdCol { get; set; } = "";
     }
 
     public class Rule54VerifyResult
@@ -128,11 +113,17 @@ namespace HemisAudit.ViewModels
 
     public class Rule54GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public string TableRole { get; set; } = "";
+    }
+
+    public class Rule54ColumnDiscoveryResult
+    {
+        public bool Success { get; set; }
+        public List<string> Columns { get; set; } = new();
+        public string? AutoSelected { get; set; }
+        public string? Error { get; set; }
     }
 
     public class Rule54WorkspaceStateViewModel
@@ -140,20 +131,17 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string CredTable { get; set; } = "";
-        public string QualTable { get; set; } = "";
-        public string PqmTable { get; set; } = "";
-        public string CredIdCol { get; set; } = "";
-        public string CredCourseCol { get; set; } = "";
-        public string CredCreditCol { get; set; } = "";
-        public string CredResearch1Col { get; set; } = "";
-        public string QualIdCol { get; set; } = "";
-        public string QualNameCol { get; set; } = "";
-        public string PqmNameCol { get; set; } = "";
-        public string PqmResearch1Col { get; set; } = "";
+        public string CredTable { get; set; } = "dbo_CRED";
+        public string QualTable { get; set; } = "dbo_QUAL";
+        public string PqmTable { get; set; } = "PQM";
+        public string CredIdCol { get; set; } = "_001";
+        public string CredCourseCol { get; set; } = "_030";
+        public string CredCreditCol { get; set; } = "_036";
+        public string CredResearch1Col { get; set; } = "_050";
+        public string QualIdCol { get; set; } = "_001";
+        public string QualNameCol { get; set; } = "_003";
+        public string PqmNameCol { get; set; } = "Authorised_Qualification_Name";
+        public string PqmResearch1Col { get; set; } = "Research_1";
         public string CurrentUserEngagementRole { get; set; } = "";
         public bool HasDataAnalystSignoff { get; set; }
         public bool CurrentUserHasSignedOff { get; set; }
@@ -182,7 +170,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule54ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();

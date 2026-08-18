@@ -16,14 +16,21 @@ CultureInfo.DefaultThreadCurrentCulture = new CultureInfo("en-US");
 CultureInfo.DefaultThreadCurrentUICulture = new CultureInfo("en-US");
 
 var builder = WebApplication.CreateBuilder(args);
-builder.WebHost.UseUrls("http://localhost:5076");
+builder.WebHost.UseUrls("http://localhost:5080");
 var dataProtectionPath = Path.Combine(builder.Environment.ContentRootPath, ".run", "data-protection-keys");
 
 Directory.CreateDirectory(dataProtectionPath);
 
-// SQLite-backed application database for the current MVC app
+// Supabase-hosted Postgres database backing Identity and the new tenancy tables.
+// EnableRetryOnFailure + the idle-lifetime tuning in WithResiliencyDefaults protect against
+// Supabase's pooler closing idle connections server-side (see PostgresConnectionStringHelper).
+var postgresConnectionString = PostgresConnectionStringHelper.WithResiliencyDefaults(
+    builder.Configuration.GetConnectionString("Postgres")
+        ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured."));
+
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseNpgsql(postgresConnectionString, npgsql =>
+        npgsql.EnableRetryOnFailure(maxRetryCount: 3, maxRetryDelay: TimeSpan.FromSeconds(5), errorCodesToAdd: null)));
 
 builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionPath))
@@ -63,7 +70,12 @@ builder.Services.AddAntiforgery(options =>
 builder.Services.AddScoped<IPasswordPolicyService, PasswordPolicyService>();
 builder.Services.AddScoped<IEmailService, SmtpEmailService>();
 builder.Services.AddScoped<PasswordAgeFilter>();
+builder.Services.AddScoped<FirmAccessFilter>();
+builder.Services.AddScoped<FriendlyExceptionFilter>();
 builder.Services.AddScoped<ISystemDatabaseService, SystemDatabaseService>();
+builder.Services.AddScoped<IEngagementDatasetService, EngagementDatasetService>();
+builder.Services.AddSingleton<IBackgroundTaskQueue>(_ => new BackgroundTaskQueue(200));
+builder.Services.AddHostedService<QueuedHostedService>();
 builder.Services.AddHttpClient();
 builder.Services.AddMemoryCache();
 builder.Services.AddDistributedMemoryCache();
@@ -97,7 +109,9 @@ builder.Services.Configure<GzipCompressionProviderOptions>(options =>
 });
 builder.Services.AddControllersWithViews(options =>
 {
-    options.Filters.AddService<PasswordAgeFilter>();
+    options.Filters.AddService<FriendlyExceptionFilter>(order: -1);
+    options.Filters.AddService<FirmAccessFilter>(order: 0);
+    options.Filters.AddService<PasswordAgeFilter>(order: 1);
 }).AddNewtonsoftJson(options =>
 {
     options.SerializerSettings.ContractResolver = new CamelCasePropertyNamesContractResolver();
@@ -130,7 +144,6 @@ builder.Services.AddScoped<IRule39Service, Rule39Service>();
 builder.Services.AddScoped<IRule40Service, Rule40Service>();
 builder.Services.AddScoped<IRule4001Service, Rule4001Service>();
 builder.Services.AddScoped<IRule41Service, Rule41Service>();
-builder.Services.AddScoped<IRule45Service, Rule45Service>();
 builder.Services.AddScoped<IRule47Service, Rule47Service>();
 builder.Services.AddScoped<IRule48Service, Rule48Service>();
 builder.Services.AddScoped<IRule46Service, Rule46Service>();
@@ -151,8 +164,6 @@ builder.Services.AddScoped<IRule58Service, Rule58Service>();
 builder.Services.AddScoped<IRule59Service, Rule59Service>();
 builder.Services.AddScoped<IRule60Service, Rule60Service>();
 builder.Services.AddScoped<IRule61Service, Rule61Service>();
-builder.Services.AddScoped<IRule62Service, Rule62Service>();
-builder.Services.AddScoped<IRule63Service, Rule63Service>();
 builder.Services.AddScoped<IRule64Service, Rule64Service>();
 builder.Services.AddScoped<IRule65Service, Rule65Service>();
 builder.Services.AddScoped<IRule66Service, Rule66Service>();
@@ -405,11 +416,6 @@ app.MapControllerRoute(
     defaults: new { controller = "Rule44", action = "Index" });
 
 app.MapControllerRoute(
-    name: "rule45-short",
-    pattern: "Rule45",
-    defaults: new { controller = "Rule45", action = "Index" });
-
-app.MapControllerRoute(
     name: "rule47-short",
     pattern: "Rule47",
     defaults: new { controller = "Rule47", action = "Index" });
@@ -510,26 +516,6 @@ app.MapControllerRoute(
     defaults: new { controller = "Rule61", action = "Index" });
 
 app.MapControllerRoute(
-    name: "rule62-run",
-    pattern: "Rule62/Run/{id:int}",
-    defaults: new { controller = "Rule62", action = "Run" });
-
-app.MapControllerRoute(
-    name: "rule62-short",
-    pattern: "Rule62",
-    defaults: new { controller = "Rule62", action = "Index" });
-
-app.MapControllerRoute(
-    name: "rule63-run",
-    pattern: "Rule63/Run/{id:int}",
-    defaults: new { controller = "Rule63", action = "Run" });
-
-app.MapControllerRoute(
-    name: "rule63-short",
-    pattern: "Rule63",
-    defaults: new { controller = "Rule63", action = "Index" });
-
-app.MapControllerRoute(
     name: "rule64-run",
     pattern: "Rule64/Run/{id:int}",
     defaults: new { controller = "Rule64", action = "Run" });
@@ -580,9 +566,19 @@ app.MapControllerRoute(
     defaults: new { controller = "Rule68", action = "Index" });
 
 app.MapControllerRoute(
+    name: "clinicaltech-run",
+    pattern: "ClinicalTech/Run/{id:int}",
+    defaults: new { controller = "ClinicalTech", action = "Run" });
+
+app.MapControllerRoute(
     name: "clinicaltech-short",
     pattern: "ClinicalTech",
     defaults: new { controller = "ClinicalTech", action = "Index" });
+
+app.MapControllerRoute(
+    name: "biokinetic-run",
+    pattern: "Biokinetic/Run/{id:int}",
+    defaults: new { controller = "Biokinetic", action = "Run" });
 
 app.MapControllerRoute(
     name: "biokinetic-short",
@@ -590,9 +586,19 @@ app.MapControllerRoute(
     defaults: new { controller = "Biokinetic", action = "Index" });
 
 app.MapControllerRoute(
+    name: "radiography-run",
+    pattern: "Radiography/Run/{id:int}",
+    defaults: new { controller = "Radiography", action = "Run" });
+
+app.MapControllerRoute(
     name: "radiography-short",
     pattern: "Radiography",
     defaults: new { controller = "Radiography", action = "Index" });
+
+app.MapControllerRoute(
+    name: "pharmacy-run",
+    pattern: "Pharmacy/Run/{id:int}",
+    defaults: new { controller = "Pharmacy", action = "Run" });
 
 app.MapControllerRoute(
     name: "pharmacy-short",
@@ -600,14 +606,29 @@ app.MapControllerRoute(
     defaults: new { controller = "Pharmacy", action = "Index" });
 
 app.MapControllerRoute(
+    name: "nursing-run",
+    pattern: "Nursing/Run/{id:int}",
+    defaults: new { controller = "Nursing", action = "Run" });
+
+app.MapControllerRoute(
     name: "nursing-short",
     pattern: "Nursing",
     defaults: new { controller = "Nursing", action = "Index" });
 
 app.MapControllerRoute(
+    name: "biomedical-run",
+    pattern: "Biomedical/Run/{id:int}",
+    defaults: new { controller = "Biomedical", action = "Run" });
+
+app.MapControllerRoute(
     name: "biomedical-short",
     pattern: "Biomedical",
     defaults: new { controller = "Biomedical", action = "Index" });
+
+app.MapControllerRoute(
+    name: "mop-run",
+    pattern: "Mop/Run/{id:int}",
+    defaults: new { controller = "Mop", action = "Run" });
 
 app.MapControllerRoute(
     name: "mop-short",
@@ -633,6 +654,16 @@ app.MapControllerRoute(
     name: "rule57-short",
     pattern: "Rule57",
     defaults: new { controller = "Rule57", action = "Index" });
+
+app.MapControllerRoute(
+    name: "firms-short",
+    pattern: "Firms",
+    defaults: new { controller = "Firms", action = "Index" });
+
+app.MapControllerRoute(
+    name: "engagementdatasets-short",
+    pattern: "EngagementDatasets",
+    defaults: new { controller = "EngagementDatasets", action = "Index" });
 
 app.MapControllerRoute(
     name: "messages-short",

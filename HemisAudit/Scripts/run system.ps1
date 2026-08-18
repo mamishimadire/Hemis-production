@@ -5,7 +5,7 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent $scriptRoot
 Set-Location $projectRoot
 
-$preferredPort = 5076
+$preferredPort = 5080
 $launchPath = "/Dashboard"
 $baseUrl = "http://localhost:$preferredPort"
 $runRoot = Join-Path $projectRoot ".run"

@@ -9,51 +9,31 @@ namespace HemisAudit.Data
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
             : base(options) { }
 
-        public DbSet<Client>        Clients        { get; set; }
-        public DbSet<ClientUser>    ClientUsers    { get; set; }
-        public DbSet<ValidationRun> ValidationRuns { get; set; }
-        public DbSet<AuditLog>      AuditLogs      { get; set; }
+        public DbSet<Firm>          Firms          { get; set; }
+        public DbSet<FirmLicense>   FirmLicenses   { get; set; }
 
         protected override void OnModelCreating(ModelBuilder builder)
         {
             base.OnModelCreating(builder);
 
-            // ── Client ────────────────────────────────────────────────────────
-            builder.Entity<Client>(e =>
+            // ── Firm ──────────────────────────────────────────────────────────
+            builder.Entity<Firm>(e =>
             {
-                e.HasIndex(c => new { c.Name, c.FiscalYear }).IsUnique();
-                e.HasMany(c => c.ClientUsers)
-                 .WithOne(cu => cu.Client)
-                 .HasForeignKey(cu => cu.ClientId)
+                e.HasIndex(f => f.Name);
+                e.HasIndex(f => f.FirmCode).IsUnique();
+                e.HasOne(f => f.License)
+                 .WithOne(l => l.Firm)
+                 .HasForeignKey<FirmLicense>(l => l.FirmId)
                  .OnDelete(DeleteBehavior.Cascade);
-                e.HasMany(c => c.ValidationRuns)
-                 .WithOne(vr => vr.Client)
-                 .HasForeignKey(vr => vr.ClientId)
-                 .OnDelete(DeleteBehavior.Cascade);
-            });
-
-            // ── ClientUser ────────────────────────────────────────────────────
-            builder.Entity<ClientUser>(e =>
-            {
-                e.HasIndex(cu => new { cu.ClientId, cu.UserId }).IsUnique();
-                e.HasOne(cu => cu.User)
-                 .WithMany(u => u.ClientUsers)
-                 .HasForeignKey(cu => cu.UserId)
+                e.HasMany(f => f.Users)
+                 .WithOne(u => u.Firm)
+                 .HasForeignKey(u => u.FirmId)
                  .OnDelete(DeleteBehavior.Restrict);
             });
 
-            // ── ValidationRun ─────────────────────────────────────────────────
-            builder.Entity<ValidationRun>(e =>
+            builder.Entity<FirmLicense>(e =>
             {
-                e.HasIndex(vr => new { vr.ClientId, vr.RuleNumber, vr.IsCurrent });
-                e.HasIndex(vr => new { vr.ClientId, vr.RunAt });
-            });
-
-            // ── AuditLog ──────────────────────────────────────────────────────
-            builder.Entity<AuditLog>(e =>
-            {
-                e.HasIndex(a => a.Timestamp);
-                e.HasIndex(a => a.UserId);
+                e.HasIndex(l => l.FirmId).IsUnique();
             });
         }
     }

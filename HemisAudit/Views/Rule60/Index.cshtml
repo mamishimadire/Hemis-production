@@ -65,29 +65,15 @@
     <div class="accordion-stack">
         <div class="accordion-item">
             <button class="accordion-toggle" type="button" onclick="toggleAccordion('r60-conn')">
-                <span class="acc-icon">DB</span><span>Database Connection</span><span class="acc-chevron">v</span>
+                <span class="acc-icon">DB</span><span>Engagement Dataset</span><span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-r60-conn">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label for="r60Server">Server Name</label>
-                        <input id="r60Server" type="text" placeholder="SERVER\INSTANCE or (localdb)\MSSQLLocalDB" />
-                    </div>
-                    <div class="field-group">
-                        <label for="r60Driver">Driver</label>
-                        <select id="r60Driver">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group">
-                        <label for="r60Db">Database</label>
-                        <select id="r60Db" onchange="r60LoadTables()"></select>
-                    </div>
+                <div class="alert alert--info" id="r60DatasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
-                <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
-                    <button type="button" class="btn btn-primary" onclick="r60Connect()">Connect</button>
+                <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
+                    <a class="btn btn-secondary" id="r60DatasetsLink" href="#">Manage Datasets</a>
+                    <button type="button" class="btn btn-primary" onclick="r60LoadTables()">Refresh Tables</button>
                 </div>
                 <div id="r60ConnOut" class="status-output"></div>
             </div>
@@ -117,6 +103,14 @@
                     <div class="field-group">
                         <label>H16CRSE join key</label>
                         <select id="r60AuditKey"></select>
+                    </div>
+                    <div class="field-group">
+                        <label>CRSE secondary join key <small>(optional &mdash; set this when the primary key repeats, e.g. one row per qualification)</small></label>
+                        <select id="r60StudKey2"><option value="">None</option></select>
+                    </div>
+                    <div class="field-group">
+                        <label>H16CRSE secondary join key <small>(optional)</small></label>
+                        <select id="r60AuditKey2"><option value="">None</option></select>
                     </div>
                 </div>
                 <div id="r60TableOut" class="status-output"></div>
@@ -250,19 +244,19 @@ window.r60Tab = function(tab) {
     var TOKEN = (document.querySelector('#r60AntiForgery input[name="__RequestVerificationToken"]') || {}).value || '';
 
     var DEF_PAIRS = [
-        { studCol: '_030', auditCol: '_030', label: 'Subject Code (_030)' },
-        { studCol: '_065', auditCol: '_065', label: '_065' },
-        { studCol: '_031', auditCol: '_031', label: '_031' },
-        { studCol: '_033', auditCol: '_033', label: '_033' },
-        { studCol: '_034', auditCol: '_034', label: '_034' },
-        { studCol: '_059', auditCol: '_059', label: '_059' },
-        { studCol: '_060', auditCol: '_060', label: '_060' },
-        { studCol: '_061', auditCol: '_061', label: '_061' },
-        { studCol: '_062', auditCol: '_062', label: '_062' },
-        { studCol: '_058', auditCol: '_058', label: '_058' },
-        { studCol: '_091', auditCol: '_091', label: '_091' },
-        { studCol: '_092', auditCol: '_092', label: '_092' },
-        { studCol: '_093', auditCol: '_093', label: '_093' }
+        { studCol: '_030', h16Col: '_030', label: 'Subject Code (_030)' },
+        { studCol: '_065', h16Col: '_065', label: '_065' },
+        { studCol: '_031', h16Col: '_031', label: '_031' },
+        { studCol: '_033', h16Col: '_033', label: '_033' },
+        { studCol: '_034', h16Col: '_034', label: '_034' },
+        { studCol: '_059', h16Col: '_059', label: '_059' },
+        { studCol: '_060', h16Col: '_060', label: '_060' },
+        { studCol: '_061', h16Col: '_061', label: '_061' },
+        { studCol: '_062', h16Col: '_062', label: '_062' },
+        { studCol: '_058', h16Col: '_058', label: '_058' },
+        { studCol: '_091', h16Col: '_091', label: '_091' },
+        { studCol: '_092', h16Col: '_092', label: '_092' },
+        { studCol: '_093', h16Col: '_093', label: '_093' }
     ];
 
     var st = {
@@ -322,7 +316,7 @@ window.r60Tab = function(tab) {
             row.innerHTML = '<span style="color:#888;font-size:.8rem">#' + (i + 1) + '</span>' +
                 '<input type="text" placeholder="CRSE col" value="' + esc(p.studCol) + '" oninput="r60PairSet(' + i + ',\'studCol\',this.value)">' +
                 '<span style="color:#999">&harr;</span>' +
-                '<input type="text" placeholder="H16CRSE col" value="' + esc(p.auditCol) + '" oninput="r60PairSet(' + i + ',\'auditCol\',this.value)">' +
+                '<input type="text" placeholder="H16CRSE col" value="' + esc(p.h16Col) + '" oninput="r60PairSet(' + i + ',\'h16Col\',this.value)">' +
                 '<input type="text" placeholder="Label" value="' + esc(p.label) + '" oninput="r60PairSet(' + i + ',\'label\',this.value)" style="max-width:130px">' +
                 '<button class="r60-pair-del" onclick="r60RemovePair(' + i + ')">&#x2715;</button>';
             box.appendChild(row);
@@ -331,52 +325,57 @@ window.r60Tab = function(tab) {
 
     window.r60PairSet = function(i, key, val) { if (st.pairs[i]) st.pairs[i][key] = val; };
     window.r60RemovePair = function(i) { st.pairs.splice(i, 1); renderPairs(); };
-    window.r60AddPair = function() { st.pairs.push({ studCol: '', auditCol: '', label: '' }); renderPairs(); };
+    window.r60AddPair = function() { st.pairs.push({ studCol: '', h16Col: '', label: '' }); renderPairs(); };
 
-    /* ── Connection ── */
-    window.r60Connect = function() {
-        var server = gv('r60Server').trim();
-        if (!server) { setWs('Enter a server name first.', 'warning'); return; }
-        spin('Connecting to server...');
-        post(API + '/GetDatabases', { server: server, driver: gv('r60Driver') })
-        .then(function(d) {
-            unspin();
-            if (!d.success) { setStatus('r60ConnOut', d.error || 'Connection failed.', 'error'); return; }
-            fillSel('r60Db', d.databases || []);
-            setStatus('r60ConnOut', 'Connected — ' + (d.databases || []).length + ' database(s) found.', 'success');
-            if ((d.databases || []).length) r60LoadTables();
-        }).catch(function(e) { unspin(); setStatus('r60ConnOut', e.message, 'error'); });
-    };
-
-    window.r60LoadTables = function() {
-        var db = gv('r60Db'); if (!db) return;
+    /* -- Table Loading (this engagement's uploaded datasets) -- */
+    window.r60LoadTables = function(options) {
+        options = options || {};
+        if (!st.clientId) return Promise.resolve(null);
         spin('Loading tables...');
-        post(API + '/GetTables', { server: gv('r60Server').trim(), database: db, driver: gv('r60Driver') })
+        return post(API + '/GetTables', { clientId: st.clientId })
         .then(function(d) {
             unspin();
-            if (!d.success) { setStatus('r60TableOut', d.error || 'Failed to load tables.', 'error'); return; }
+            if (!d.success) {
+                setStatus('r60TableOut', d.error || 'Failed to load tables.', 'error');
+                var alertEl = g('r60DatasetStatusAlert');
+                if (alertEl) { alertEl.className = 'alert alert--error'; alertEl.textContent = d.error || 'Failed to load tables.'; }
+                return null;
+            }
             var tables = d.tables || [];
-            fillSel('r60StudTable',  tables, d.autoStudTable  || 'dbo_CRSE');
-            fillSel('r60AuditTable', tables, d.autoAuditTable || 'H16CRSE');
+            fillSel('r60StudTable',  tables, options.preferredStudTable  || d.autoStudTable  || 'dbo_CRSE');
+            fillSel('r60AuditTable', tables, options.preferredAuditTable || d.autoH16Table || 'H16CRSE');
             show('body-r60-tables', true); show('body-r60-colmap', true);
-            setStatus('r60TableOut', 'Loaded ' + tables.length + ' tables — CRSE and H16CRSE auto-detected.', 'success');
-            st.pairs = DEF_PAIRS.slice();
+            if (!options.silent) setStatus('r60TableOut', 'Loaded ' + tables.length + ' tables. CRSE and H16CRSE auto-detected.', 'success');
+            var alertEl2 = g('r60DatasetStatusAlert');
+            if (alertEl2) { alertEl2.className = 'alert alert--success'; alertEl2.textContent = 'Loaded ' + tables.length + " table(s) from this engagement's dataset."; }
+            if (!options.preservePairs) st.pairs = DEF_PAIRS.slice();
             return Promise.all([
-                r60LoadColsInner('stud',  gv('r60StudTable')),
-                r60LoadColsInner('audit', gv('r60AuditTable'))
+                r60LoadColsInner('stud',  gv('r60StudTable'), options.preferredStudKey, options.preferredStudKey2),
+                r60LoadColsInner('audit', gv('r60AuditTable'), options.preferredAuditKey, options.preferredAuditKey2)
             ]);
-        }).then(function() { renderPairs(); })
-        .catch(function(e) { unspin(); setStatus('r60TableOut', e.message, 'error'); });
+        }).then(function() { renderPairs(); return true; })
+        .catch(function(e) { unspin(); setStatus('r60TableOut', e.message, 'error'); return null; });
     };
 
-    function r60LoadColsInner(role, tableName) {
-        if (!tableName || !gv('r60Server') || !gv('r60Db')) return Promise.resolve();
-        return post(API + '/GetColumns', { server: gv('r60Server').trim(), database: gv('r60Db'), driver: gv('r60Driver'), tableName: tableName })
+    function fillSecondaryKeySel(id, cols, preferred) {
+        var sel = g(id); if (!sel) return;
+        sel.innerHTML = '<option value="">None</option>';
+        (cols || []).forEach(function(c) {
+            var o = document.createElement('option');
+            o.value = o.textContent = c;
+            if (preferred && preferred === c) o.selected = true;
+            sel.appendChild(o);
+        });
+    }
+
+    function r60LoadColsInner(role, tableName, preferredKey, preferredKey2) {
+        if (!tableName || !st.clientId) return Promise.resolve();
+        return post(API + '/GetColumns', { clientId: st.clientId, tableName: tableName })
         .then(function(d) {
             if (!d.success) return;
             var cols = d.columns || [];
-            if (role === 'stud')  { st.studCols  = cols; fillSel('r60StudKey',  cols, d.autoKey || '_030'); }
-            if (role === 'audit') { st.auditCols = cols; fillSel('r60AuditKey', cols, d.autoKey || '_030'); }
+            if (role === 'stud')  { st.studCols  = cols; fillSel('r60StudKey',  cols, preferredKey || d.autoKey || '_030'); fillSecondaryKeySel('r60StudKey2', cols, preferredKey2); }
+            if (role === 'audit') { st.auditCols = cols; fillSel('r60AuditKey', cols, preferredKey || d.autoKey || '_030'); fillSecondaryKeySel('r60AuditKey2', cols, preferredKey2); }
         });
     }
 
@@ -385,25 +384,26 @@ window.r60Tab = function(tab) {
     window.r60Verify = function() {
         spin('Verifying tables...');
         post(API + '/VerifyTables', {
-            server: gv('r60Server').trim(), database: gv('r60Db'), driver: gv('r60Driver'),
-            studTable: gv('r60StudTable'), auditTable: gv('r60AuditTable'),
-            studKey: gv('r60StudKey') || '_030', auditKey: gv('r60AuditKey') || '_030'
+            clientId: st.clientId,
+            studTable: gv('r60StudTable'), h16Table: gv('r60AuditTable'),
+            studKey: gv('r60StudKey') || '_030', h16Key: gv('r60AuditKey') || '_030'
         }).then(function(d) {
             unspin();
             if (!d.success) { setStatus('r60TableOut', d.error || 'Verification failed.', 'error'); return; }
-            setStatus('r60TableOut', 'dbo_CRSE: ' + fmt(d.studCount) + ' rows | H16CRSE: ' + fmt(d.auditCount) + ' rows', 'success');
+            setStatus('r60TableOut', 'CRSE: ' + fmt(d.studCount) + ' rows | H16CRSE: ' + fmt(d.h16Count) + ' rows', 'success');
         }).catch(function(e) { unspin(); setStatus('r60TableOut', e.message, 'error'); });
     };
 
     function buildReq() {
         return {
             clientId: st.clientId, runId: st.runId,
-            server: gv('r60Server').trim(), database: gv('r60Db'), driver: gv('r60Driver') || 'ODBC Driver 17 for SQL Server',
             studTable:  gv('r60StudTable')  || 'dbo_CRSE',
-            auditTable: gv('r60AuditTable') || 'H16CRSE',
+            h16Table: gv('r60AuditTable') || 'H16CRSE',
             studKey:    gv('r60StudKey')    || '_030',
-            auditKey:   gv('r60AuditKey')   || '_030',
-            pairs: st.pairs.filter(function(p) { return p.studCol && p.auditCol; })
+            h16Key:   gv('r60AuditKey')   || '_030',
+            studSecondaryKey: gv('r60StudKey2')  || null,
+            h16SecondaryKey:  gv('r60AuditKey2') || null,
+            pairs: st.pairs.filter(function(p) { return p.studCol && p.h16Col; })
         };
     }
 
@@ -432,7 +432,10 @@ window.r60Tab = function(tab) {
         }).catch(function(e) { unspin(); alert(e.message); });
     };
 
-    window.r60DlAll = function() { if (st.runId) window.open(API + '/DownloadSavedExcel?runId=' + st.runId, '_blank'); };
+    function r60DownloadSaved(url, filename) {
+        return window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
+    }
+    window.r60DlAll = function() { if (st.runId) r60DownloadSaved(API + '/DownloadSavedExcel?runId=' + st.runId, 'Rule60_Run_' + st.runId + '.xlsx'); };
 
     /* ── Workspace ── */
     window.r60SaveWorkspace = function() {
@@ -542,6 +545,9 @@ window.r60Tab = function(tab) {
     }
 
     function applyWorkspace(ws, resultsVisible) {
+        var datasetsLink = g('r60DatasetsLink');
+        if (datasetsLink) datasetsLink.href = st.clientId ? '/EngagementDatasets?clientId=' + st.clientId : '#';
+
         if (!ws) {
             st.runId = null; st.summary = null; st.isWorkspaceSaved = false;
             st.currentUserHasSignedOff = false; st.resultsVisible = false; st.currentUserEngagementRole = '';
@@ -554,7 +560,9 @@ window.r60Tab = function(tab) {
             var rc  = g('r60RoleLabel');   if (rc)  rc.textContent  = ROLE || '-';
             var sc  = g('r60SignoffComment'); if (sc) sc.value = '';
             st.pairs = DEF_PAIRS.slice(); renderPairs();
-            applySummary(null, false); updateButtons(); return;
+            applySummary(null, false); updateButtons();
+            if (!IS_RESULTS_ONLY) r60LoadTables().catch(function() {});
+            return;
         }
         st.runId = ws.runId || null;
         st.isWorkspaceSaved = !!ws.isWorkspaceSaved;
@@ -564,21 +572,23 @@ window.r60Tab = function(tab) {
         st.hasDataAnalystSignoff = !!ws.hasDataAnalystSignoff;
         st.currentStatus = ws.currentStatus || '';
 
-        if (!IS_RESULTS_ONLY) {
-            var sv = g('r60Server'); if (sv && ws.server) sv.value = ws.server;
-            var dv = g('r60Driver'); if (dv && ws.driver) dv.value = ws.driver;
-            if (ws.database)   fillSel('r60Db',         [ws.database],    ws.database);
-            if (ws.studTable)  fillSel('r60StudTable',  [ws.studTable],   ws.studTable);
-            if (ws.auditTable) fillSel('r60AuditTable', [ws.auditTable],  ws.auditTable);
-            if (ws.studKey)    fillSel('r60StudKey',    [ws.studKey],     ws.studKey);
-            if (ws.auditKey)   fillSel('r60AuditKey',   [ws.auditKey],    ws.auditKey);
-        }
-
         applyWsMeta(ws);
         var sc = g('r60SignoffComment'); if (sc && ws.currentUserSignoffComment) sc.value = ws.currentUserSignoffComment;
 
         st.pairs = (ws.summary && ws.summary.reconc && ws.summary.reconc.pairs && ws.summary.reconc.pairs.length) ? ws.summary.reconc.pairs.slice() : DEF_PAIRS.slice();
-        if (!IS_RESULTS_ONLY) renderPairs();
+
+        if (!IS_RESULTS_ONLY) {
+            r60LoadTables({
+                preferredStudTable: ws.studTable || '',
+                preferredAuditTable: ws.h16Table || '',
+                preferredStudKey: ws.studKey || '',
+                preferredAuditKey: ws.h16Key || '',
+                preferredStudKey2: ws.studSecondaryKey || '',
+                preferredAuditKey2: ws.h16SecondaryKey || '',
+                preservePairs: true,
+                silent: true
+            }).catch(function() {});
+        }
 
         if (!resultsVisible) { setWs('Saved Rule 60 results are not available for your role.', 'info'); applySummary(null, false); updateButtons(); return; }
         if (st.currentUserHasSignedOff) {
@@ -602,10 +612,10 @@ window.r60Tab = function(tab) {
         renderDetails(summary, summary ? summary.reconc : null);
         renderCharts(summary, summary ? summary.reconc : null);
         if (summary && st.runId) {
-            var dlE = g('r60DlExcel');  if (dlE) dlE.onclick = function() { window.open(API + '/DownloadSavedExcel?runId=' + st.runId, '_blank'); };
-            var dlC = g('r60DlCsv');    if (dlC) dlC.onclick = function() { window.open(API + '/DownloadSavedCsv?runId=' + st.runId, '_blank'); };
-            var dlX = g('r60DlExcCsv');if (dlX) dlX.onclick = function() { window.open(API + '/DownloadSavedExceptionsCsv?runId=' + st.runId, '_blank'); };
-            var dlS = g('r60DlSql');    if (dlS) dlS.onclick = function() { window.open(API + '/DownloadSavedSql?runId=' + st.runId, '_blank'); };
+            var dlE = g('r60DlExcel');  if (dlE) dlE.onclick = function() { r60DownloadSaved(API + '/DownloadSavedExcel?runId=' + st.runId, 'Rule60_Run_' + st.runId + '.xlsx'); };
+            var dlC = g('r60DlCsv');    if (dlC) dlC.onclick = function() { r60DownloadSaved(API + '/DownloadSavedCsv?runId=' + st.runId, 'Rule60_Run_' + st.runId + '.csv'); };
+            var dlX = g('r60DlExcCsv');if (dlX) dlX.onclick = function() { r60DownloadSaved(API + '/DownloadSavedExceptionsCsv?runId=' + st.runId, 'Rule60_Exceptions_Run_' + st.runId + '.csv'); };
+            var dlS = g('r60DlSql');    if (dlS) dlS.onclick = function() { r60DownloadSaved(API + '/DownloadSavedSql?runId=' + st.runId, 'Rule60_Run_' + st.runId + '.sql'); };
         }
         updateButtons();
     }
@@ -624,9 +634,8 @@ window.r60Tab = function(tab) {
             statCard('Overall', '<span class="badge ' + sc + '">' + esc(s.status) + '</span>', '') +
             '</div>' +
             '<div class="card" style="padding:16px"><div class="form-grid">' +
-            '<div><div class="stat-label">Database</div><div>' + esc(s.database || '') + '</div></div>' +
             '<div><div class="stat-label">CRSE Table</div><div>' + esc(s.studTable || '') + '</div></div>' +
-            '<div><div class="stat-label">H16CRSE Table</div><div>' + esc(s.auditTable || '') + '</div></div>' +
+            '<div><div class="stat-label">H16CRSE Table</div><div>' + esc(s.h16Table || '') + '</div></div>' +
             '<div><div class="stat-label">Timestamp</div><div>' + esc(s.timestamp || '') + '</div></div>' +
             '<div style="grid-column:1 / -1"><div class="stat-label">Comparison Rule</div><div>Numeric-like values are treated as equal, so <code>05</code> matches <code>5</code> and <code>01</code> matches <code>1</code>.</div></div>' +
             '</div></div>';
@@ -725,7 +734,7 @@ window.r60Tab = function(tab) {
         if (!rows || !rows.length) return '<div class="empty-state"><p>' + emptyMsg + '</p></div>';
         var hdrs = pairs.map(function(p) {
             return '<th style="background:#1565A6">CRSE ' + esc(p.studCol || p.StudCol || '') + '</th>' +
-                   '<th style="background:#0D6E2E">H16CRSE ' + esc(p.auditCol || p.AuditCol || '') + '</th>' +
+                   '<th style="background:#0D6E2E">H16CRSE ' + esc(p.h16Col || p.H16Col || '') + '</th>' +
                    '<th>Match</th>';
         }).join('');
         var body = rows.map(function(r) {
@@ -745,7 +754,7 @@ window.r60Tab = function(tab) {
                 }
                 f = f || {};
                 var sv = f.studValue != null ? f.studValue : (f.StudValue != null ? f.StudValue : '—');
-                var av = f.auditValue != null ? f.auditValue : (f.AuditValue != null ? f.AuditValue : '—');
+                var av = f.h16Value != null ? f.h16Value : (f.H16Value != null ? f.H16Value : '—');
                 var matchVal = f.match || f.Match || 'MISSING';
                 var mi = matchVal === 'AGREE' ? '<span style="color:#1E8449">&#10003;</span>' : matchVal === 'DISAGREE' ? '<span style="color:#C0392B">&#x2717;</span>' : '<span style="color:#E67E22">?</span>';
                 return '<td>' + esc(sv) + '</td><td class="oc">' + esc(av) + '</td><td>' + mi + '</td>';

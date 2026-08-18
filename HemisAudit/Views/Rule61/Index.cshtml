@@ -1,4 +1,4 @@
-﻿@using HemisAudit.Models
+@using HemisAudit.Models
 @{
     ViewData["Title"] = "Rule 61 – Masters & Doctoral Research Time Validation";
     Layout = "~/Views/Shared/_Layout.cshtml";
@@ -53,31 +53,14 @@
         <div class="accordion-stack">
             <div class="accordion-item">
                 <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
-                    <span class="acc-icon">DB</span><span>Database Connection</span><span class="acc-chevron">v</span>
+                    <span class="acc-icon">DB</span><span>Engagement Dataset</span><span class="acc-chevron">v</span>
                 </button>
                 <div class="accordion-body" id="body-connection">
-                    <div class="form-grid">
-                        <div class="field-group">
-                            <label for="server">Server Name</label>
-                            <input id="server" type="text" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                        </div>
-                        <div class="field-group">
-                            <label for="driver">Driver</label>
-                            <select id="driver">
-                                <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                                <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                                <option value="SQL Server">SQL Server</option>
-                            </select>
-                        </div>
-                        <div class="field-group">
-                            <label for="database">Database</label>
-                            <select id="database"></select>
-                        </div>
+                    <div id="connectionOutput" class="status-output"><div class="alert alert--info">Select an engagement above to load its uploaded tables.</div></div>
+                    <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
+                        <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                        <button type="button" class="btn btn-primary" id="refreshTablesBtn">Refresh Tables</button>
                     </div>
-                    <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                        <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
-                    </div>
-                    <div id="connectionOutput" class="status-output"></div>
                 </div>
             </div>
 
@@ -97,15 +80,15 @@
                     <div class="form-grid">
                         <div class="field-group">
                             <label for="studTable">STUD Table</label>
-                            <select id="studTable"></select>
+                            <select id="studTable" onchange="loadCols('stud',this.value)"></select>
                         </div>
                         <div class="field-group">
                             <label for="qualTable">QUAL Table (bridge)</label>
-                            <select id="qualTable"></select>
+                            <select id="qualTable" onchange="loadCols('qual',this.value)"></select>
                         </div>
                         <div class="field-group">
                             <label for="pqmTable">PQM Table</label>
-                            <select id="pqmTable"></select>
+                            <select id="pqmTable" onchange="loadCols('pqm',this.value)"></select>
                         </div>
                         <div class="field-group" style="grid-column:1/-1">
                             <label for="pgTypesText">PG Type Codes (comma-separated)</label>
@@ -123,7 +106,7 @@
                 </button>
                 <div class="accordion-body" id="body-colmap" style="display:none">
                     <div class="alert alert--info" style="margin-bottom:12px">
-                        Map your database column names to the roles Rule 61 requires. Defaults match the standard HEMIS layout. Connect and select tables to auto-populate column lists.
+                        Map your uploaded table's column names to the roles Rule 61 requires. Defaults match the standard HEMIS layout. Select tables above to auto-populate column lists.
                     </div>
                     <div style="font-weight:700;font-size:13px;text-transform:uppercase;color:#555;margin-bottom:8px">STUD Table</div>
                     <div class="form-grid">
@@ -232,7 +215,8 @@
             <button type="button" class="btn btn-info"    id="verifyBtn">Verify Tables</button>
             <button type="button" class="btn btn-success" id="runBtn">Run Rule 61</button>
             <button type="button" class="btn btn-primary" id="sqlBtn">Generate SQL</button>
-                <button type="button" class="btn btn-primary" id="rScriptBtn">Generate R Script</button>
+            <button type="button" class="btn btn-primary" id="rScriptBtn">Generate R Script</button>
+            <button type="button" class="btn btn-warning" id="downloadAllBtn" disabled>Download All</button>
         </div>
     }
 
@@ -242,7 +226,7 @@
             <button class="tab-btn" type="button" data-tab="flagged">FLAGGED</button>
             <button class="tab-btn" type="button" data-tab="clear">CLEAR</button>
             <button class="tab-btn" type="button" data-tab="sql">SQL</button>
-                <button class="tab-btn" type="button" data-tab="rscript">R Code</button>
+            <button class="tab-btn" type="button" data-tab="rscript">R Code</button>
             <button class="tab-btn" type="button" data-tab="downloads">Downloads</button>
         </div>
         <div class="tab-pane active" data-tab-panel="analysis"></div>
@@ -304,9 +288,7 @@ window.toggleAccordion = function(s) {
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server:   document.getElementById('server'),
-        driver:   document.getElementById('driver'),
-        database: document.getElementById('database'),
+        datasetsLink: document.getElementById('datasetsLink'),
         studTable:document.getElementById('studTable'),
         qualTable:document.getElementById('qualTable'),
         pqmTable: document.getElementById('pqmTable'),
@@ -317,6 +299,7 @@ window.toggleAccordion = function(s) {
         flaggedPane:  document.querySelector('[data-tab-panel="flagged"]'),
         clearPane:    document.querySelector('[data-tab-panel="clear"]'),
         sqlText:      document.getElementById('sqlText'),
+        downloadAllBtn: document.getElementById('downloadAllBtn'),
         workspaceInfo:    document.getElementById('workspaceInfo'),
         workspaceRunState: document.getElementById('workspaceRunState'),
         workspaceRunLabel: document.getElementById('workspaceRunLabel'),
@@ -397,9 +380,39 @@ window.toggleAccordion = function(s) {
         set(els.cm_pqmResearchTimeCol, cm.pqmResearchTimeCol, 'Research_1');
     }
 
-    function populateColumnSelect(selectEl, columns, current, def) {
+    async function postJson(url, payload) {
+        const r = await window.fetchJsonWithProgress(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': token },
+            body: JSON.stringify(payload)
+        });
+        return r;
+    }
+
+    // Each mapped field is auto-detected against the table's real, uploaded column names via a
+    // per-role fuzzy match on the server (GetColumnsAsync).
+    const colRoleMap = {
+        stud: [
+            [els.cm_studStudentNoCol,    'stud_student_no',    '_007'],
+            [els.cm_studQualCodeCol,     'stud_qual_code',     '_001'],
+            [els.cm_studIdCol,           'stud_id',            '_008'],
+            [els.cm_studResearchTimeCol, 'stud_research_time', '_073'],
+            [els.cm_studStatusCol,       'stud_status',        '_010']
+        ],
+        qual: [
+            [els.cm_qualQualCodeCol, 'qual_qual_code', '_001'],
+            [els.cm_qualNameCol,     'qual_name',       '_003'],
+            [els.cm_qualTypeCol,     'qual_type',       '_005']
+        ],
+        pqm: [
+            [els.cm_pqmNameCol,         'pqm_name',          'Authorised_Qualification_Name'],
+            [els.cm_pqmResearchTimeCol, 'pqm_research_time', 'Research_1']
+        ]
+    };
+
+    function populateColumnSelect(selectEl, columns, selected, def) {
         if (!selectEl) return;
-        const val = current || selectEl.value || def;
+        const val = selected || def;
         const all = [...new Set([def, ...(columns || [])])].filter(Boolean);
         selectEl.innerHTML = '';
         all.forEach(c => {
@@ -415,25 +428,26 @@ window.toggleAccordion = function(s) {
         }
     }
 
-    async function loadColumnsForTable(tableName, groups) {
-        if (!tableName || !els.server?.value?.trim() || !els.database?.value) return;
-        try {
-            const data = await postJson(`${apiBase}/GetColumns`, {
-                server: els.server.value.trim(), database: els.database.value,
-                driver: els.driver?.value || 'ODBC Driver 17 for SQL Server', tableName
-            });
-            if (!data?.success || !Array.isArray(data.columns)) return;
-            groups.forEach(({ selectEl, def }) => populateColumnSelect(selectEl, data.columns, null, def));
-        } catch {}
+    async function loadCols(role, tableName) {
+        if (!tableName || !state.clientId) return;
+        let loadedAny = false;
+        for (const [selEl, tableRole, fallback] of (colRoleMap[role] || [])) {
+            if (!selEl) continue;
+            try {
+                const data = await postJson(`${apiBase}/GetColumns`, { clientId: state.clientId, tableName, tableRole });
+                if (!data?.success || !data.columns) continue;
+                populateColumnSelect(selEl, data.columns, data.autoSelected, fallback);
+                loadedAny = true;
+            } catch (e) { /* leave this field's dropdown as-is */ }
+        }
+        if (loadedAny) els.configOutput.innerHTML = `<div class="alert alert--success">Columns loaded for ${esc(tableName)}.</div>`;
     }
+    window.loadCols = function(role, tbl) { loadCols(role, tbl); };
 
     function getRequest() {
         return {
-            clientId:     Number(els.clientId?.value || state.clientId || 0),
+            clientId:     state.clientId,
             runId:        state.currentRunId,
-            server:       els.server?.value?.trim() || '',
-            database:     els.database?.value || '',
-            driver:       els.driver?.value || 'ODBC Driver 17 for SQL Server',
             studTable:    els.studTable?.value || '',
             qualTable:    els.qualTable?.value || '',
             pqmTable:     els.pqmTable?.value || '',
@@ -445,21 +459,29 @@ window.toggleAccordion = function(s) {
 
     function populateSelect(sel, items, selected) {
         if (!sel) return;
-        sel.innerHTML = '';
-        items.forEach(item => {
+        sel.innerHTML = '<option value="">Select table</option>';
+        (items || []).forEach(item => {
             const o = document.createElement('option');
             o.value = item; o.textContent = item;
             if (selected && selected === item) o.selected = true;
             sel.appendChild(o);
         });
+        if (selected && !(items || []).includes(selected)) {
+            const o = document.createElement('option');
+            o.value = selected; o.textContent = selected; o.selected = true;
+            sel.appendChild(o);
+        }
     }
 
+    // Rule 61 selects a sample for auditors to test manually — it never renders its own
+    // pass/fail verdict, so this always shows a neutral "Sample Selected" label rather than
+    // coloring the badge off the internal match/no-match result.
     function setStatusBadge(status) {
         if (!els.statusBadge) return;
         if (!status) { els.statusBadge.style.display = 'none'; return; }
         els.statusBadge.style.display = '';
-        els.statusBadge.textContent = status;
-        els.statusBadge.className = `rule-header__badge ${String(status).toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail'}`;
+        els.statusBadge.textContent = 'Sample Selected';
+        els.statusBadge.className = 'rule-header__badge badge--neutral';
     }
 
     function setWorkspaceState(msg, type) {
@@ -481,7 +503,7 @@ window.toggleAccordion = function(s) {
         window.ruleWorkspaceUi?.setReadonlyShell('app', !canEdit || signed);
         window.ruleWorkspaceUi?.setFormSectionReadonly('.accordion-stack', !canEdit || signed);
         window.ruleWorkspaceUi?.applyStates([
-            { target: 'connectBtn',          disabled: !canEdit || signed },
+            { target: 'refreshTablesBtn',    disabled: !canEdit || signed },
             { target: 'verifyBtn',           disabled: !canEdit || signed },
             { target: 'runBtn',              disabled: !canEdit || signed },
             { target: 'sqlBtn',              disabled: !canEdit || signed },
@@ -490,7 +512,8 @@ window.toggleAccordion = function(s) {
             { target: els.signoffBtn,        disabled: signed || !canSign,
               text: signed ? `Signed Off as ${role || currentSystemRole}` : 'Save Signoff' },
             { target: els.removeSignoffBtn,  show: signed, display: '', disabled: !signed },
-            { target: els.workspaceSignoffComment, disabled: signed || !canSign }
+            { target: els.workspaceSignoffComment, disabled: signed || !canSign },
+            { target: els.downloadAllBtn,    disabled: !state.summary }
         ]);
         window.ruleWorkspaceUi?.setButtonGroupReadonly(['.workspace-signoff-actions', '.action-bar'], signed, {
             allow: ['#downloadExcelBtn', '#downloadCsvBtn', '#downloadSqlBtn', '#removeSignoffBtn']
@@ -499,7 +522,7 @@ window.toggleAccordion = function(s) {
     }
 
     function applyWorkspaceAccessMode(canEditWorkspace) {
-        ['body-connection', 'body-config'].forEach(function(id) {
+        ['body-connection', 'body-config', 'body-colmap'].forEach(function(id) {
             var body = document.getElementById(id);
             if (!body) return;
             body.style.opacity = canEditWorkspace ? '' : '0.45';
@@ -510,9 +533,7 @@ window.toggleAccordion = function(s) {
         });
     }
 
-    function renderRow(row, badgeClass) {
-        const result = String(row.validationResult || '').toUpperCase();
-        const badge  = result === 'PASS' ? 'badge--pass' : result === 'FAIL' ? 'badge--fail' : 'badge--neutral';
+    function renderRow(row) {
         return `<tr>
             <td>${esc(row.studentNo)}</td>
             <td>${esc(row.qualCode)}</td>
@@ -524,7 +545,7 @@ window.toggleAccordion = function(s) {
             <td>${esc(row.qualName)}</td>
             <td>${row.pqmName ? esc(row.pqmName) : '<span style="color:#888;font-style:italic">Not found in PQM</span>'}</td>
             <td style="text-align:center;font-weight:700">${esc(row.pqmResearchTime)}</td>
-            <td style="text-align:center"><span class="badge ${badge}">${esc(row.validationResult)}</span></td>
+            <td style="text-align:center"><span class="badge badge--neutral">Sample Selected</span></td>
             <td style="font-size:11px">${esc(row.validationExplanation)}</td>
         </tr>`;
     }
@@ -543,7 +564,6 @@ window.toggleAccordion = function(s) {
 
     function renderAnalysis(summary) {
         if (!summary) { els.analysisPane.innerHTML = '<div class="empty-card"><p>No Rule 61 results loaded.</p></div>'; return; }
-        const statusClass = String(summary.status).toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail';
         els.analysisPane.innerHTML = `
             <div class="stats-grid" style="margin-bottom:20px">
                 <div class="stat-card"><div class="stat-card__label">Total Students</div><div class="stat-card__value">${fmt(summary.totalCount)}</div></div>
@@ -554,16 +574,21 @@ window.toggleAccordion = function(s) {
             </div>
             <div class="card" style="padding:20px">
                 <div class="form-grid" style="margin-bottom:16px">
-                    <div><div class="stat-label">Database</div><div>${esc(summary.database)}</div></div>
                     <div><div class="stat-label">Tables</div><div>STUD: ${esc(summary.studTable)} | QUAL: ${esc(summary.qualTable)} | PQM: ${esc(summary.pqmTable)}</div></div>
-                    <div><div class="stat-label">Status</div><div><span class="badge ${statusClass}">${esc(summary.status)}</span></div></div>
+                    <div><div class="stat-label">Status</div><div><span class="badge badge--neutral">Sample Selected</span></div></div>
                     <div><div class="stat-label">Exception Rate</div><div>${esc(String(summary.exceptionRate))}%</div></div>
                     <div><div class="stat-label">Student Status Filter</div><div>${esc(formatInFilter(`STUD.${summary.columnMapping?.studStatusCol || '_010'}`, summary.studStatusValue || 'N'))}</div></div>
                     <div><div class="stat-label">PG Types Filter</div><div>${esc(summary.pgTypesText)}</div></div>
                     <div><div class="stat-label">Timestamp</div><div>${esc(summary.timestamp)}</div></div>
                 </div>
-                ${summary.isPreviewOnly ? `<div class="alert alert--warning">Browser preview is limited to the first ${fmt(summary.previewLimit)} exception rows and ${fmt(summary.previewLimit)} pass rows. Download for the full result set.</div>` : ''}
+                ${summary.warning ? `<div class="alert alert--warning">${esc(summary.warning)}</div>` : ''}
             </div>`;
+    }
+
+    function previewNote(rows) {
+        return rows.length > 10
+            ? `<div class="alert alert--info" style="margin-bottom:12px">Showing preview (first 10 rows) — see stat cards above for full counts. Download for full results.</div>`
+            : '';
     }
 
     function renderFlagged(summary) {
@@ -571,10 +596,10 @@ window.toggleAccordion = function(s) {
         const rows = summary.failRows || [];
         els.flaggedPane.innerHTML = `
             <div class="card" style="padding:16px;margin-bottom:12px">
-                <strong>FLAGGED Rows</strong> — ${fmt(summary.failCount)} FAIL row(s) + ${fmt(summary.missingPqmCount)} row(s) with no PQM record.
-                ${summary.isPreviewOnly ? ` <span class="badge badge--neutral">Preview limited to ${fmt(summary.previewLimit)} rows</span>` : ''}
+                <strong>FLAGGED Rows</strong> — ${fmt(summary.failCount)} FAIL row(s) + ${fmt(summary.missingPqmCount)} row(s) with no PQM record.
             </div>
-            ${tableHtml(rows, 'No flagged rows — all Masters/Doctoral students passed the research time check.')}`;
+            ${previewNote(rows)}
+            ${tableHtml(rows.slice(0, 10), 'No flagged rows — all Masters/Doctoral students passed the research time check.')}`;
     }
 
     function renderClear(summary) {
@@ -582,10 +607,10 @@ window.toggleAccordion = function(s) {
         const rows = summary.passRows || [];
         els.clearPane.innerHTML = `
             <div class="card" style="padding:16px;margin-bottom:12px">
-                <strong>CLEAR Rows</strong> — ${fmt(summary.passCount)} student(s) where QUAL._003 matches PQM.Authorised_Qualification_Name and STUD._073 agrees with PQM.Research_1.
-                ${rows.length < summary.passCount ? ` <span class="badge badge--neutral">Sample of ${fmt(rows.length)} shown</span>` : ''}
+                <strong>CLEAR Rows</strong> — ${fmt(summary.passCount)} student(s) where QUAL._003 matches PQM.Authorised_Qualification_Name and STUD._073 agrees with PQM.Research_1.
             </div>
-            ${tableHtml(rows, 'No clear rows in this run.')}`;
+            ${previewNote(rows)}
+            ${tableHtml(rows.slice(0, 10), 'No clear rows in this run.')}`;
     }
 
     function applySummary(summary, opts = {}) {
@@ -606,6 +631,8 @@ window.toggleAccordion = function(s) {
     }
 
     function applyWorkspace(workspace, resultsVisible, preserveExisting = false) {
+        if (els.datasetsLink) els.datasetsLink.href = state.clientId ? '/EngagementDatasets?clientId=' + state.clientId : '#';
+
         if (!workspace) {
             state.currentRunId = null; state.currentStatus = ''; state.currentUserEngagementRole = '';
             state.currentUserHasSignedOff = false; state.isWorkspaceSaved = false;
@@ -615,7 +642,9 @@ window.toggleAccordion = function(s) {
             els.workspaceRunLabel.textContent  = 'No saved run yet';
             els.workspaceStatusLabel.textContent = '-';
             els.workspaceEditedLabel.textContent = '-';
-            applySummary(null); updateWorkspaceButtons(); return;
+            applySummary(null); updateWorkspaceButtons();
+            if (state.clientId) loadTables().catch(() => {});
+            return;
         }
 
         state.clientId = workspace.clientId || state.clientId;
@@ -627,13 +656,6 @@ window.toggleAccordion = function(s) {
         state.hasDataAnalystSignoff = !!workspace.hasDataAnalystSignoff;
         state.resultsVisible = !!resultsVisible;
 
-        if (els.server) els.server.value = workspace.server || '';
-        if (els.driver) els.driver.value = workspace.driver || 'ODBC Driver 17 for SQL Server';
-        if (els.database) populateSelect(els.database, workspace.database ? [workspace.database] : [], workspace.database);
-        if (els.studTable) populateSelect(els.studTable, workspace.studTable ? [workspace.studTable] : [], workspace.studTable);
-        if (els.qualTable) populateSelect(els.qualTable, workspace.qualTable ? [workspace.qualTable] : [], workspace.qualTable);
-        if (els.pqmTable)  populateSelect(els.pqmTable,  workspace.pqmTable  ? [workspace.pqmTable]  : [], workspace.pqmTable);
-        if (els.cm_studStatusCol) populateSelect(els.cm_studStatusCol, workspace.columnMapping?.studStatusCol ? [workspace.columnMapping.studStatusCol] : [], workspace.columnMapping?.studStatusCol || '_010');
         if (els.cm_studStatusValue) els.cm_studStatusValue.value = workspace.studStatusValue || 'N';
         if (els.pgTypesText) els.pgTypesText.value = workspace.pgTypesText || defaultPgTypes;
         if (workspace.columnMapping) restoreColumnMapping(workspace.columnMapping);
@@ -644,6 +666,12 @@ window.toggleAccordion = function(s) {
         els.workspaceEditedLabel.textContent = workspace.lastEditedAt ? new Date(workspace.lastEditedAt).toLocaleString() : '-';
         els.workspaceRoleLabel.textContent   = workspace.currentUserEngagementRole || currentSystemRole || '-';
         els.workspaceSignoffComment.value    = workspace.currentUserSignoffComment || '';
+
+        loadTables({
+            preferredStudTable: workspace.studTable || '',
+            preferredQualTable: workspace.qualTable || '',
+            preferredPqmTable:  workspace.pqmTable  || ''
+        }).catch(() => {});
 
         if (!resultsVisible) {
             setWorkspaceState('Saved Rule 61 results are not available for your engagement role.', 'info');
@@ -656,15 +684,6 @@ window.toggleAccordion = function(s) {
         if (workspace.summary) applySummary(workspace.summary, { fromWorkspace: true });
         else if (!preserveExisting) applySummary(null);
         else updateWorkspaceButtons();
-    }
-
-    async function postJson(url, payload) {
-        const r = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': token },
-            body: JSON.stringify(payload)
-        });
-        return await r.json();
     }
 
     async function downloadBlob(url, payload, fileName) {
@@ -692,51 +711,27 @@ window.toggleAccordion = function(s) {
     async function loadWorkspace() {
         state.clientId = Number(els.clientId?.value || 0);
         if (!state.clientId) { applyWorkspace(null, false); return; }
-        const r = await fetch(`${apiBase}/GetWorkspaceState?clientId=${state.clientId}`, { method: 'GET' });
-        const data = await r.json();
+        const data = await window.fetchJsonWithProgress(`${apiBase}/GetWorkspaceState?clientId=${state.clientId}`, { method: 'GET' });
         if (!data.success) throw new Error(data.error || 'Failed to load workspace.');
         applyWorkspace(data.workspace, data.resultsVisible);
     }
 
-    async function connect() {
-        const server = els.server?.value?.trim();
-        if (!server) throw new Error('Enter the SQL Server name first.');
-        showSpinner('Loading databases...');
+    async function loadTables(opts = {}) {
+        if (!state.clientId) return;
+        showSpinner('Loading tables...');
         try {
-            const data = await postJson(`${apiBase}/GetDatabases`, { server, driver: els.driver.value });
-            if (!data.success) throw new Error(data.error || 'Failed to load databases.');
-            populateSelect(els.database, data.databases || []);
-            els.connectionOutput.innerHTML = `<div class="alert alert--success">Loaded ${(data.databases || []).length} database(s).</div>`;
-            if ((data.databases || []).length) await loadTables();
+            const data = await postJson(`${apiBase}/GetTables`, { clientId: state.clientId });
+            if (!data.success) throw new Error(data.error || 'Could not load tables.');
+            populateSelect(els.studTable, data.tables || [], opts.preferredStudTable || data.autoStudTable);
+            populateSelect(els.qualTable, data.tables || [], opts.preferredQualTable || data.autoQualTable);
+            populateSelect(els.pqmTable,  data.tables || [], opts.preferredPqmTable  || data.autoPqmTable);
+            els.connectionOutput.innerHTML = `<div class="alert alert--success">Loaded ${(data.tables || []).length} table(s) from this engagement's dataset.</div>`;
+            await Promise.all([
+                loadCols('stud', els.studTable?.value),
+                loadCols('qual', els.qualTable?.value),
+                loadCols('pqm',  els.pqmTable?.value)
+            ]);
         } finally { hideSpinner(); }
-    }
-
-    async function loadTables() {
-        if (!els.database?.value) return;
-        const data = await postJson(`${apiBase}/GetTables`, { server: els.server.value.trim(), database: els.database.value, driver: els.driver.value });
-        if (!data.success) throw new Error(data.error || 'Failed to load tables.');
-        populateSelect(els.studTable, data.tables || [], data.autoStudTable);
-        populateSelect(els.qualTable, data.tables || [], data.autoQualTable);
-        populateSelect(els.pqmTable,  data.tables || [], data.autoPqmTable);
-        els.configOutput.innerHTML = `<div class="alert alert--success">Loaded ${(data.tables || []).length} table(s).</div>`;
-        await Promise.all([
-            loadColumnsForTable(els.studTable?.value, [
-                { selectEl: els.cm_studStudentNoCol,   def: '_007' },
-                { selectEl: els.cm_studQualCodeCol,    def: '_001' },
-                { selectEl: els.cm_studIdCol,          def: '_008' },
-                { selectEl: els.cm_studResearchTimeCol, def: '_073' },
-                { selectEl: els.cm_studStatusCol,       def: '_010' }
-            ]),
-            loadColumnsForTable(els.qualTable?.value, [
-                { selectEl: els.cm_qualQualCodeCol, def: '_001' },
-                { selectEl: els.cm_qualNameCol,     def: '_003' },
-                { selectEl: els.cm_qualTypeCol,     def: '_005' }
-            ]),
-            loadColumnsForTable(els.pqmTable?.value, [
-                { selectEl: els.cm_pqmNameCol,         def: 'Authorised_Qualification_Name' },
-                { selectEl: els.cm_pqmResearchTimeCol, def: 'Research_1' }
-            ])
-        ]);
     }
 
     async function verifyTables() {
@@ -745,7 +740,7 @@ window.toggleAccordion = function(s) {
             const data = await postJson(`${apiBase}/VerifyTables`, getRequest());
             if (!data.success) throw new Error(data.error || 'Verification failed.');
             els.configOutput.innerHTML = `<div class="alert alert--success">
-                Filtered STUDÃƒÆ’—QUAL rows (${esc(formatInFilter(`STUD.${els.cm_studStatusCol?.value || '_010'}`, els.cm_studStatusValue?.value || 'N'))}): <strong>${fmt(data.mastersDoctCount)}</strong> &nbsp;|&nbsp;
+                Filtered STUD/QUAL rows (${esc(formatInFilter(`STUD.${els.cm_studStatusCol?.value || '_010'}`, els.cm_studStatusValue?.value || 'N'))}): <strong>${fmt(data.mastersDoctCount)}</strong> &nbsp;|&nbsp;
                 PQM rows: <strong>${fmt(data.pqmCount)}</strong>
             </div>`;
         } finally { hideSpinner(); }
@@ -776,17 +771,16 @@ window.toggleAccordion = function(s) {
             setActiveTab('sql');
         } finally { hideSpinner(); }
     }
+
     async function generateRScript() {
         showSpinner('Generating R script...');
         try {
-            const data = await postJson(`${apiBasePath}/GenerateRScript`, getRequest());
+            const data = await postJson(`${apiBase}/GenerateRScript`, getRequest());
             if (!data.success) throw new Error(data.error || 'R script generation failed.');
             const pane = document.getElementById('rscriptPane');
-            pane.innerHTML = `<div style="padding:8px 0 8px"><button class="btn btn-sm btn-primary" onclick="(function(){const e=document.getElementById('rCode');if(e)navigator.clipboard.writeText(e.textContent)})()">Copy</button></div><pre id="rCode" style="white-space:pre-wrap;font-family:monospace;font-size:12px;padding:12px;overflow:auto;max-height:600px">${escapeHtml(data.sql)}</pre>`;
+            pane.innerHTML = `<div style="padding:8px 0 8px"><button class="btn btn-sm btn-primary" onclick="(function(){const e=document.getElementById('rCode');if(e)navigator.clipboard.writeText(e.textContent)})()">Copy</button></div><pre id="rCode" style="white-space:pre-wrap;font-family:monospace;font-size:12px;padding:12px;overflow:auto;max-height:600px">${esc(data.sql)}</pre>`;
             setActiveTab('rscript');
-        } finally {
-            hideSpinner();
-        }
+        } finally { hideSpinner(); }
     }
 
     async function saveWorkspace() {
@@ -813,7 +807,7 @@ window.toggleAccordion = function(s) {
         showSpinner('Saving signoff...');
         try {
             const data = await postJson(`${apiBase}/SignOffWorkspace`, {
-                clientId: Number(els.clientId.value || 0), runId: state.currentRunId, comment: els.workspaceSignoffComment.value || ''
+                clientId: state.clientId, runId: state.currentRunId, comment: els.workspaceSignoffComment.value || ''
             });
             if (!data.success) throw new Error(data.error || 'Signoff failed.');
             state.currentUserHasSignedOff = true;
@@ -826,7 +820,7 @@ window.toggleAccordion = function(s) {
         showSpinner('Removing signoff...');
         try {
             const data = await postJson(`${apiBase}/RemoveWorkspaceSignoff`, {
-                clientId: Number(els.clientId.value || 0), runId: state.currentRunId, comment: ''
+                clientId: state.clientId, runId: state.currentRunId, comment: ''
             });
             if (!data.success) throw new Error(data.error || 'Signoff removal failed.');
             state.currentUserHasSignedOff = false; state.isWorkspaceSaved = false;
@@ -835,12 +829,10 @@ window.toggleAccordion = function(s) {
         } finally { hideSpinner(); }
     }
 
-    document.getElementById('connectBtn')?.addEventListener('click', () => connect().catch(err => { hideSpinner(); els.connectionOutput.innerHTML = `<div class="alert alert--error">${esc(err.message)}</div>`; }));
-    els.database?.addEventListener('change',   () => loadTables().catch(err => { els.configOutput.innerHTML = `<div class="alert alert--error">${esc(err.message)}</div>`; }));
+    document.getElementById('refreshTablesBtn')?.addEventListener('click', () => loadTables().catch(err => { hideSpinner(); els.connectionOutput.innerHTML = `<div class="alert alert--error">${esc(err.message)}</div>`; }));
     document.getElementById('verifyBtn')?.addEventListener('click', () => verifyTables().catch(err => { hideSpinner(); els.configOutput.innerHTML = `<div class="alert alert--error">${esc(err.message)}</div>`; }));
     document.getElementById('runBtn')?.addEventListener('click',    () => runValidation().catch(err => { hideSpinner(); setWorkspaceState(err.message, 'error'); }));
-    document.getElementById('sqlBtn')?.addEventListener('click',    () => generateSql().catch(err  => { hideSpinner(); els.sqlText.value = err.message; }))
-    document.getElementById('rScriptBtn')?.addEventListener('click', () => generateRScript().catch(err => setWorkspaceState(err.message, 'error')));;
+    document.getElementById('sqlBtn')?.addEventListener('click',    () => generateSql().catch(err  => { hideSpinner(); els.sqlText.value = err.message; }));
     document.getElementById('rScriptBtn')?.addEventListener('click', () => generateRScript().catch(err => setWorkspaceState(err.message, 'error')));
     document.getElementById('saveWorkspaceBtn')?.addEventListener('click', () => saveWorkspace().catch(err => { hideSpinner(); setWorkspaceState(err.message, 'error'); }));
     document.getElementById('beginEditBtn')?.addEventListener('click',     () => beginEdit().catch(err    => { hideSpinner(); setWorkspaceState(err.message, 'error'); }));
@@ -849,44 +841,28 @@ window.toggleAccordion = function(s) {
 
     document.getElementById('downloadExcelBtn')?.addEventListener('click', () => {
         const payload = getSummaryDownloadPayload();
-        if (!payload) {
-            setWorkspaceState('Run Rule 61 first to download the result set.', 'warning');
-            return;
-        }
+        if (!payload) { setWorkspaceState('Run Rule 61 first to download the result set.', 'warning'); return; }
         downloadBlob(`${apiBase}/DownloadExcel`, payload, 'Rule61_Research_Time.xlsx').catch(err => setWorkspaceState(err.message, 'error'));
     });
     document.getElementById('downloadCsvBtn')?.addEventListener('click', () => {
         const payload = getSummaryDownloadPayload();
-        if (!payload) {
-            setWorkspaceState('Run Rule 61 first to download the result set.', 'warning');
-            return;
-        }
+        if (!payload) { setWorkspaceState('Run Rule 61 first to download the result set.', 'warning'); return; }
         downloadBlob(`${apiBase}/DownloadCsv`, payload, 'Rule61_Research_Time.csv').catch(err => setWorkspaceState(err.message, 'error'));
     });
     document.getElementById('downloadSqlBtn')?.addEventListener('click',   () => downloadBlob(`${apiBase}/DownloadSql`, getRequest(), 'Rule61_Research_Time.sql').catch(err => setWorkspaceState(err.message, 'error')));
+    document.getElementById('downloadAllBtn')?.addEventListener('click', async () => {
+        if (!state.currentRunId) { setWorkspaceState('Save the workspace before downloading.', 'warning'); return; }
+        const id = state.currentRunId;
+        const dl = (url, filename) => window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
+        await dl(`${apiBase}/DownloadSavedExcel?runId=${id}`, `Rule61_Run_${id}.xlsx`);
+        await dl(`${apiBase}/DownloadSavedCsv?runId=${id}`, `Rule61_Run_${id}.csv`);
+        await dl(`${apiBase}/DownloadSavedSql?runId=${id}`, `Rule61_Run_${id}.sql`);
+    });
 
     els.clientId?.addEventListener('change', () => loadWorkspace().catch(err => setWorkspaceState(err.message, 'error')));
 
     renderAnalysis(null); renderFlagged(null); renderClear(null); updateWorkspaceButtons();
     if (state.clientId) loadWorkspace().catch(err => setWorkspaceState(err.message, 'error'));
     else if (isResultsOnlyRole) setWorkspaceState('Select an engagement to load the saved Rule 61 results.', 'info');
-        const __ruleRApiBase = typeof apiBasePath !== 'undefined'
-        ? apiBasePath
-        : (typeof apiBase !== 'undefined'
-            ? apiBase
-            : (typeof API !== 'undefined'
-                ? API
-                : ((window.location.pathname.match(/^\/Rule\d+/i) || [null])[0])));
-    const __ruleRRequestBuilder = typeof getRequest === 'function' ? getRequest : (typeof buildRequest === 'function' ? buildRequest : (typeof buildReq === 'function' ? buildReq : null));
-    const __ruleRPost = typeof postJson === 'function' ? postJson : (typeof post === 'function' ? post : null);
-    if (__ruleRApiBase && __ruleRRequestBuilder && __ruleRPost && window.ruleRScriptUi) {
-        window.ruleRScriptUi.install({
-            apiBase: __ruleRApiBase,
-            requestBuilder: __ruleRRequestBuilder,
-            postJson: __ruleRPost,
-            showSpinner: typeof showSpinner === 'function' ? showSpinner : (typeof spin === 'function' ? spin : null),
-            hideSpinner: typeof hideSpinner === 'function' ? hideSpinner : (typeof unspin === 'function' ? unspin : null)
-        });
-    }
 })();
 </script>

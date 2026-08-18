@@ -91,16 +91,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule44.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule44.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule44.GetTablesAsync(model.Server, model.Database, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] Rule44GetColumnsRequest request) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule44.GetColumnsAsync(request.Server, request.Database, request.Driver, request.TableName)));
+        public async Task<IActionResult> GetColumns([FromBody] Rule44GetColumnsRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule44.GetColumnsAsync(model.ClientId, model.TableName, model.TableRole)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule44VerifyRequest request) =>
@@ -229,21 +225,23 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public IActionResult DownloadExcel([FromBody] Rule44ValidationSummary summary)
+        public async Task<IActionResult> DownloadExcel([FromBody] Rule44ValidationSummary summary)
         {
             if (summary == null)
                 return BadRequest("Rule 44 summary payload is required.");
-            var bytes = BuildExcelExport(summary);
+            var full = await ResolveFullSummaryAsync(summary);
+            var bytes = BuildExcelExport(full);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule44_Research_Time_{Ts()}.xlsx");
         }
 
         [HttpPost]
-        public IActionResult DownloadCsv([FromBody] Rule44ValidationSummary summary)
+        public async Task<IActionResult> DownloadCsv([FromBody] Rule44ValidationSummary summary)
         {
             if (summary == null)
                 return BadRequest("Rule 44 summary payload is required.");
-            var bytes = BuildCsvExport(summary);
+            var full = await ResolveFullSummaryAsync(summary);
+            var bytes = BuildCsvExport(full);
             return File(bytes, "text/csv", $"Rule44_Research_Time_{Ts()}.csv");
         }
 
@@ -255,7 +253,55 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule44_Research_Time_{Ts()}.sql");
         }
 
-        // â”€â”€ Private helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedExcel(int runId)
+        {
+            var stored = await _rule44.GetStoredSummaryAsync(runId);
+            if (stored == null) return NotFound();
+            var bytes = BuildExcelExport(stored);
+            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule44_Research_Time_Run_{runId}.xlsx");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedCsv(int runId)
+        {
+            var stored = await _rule44.GetStoredSummaryAsync(runId);
+            if (stored == null) return NotFound();
+            var bytes = BuildCsvExport(stored);
+            return File(bytes, "text/csv", $"Rule44_Research_Time_Run_{runId}.csv");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedSql(int runId)
+        {
+            var stored = await _rule44.GetStoredSummaryAsync(runId);
+            if (stored == null) return NotFound();
+            var sql = _rule44.GenerateSql(new Rule44ValidationRequest
+            {
+                ClientId = stored.ClientId,
+                StudTable = stored.StudTable,
+                QualTable = stored.QualTable,
+                PqmTable = stored.PqmTable,
+                PgTypesText = stored.PgTypesText,
+                ColumnMapping = stored.ColumnMapping
+            });
+            var bytes = System.Text.Encoding.UTF8.GetBytes(sql);
+            return File(bytes, "application/sql", $"Rule44_Research_Time_Run_{runId}.sql");
+        }
+
+        // The browser only ever holds the 10-row UI sample - resolve the full stored population
+        // (via SavedRunId) for exports so Excel/CSV always contain the complete tested population.
+        private async Task<Rule44ValidationSummary> ResolveFullSummaryAsync(Rule44ValidationSummary summary)
+        {
+            if (summary.SavedRunId is int runId && runId > 0)
+            {
+                var stored = await _rule44.GetStoredSummaryAsync(runId);
+                if (stored != null) return stored;
+            }
+            return summary;
+        }
+
+        // ── Private helpers ─────────────────────────────────────────────────
 
         private static string Ts() => DateTime.Now.ToString("yyyyMMdd_HHmmss");
 
@@ -265,31 +311,29 @@ namespace HemisAudit.Controllers
 
             var summarySheet = workbook.Worksheets.Add("Summary");
             summarySheet.Cell(1, 1).Value = "HEMIS RULE 44 - Masters/PhD Research Time Validation";
-            summarySheet.Cell(2, 1).Value = "Database";
-            summarySheet.Cell(2, 2).Value = summary.Database;
-            summarySheet.Cell(3, 1).Value = "Timestamp";
-            summarySheet.Cell(3, 2).Value = summary.Timestamp;
-            summarySheet.Cell(4, 1).Value = "STUD Table";
-            summarySheet.Cell(4, 2).Value = summary.StudTable;
-            summarySheet.Cell(5, 1).Value = "QUAL Table";
-            summarySheet.Cell(5, 2).Value = summary.QualTable;
-            summarySheet.Cell(6, 1).Value = "PQM Table";
-            summarySheet.Cell(6, 2).Value = summary.PqmTable;
-            summarySheet.Cell(7, 1).Value = "PG Types";
-            summarySheet.Cell(7, 2).Value = summary.PgTypesText;
-            summarySheet.Cell(8, 1).Value = "Total";
-            summarySheet.Cell(8, 2).Value = summary.TotalCount;
-            summarySheet.Cell(8, 3).Value = "Pass";
-            summarySheet.Cell(8, 4).Value = summary.PassCount;
-            summarySheet.Cell(8, 5).Value = "Fail";
-            summarySheet.Cell(8, 6).Value = summary.FailCount;
-            summarySheet.Cell(8, 7).Value = "Missing PQM";
-            summarySheet.Cell(8, 8).Value = summary.MissingPqmCount;
-            summarySheet.Cell(8, 9).Value = "Exception Rate";
-            summarySheet.Cell(8, 10).Value = $"{summary.ExceptionRate:0.00}%";
+            summarySheet.Cell(2, 1).Value = "Timestamp";
+            summarySheet.Cell(2, 2).Value = summary.Timestamp;
+            summarySheet.Cell(3, 1).Value = "STUD Table";
+            summarySheet.Cell(3, 2).Value = summary.StudTable;
+            summarySheet.Cell(4, 1).Value = "QUAL Table";
+            summarySheet.Cell(4, 2).Value = summary.QualTable;
+            summarySheet.Cell(5, 1).Value = "PQM Table";
+            summarySheet.Cell(5, 2).Value = summary.PqmTable;
+            summarySheet.Cell(6, 1).Value = "PG Types";
+            summarySheet.Cell(6, 2).Value = summary.PgTypesText;
+            summarySheet.Cell(7, 1).Value = "Total";
+            summarySheet.Cell(7, 2).Value = summary.TotalCount;
+            summarySheet.Cell(7, 3).Value = "Pass";
+            summarySheet.Cell(7, 4).Value = summary.PassCount;
+            summarySheet.Cell(7, 5).Value = "Fail";
+            summarySheet.Cell(7, 6).Value = summary.FailCount;
+            summarySheet.Cell(7, 7).Value = "Missing PQM";
+            summarySheet.Cell(7, 8).Value = summary.MissingPqmCount;
+            summarySheet.Cell(7, 9).Value = "Exception Rate";
+            summarySheet.Cell(7, 10).Value = $"{summary.ExceptionRate:0.00}%";
             summarySheet.Cell(1, 1).Style.Font.Bold = true;
             summarySheet.Cell(1, 1).Style.Font.FontSize = 14;
-            foreach (var cellAddress in new[] { "A2", "A3", "A4", "A5", "A6", "A7", "A8", "C8", "E8", "G8", "I8" })
+            foreach (var cellAddress in new[] { "A2", "A3", "A4", "A5", "A6", "A7", "C7", "E7", "G7", "I7" })
             {
                 summarySheet.Cell(cellAddress).Style.Font.Bold = true;
             }
@@ -308,8 +352,7 @@ namespace HemisAudit.Controllers
         {
             using var ms = new System.IO.MemoryStream();
             using var sw = new System.IO.StreamWriter(ms, System.Text.Encoding.UTF8);
-            sw.WriteLine("\"HEMIS RULE 44 â€“ Research Time Validation\"");
-            sw.WriteLine($"\"Database\",\"{summary.Database}\"");
+            sw.WriteLine("\"HEMIS RULE 44 - Research Time Validation\"");
             sw.WriteLine($"\"Timestamp\",\"{summary.Timestamp}\"");
             sw.WriteLine($"\"Status\",\"{summary.Status}\"");
             sw.WriteLine($"\"Total\",{summary.TotalCount},\"Pass\",{summary.PassCount},\"Fail\",{summary.FailCount}");

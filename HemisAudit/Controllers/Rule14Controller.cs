@@ -151,8 +151,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = await _Rule14.GenerateSqlAsync(new Rule14ValidationRequest
             {
                 ClientId = review.ClientId,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 BridgeTable = review.Summary.BridgeTable,
                 CrseTable = review.Summary.CrseTable
@@ -162,26 +160,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _Rule14.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _Rule14.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _Rule14.GetTablesAsync(model.Server, model.Database, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTableColumns([FromBody] Rule16ColumnValuesRequest request)
-        {
-            try
-            {
-                var cols = await _Rule14.GetTableColumnsListAsync(request.Server, request.Database, request.Driver, request.TableName);
-                return Json(new { success = true, columns = cols });
-            }
-            catch (Exception ex)
-            {
-                return Json(new { success = false, error = ex.Message, columns = Array.Empty<string>() });
-            }
-        }
+        public async Task<IActionResult> GetColumns([FromBody] Rule16ColumnsRequest request) =>
+            Json(await RequireDataAnalystAsync(async () => await _Rule14.GetColumnsAsync(request.ClientId, request.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule14VerifyRequest request) =>
@@ -602,8 +586,6 @@ namespace HemisAudit.Controllers
             var request = new Rule14ValidationRequest
             {
                 ClientId = review.ClientId,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 BridgeTable = review.Summary.BridgeTable,
                 CrseTable = review.Summary.CrseTable

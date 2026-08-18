@@ -4,8 +4,8 @@ namespace HemisAudit.Services
 {
     public interface IRule14Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<Rule14TableDiscoveryResult> GetTablesAsync(string server, string database, string driver);
+        Task<Rule14TableDiscoveryResult> GetTablesAsync(int clientId);
+        Task<ColumnListResult> GetColumnsAsync(int clientId, string tableName);
         Task<Rule14VerifyResult> VerifyTablesAsync(Rule14VerifyRequest request);
         Task<Rule14ValidationSummary> RunValidationAsync(Rule14ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<Rule14ValidationSummary?> GetPendingValidationPreviewAsync(int clientId, string reviewerEmail);
@@ -19,9 +19,5 @@ namespace HemisAudit.Services
         Task RemoveSignoffAsync(int runId, string reviewerEmail);
         Task<string> GenerateSqlAsync(Rule14ValidationRequest request);
         Task<Rule14ValidationSummary> GetExportSummaryAsync(Rule14ValidationRequest request);
-        Task<List<string>> GetTableColumnsListAsync(string server, string database, string driver, string tableName);
     }
 }
-
-
-

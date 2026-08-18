@@ -4,9 +4,8 @@ namespace HemisAudit.Services
 {
     public interface IRule34Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<TableListResult> GetTablesAsync(string server, string database, string driver);
-        Task<Rule34ColumnSelectionResult> GetColumnsAsync(string server, string database, string driver, string tableName);
+        Task<TableListResult> GetTablesAsync(int clientId);
+        Task<Rule34ColumnSelectionResult> GetColumnsAsync(int clientId, string tableName);
         Task<Rule34VerifyResult> VerifyTableAsync(Rule34VerifyRequest request);
         Task<Rule34HolidayLoadResult> LoadHolidaysAsync(int startYear, int endYear);
         Task<Rule34ValidationSummary> RunValidationAsync(Rule34ValidationRequest request, string? userEmail = null, string? userName = null);

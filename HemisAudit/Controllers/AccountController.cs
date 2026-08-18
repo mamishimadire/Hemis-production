@@ -3,8 +3,10 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.EntityFrameworkCore;
 using System.Text;
 using System.Text.Json;
+using HemisAudit.Data;
 using HemisAudit.Models;
 using HemisAudit.Services;
 using HemisAudit.ViewModels;
@@ -23,12 +25,14 @@ namespace HemisAudit.Controllers
         private readonly IEmailService                 _email;
         private readonly ISystemDatabaseService        _systemDb;
         private readonly IAntiforgery                  _antiforgery;
+        private readonly ApplicationDbContext          _db;
 
         public AccountController(SignInManager<ApplicationUser> signIn,
             UserManager<ApplicationUser> users, IAuditLogService audit,
             IPasswordPolicyService passwordPolicy, IEmailService email,
             ISystemDatabaseService systemDb,
-            IAntiforgery antiforgery)
+            IAntiforgery antiforgery,
+            ApplicationDbContext db)
         {
             _signIn        = signIn;
             _users         = users;
@@ -37,6 +41,7 @@ namespace HemisAudit.Controllers
             _email         = email;
             _systemDb      = systemDb;
             _antiforgery   = antiforgery;
+            _db            = db;
         }
 
         // ── Login GET ──────────────────────────────────────────────────────────
@@ -65,6 +70,24 @@ namespace HemisAudit.Controllers
                 return RedirectToAction("Index", "Dashboard");
             ViewData["ReturnUrl"] = returnUrl;
             return View();
+        }
+
+        // True if this user's firm has at least one ServiceProvider-role colleague — the same
+        // "internal vs. leased firm" test FirmsController uses to keep the platform owner's own
+        // org out of its client-management console (IsServiceProviderOwnedFirmAsync there).
+        private async Task<bool> IsInternalServiceProviderStaffAsync(ApplicationUser user)
+        {
+            if (user.FirmId == null)
+                return false;
+
+            var spRoleId = await _db.Roles.Where(r => r.Name == "ServiceProvider").Select(r => r.Id).FirstOrDefaultAsync();
+            if (spRoleId == null)
+                return false;
+
+            return await (from ur in _db.UserRoles
+                           join u in _db.Users on ur.UserId equals u.Id
+                           where ur.RoleId == spRoleId && u.FirmId == user.FirmId
+                           select ur).AnyAsync();
         }
 
         private void ClearLegacyBrowserState()
@@ -112,6 +135,11 @@ namespace HemisAudit.Controllers
                 return RedirectToAction(nameof(Login), new { force = true });
             }
 
+            var isServiceProviderMode = string.Equals(model.LoginMode, "ServiceProvider", StringComparison.OrdinalIgnoreCase);
+
+            if (!isServiceProviderMode && string.IsNullOrWhiteSpace(model.ClientCode))
+                ModelState.AddModelError(nameof(model.ClientCode), "Enter your firm's client code.");
+
             if (!ModelState.IsValid) return View(model);
 
             var user = await _users.FindByEmailAsync(model.Email);
@@ -119,6 +147,31 @@ namespace HemisAudit.Controllers
             {
                 ModelState.AddModelError("", "Invalid credentials or account deactivated.");
                 return View(model);
+            }
+
+            var roles = await _users.GetRolesAsync(user);
+
+            if (isServiceProviderMode)
+            {
+                // "Service provider" isn't just the ServiceProvider role — it's anyone on the
+                // platform owner's own internal staff (Admin, Director, Manager, DataAnalyst,
+                // Trainee all included), as opposed to a leased firm's external users. Internal
+                // staff share a FirmId with whichever account actually holds the ServiceProvider
+                // role, so that's the real test, not the caller's own specific role.
+                if (!roles.Contains("ServiceProvider") && !await IsInternalServiceProviderStaffAsync(user))
+                {
+                    ModelState.AddModelError("", "This isn't a service provider account — use the Client Login tab instead, with the client code your service provider gave you.");
+                    return View(model);
+                }
+            }
+            else
+            {
+                var firm = await _db.Firms.FirstOrDefaultAsync(f => f.FirmCode == model.ClientCode);
+                if (firm == null || user.FirmId != firm.Id)
+                {
+                    ModelState.AddModelError("", "Invalid client code or credentials.");
+                    return View(model);
+                }
             }
 
             var result = await _signIn.PasswordSignInAsync(user, model.Password,
@@ -131,6 +184,15 @@ namespace HemisAudit.Controllers
 
                 var now = DateTime.UtcNow;
                 var ageDays = _passwordPolicy.GetPasswordAgeDays(user, now);
+
+                if (user.MustChangePassword)
+                {
+                    await _signIn.SignOutAsync();
+                    await _audit.LogAsync("must_change_password", "Forced password change on first login / after reset", user.Id, user.Email);
+                    TempData["PasswordExpired"] = "A temporary password was set for your account. Enter it below, then choose your own password to continue.";
+                    return RedirectToAction(nameof(RenewPassword), new { email = user.Email, expired = true });
+                }
+
                 if (_passwordPolicy.IsPasswordExpired(user, now))
                 {
                     await _signIn.SignOutAsync();
@@ -351,6 +413,9 @@ namespace HemisAudit.Controllers
         [AllowAnonymous]
         public IActionResult AccessDenied() => View();
 
+        [HttpGet, AllowAnonymous]
+        public IActionResult FirmAccessRestricted() => View();
+
         private static string EnsureSessionStartReturnUrl(string? returnUrl)
         {
             var target = string.IsNullOrWhiteSpace(returnUrl) ? "/Dashboard" : returnUrl.Trim();
@@ -500,6 +565,7 @@ namespace HemisAudit.Controllers
             {
                 refreshed.PasswordChangedAt = DateTime.UtcNow;
                 refreshed.PasswordSetDate = DateTime.UtcNow;
+                refreshed.MustChangePassword = false;
                 var currentHash = refreshed.PasswordHash ?? string.Empty;
                 refreshed.PasswordHistory = _passwordPolicy.BuildPasswordHistory(refreshed.PasswordHistory, currentHash);
                 await _users.UpdateAsync(refreshed);

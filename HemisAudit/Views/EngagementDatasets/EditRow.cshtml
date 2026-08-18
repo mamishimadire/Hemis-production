@@ -1,0 +1,38 @@
+@model Dictionary<string, object?>
+@{
+    ViewData["Title"] = "Edit Row";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    int clientId = ViewBag.ClientId;
+    string tableName = ViewBag.TableName;
+    long rowId = ViewBag.RowId;
+}
+
+<div class="page-header">
+    <h1>Edit Row</h1>
+    <a asp-action="Table" asp-route-clientId="@clientId" asp-route-tableName="@tableName" class="btn btn-secondary">← Back to table</a>
+</div>
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">❌ @TempData["Error"]</div>
+}
+
+<div class="card" style="max-width:640px">
+    <form asp-action="EditRow" asp-route-clientId="@clientId" asp-route-tableName="@tableName" asp-route-rowId="@rowId" method="post">
+        @Html.AntiForgeryToken()
+
+        @foreach (var (column, value) in Model)
+        {
+            if (column == "RowId") { continue; }
+            <div class="field-group" style="margin-bottom:14px">
+                <label>@column</label>
+                <input type="text" name="values[@column]" value="@value" />
+            </div>
+        }
+
+        <div class="action-bar" style="margin-top:20px">
+            <button type="submit" class="btn btn-success">Save</button>
+            <a asp-action="Table" asp-route-clientId="@clientId" asp-route-tableName="@tableName" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>

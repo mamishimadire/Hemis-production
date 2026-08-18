@@ -9,6 +9,7 @@
 <div class="card" style="max-width:560px">
     <form asp-action="CreateUser" method="post">
         @Html.AntiForgeryToken()
+        <div asp-validation-summary="ModelOnly" class="alert alert--error" style="margin-bottom:16px"></div>
 
         <div class="form-grid">
             <div class="field-group">
@@ -25,7 +26,7 @@
 
         <div class="field-group" style="margin-bottom:14px">
             <label>Email Address *</label>
-            <input asp-for="Email" type="email" placeholder="user@sng.gt.com" />
+            <input asp-for="Email" type="email" placeholder="user@mamishihemissolutions.co.za" />
             <span asp-validation-for="Email" class="field-error"></span>
         </div>
 
@@ -33,6 +34,7 @@
             <div class="field-group">
                 <label>Employee Code</label>
                 <input asp-for="EmployeeCode" placeholder="e.g. MADM007" />
+                <span asp-validation-for="EmployeeCode" class="field-error"></span>
             </div>
             <div class="field-group">
                 <label>System Role *</label>

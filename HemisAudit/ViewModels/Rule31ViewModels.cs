@@ -4,9 +4,7 @@ namespace HemisAudit.ViewModels
 {
     public class Rule31GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
     }
 
@@ -28,9 +26,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule31FilterValueRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public string ErrorTypeColumn { get; set; } = "";
     }
@@ -45,9 +41,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule31VerifyRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public string ErrorTypeColumn { get; set; } = "";
         public string ErrorColumn { get; set; } = "";
@@ -70,9 +64,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string TableName { get; set; } = "";
         public string ErrorTypeColumn { get; set; } = "";
         public string ErrorColumn { get; set; } = "";
@@ -111,13 +102,13 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string TableName { get; set; } = "";
         public string ErrorTypeColumn { get; set; } = "";
         public string ErrorColumn { get; set; } = "";
         public string ErrorTypeValue { get; set; } = "";
         public int ClientId { get; set; }
         public int? SavedRunId { get; set; }
+        public bool RowsTruncated { get; set; }
         public List<string> Exclusions { get; set; } = new();
         public List<string> NormalizedExclusions { get; set; } = new();
         public List<Rule31BreakdownItemViewModel> ExcludedBreakdown { get; set; } = new();
@@ -135,7 +126,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule31ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -153,9 +143,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string TableName { get; set; } = "";
         public string ErrorTypeColumn { get; set; } = "";
         public string ErrorColumn { get; set; } = "";

@@ -1,0 +1,117 @@
+@model List<HemisAudit.Services.DatasetTableInfo>
+@{
+    ViewData["Title"] = "Engagement Datasets";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    int clientId = ViewBag.ClientId;
+    bool canEdit = ViewBag.CanEdit;
+    var database = ViewBag.Database as HemisAudit.Services.EngagementDatabaseInfo;
+}
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert--success" style="margin-bottom:16px">✅ @TempData["Success"]</div>
+}
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">❌ @TempData["Error"]</div>
+}
+
+<div class="page-header">
+    <div>
+        <h1>Engagement Datasets</h1>
+        <p>Upload CSV or Excel files — each becomes a real table you can browse and edit here.</p>
+    </div>
+    <a asp-controller="Admin" asp-action="ClientDetail" asp-route-id="@clientId" class="btn btn-secondary">← Back to engagement</a>
+</div>
+
+@if (database == null)
+{
+    <div class="card" style="margin-bottom:20px;max-width:640px">
+        <h3 style="margin-bottom:6px">Step 1 — Create a database</h3>
+        <p style="margin-bottom:16px;color:var(--text-muted)">
+            Every engagement needs a database before any file can be uploaded. Create it once, then upload
+            as many tables into it as you need.
+        </p>
+        @if (canEdit)
+        {
+            <form asp-action="CreateDatabase" asp-route-clientId="@clientId" method="post">
+                @Html.AntiForgeryToken()
+                <div class="field-group" style="margin-bottom:14px">
+                    <label>Database name</label>
+                    <input type="text" name="databaseName" placeholder="e.g. HEMIS_TUT_2026" required maxlength="200" />
+                </div>
+                <button type="submit" class="btn btn-success">Create</button>
+            </form>
+        }
+        else
+        {
+            <div class="empty-state">Waiting on the assigned data analyst to create this engagement's database.</div>
+        }
+    </div>
+}
+else
+{
+    <div class="card" style="margin-bottom:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+            <div>
+                <div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em">Database</div>
+                <div style="font-size:20px;font-weight:700">@database.DatabaseName</div>
+                <div style="color:var(--text-muted);font-size:13px">Created @database.CreatedAt.ToString("dd MMM yyyy")</div>
+            </div>
+            @if (canEdit)
+            {
+                <a asp-action="UploadStart" asp-route-clientId="@clientId" class="btn btn-success">+ Upload a file</a>
+            }
+        </div>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-bottom:12px">Tables (@Model.Count)</h3>
+        <div class="table-wrapper">
+            <table class="data-table">
+                <thead>
+                    <tr><th>Table</th><th>Columns</th><th>Rows</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                    @if (Model.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="4" class="empty-state">
+                                No tables yet.
+                                @if (canEdit)
+                                {
+                                    <a asp-action="UploadStart" asp-route-clientId="@clientId">Upload a file</a>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    @foreach (var t in Model)
+                    {
+                        <tr>
+                            <td><strong>@t.TableName</strong></td>
+                            <td>@t.Columns.Count</td>
+                            <td>@t.RowCount</td>
+                            <td>
+                                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                                    <a asp-action="Table" asp-route-clientId="@clientId" asp-route-tableName="@t.TableName" class="btn btn-sm btn-primary">Browse</a>
+                                    <a asp-action="DownloadTable" asp-route-clientId="@clientId" asp-route-tableName="@t.TableName" class="btn btn-sm btn-secondary">Download</a>
+                                    @if (canEdit)
+                                    {
+                                        <form asp-action="DeleteTable" asp-route-clientId="@clientId" method="post" style="display:inline">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="tableName" value="@t.TableName" />
+                                            <button type="submit" class="btn btn-sm btn-warning"
+                                                    onclick="return confirm('Delete table &quot;@t.TableName&quot;? This cannot be undone.')">
+                                                Delete
+                                            </button>
+                                        </form>
+                                    }
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}

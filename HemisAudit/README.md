@@ -15,7 +15,7 @@ ASP.NET Core MVC application for HEMIS validation workflows.
 | `ViewModels/` | Models used by views and controller/view binding |
 | `Views/` | Razor views grouped by controller |
 | `wwwroot/` | Static assets and runtime upload directories |
-| `Scripts/run system.ps1` | Builds and launches the app locally on port 5076 |
+| `Scripts/run system.ps1` | Builds and launches the app locally on port 5080 |
 
 ---
 

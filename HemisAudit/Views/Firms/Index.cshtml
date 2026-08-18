@@ -1,0 +1,210 @@
+@model List<HemisAudit.ViewModels.FirmListItemViewModel>
+@{ ViewData["Title"] = "Firms"; Layout = "~/Views/Shared/_Layout.cshtml"; string q = ViewBag.SearchQuery; }
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert--success" style="margin-bottom:16px">✅ @TempData["Success"]</div>
+}
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">❌ @TempData["Error"]</div>
+}
+
+<div class="page-header">
+    <div>
+        <h1>Service Provider</h1>
+        <p>Mamishi IT Audit Solutions — @Model.Count firm(s) leasing this system</p>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+        <a asp-action="RecycleBin" class="btn btn-secondary">
+            🗑️ Recycle Bin
+            @if ((int)ViewBag.RecycleBinCount > 0)
+            {
+                <span class="badge badge--fail" style="margin-left:6px">@ViewBag.RecycleBinCount</span>
+            }
+        </a>
+        <a asp-action="Create" class="btn btn-success">+ Onboard a Client</a>
+    </div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:20px">
+    <div class="stat-card">
+        <div class="stat-card__label">Total Firms</div>
+        <div class="stat-card__value">@ViewBag.TotalFirms</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card__label">Active</div>
+        <div class="stat-card__value">@ViewBag.ActiveFirms</div>
+    </div>
+    <div class="stat-card @(ViewBag.SuspendedOrExpired > 0 ? "stat-card--fail" : "")">
+        <div class="stat-card__label">Suspended / Expired</div>
+        <div class="stat-card__value">@ViewBag.SuspendedOrExpired</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card__label">Seats In Use</div>
+        <div class="stat-card__value">@ViewBag.TotalSeatsUsed</div>
+    </div>
+    <div class="stat-card @(ViewBag.ExpiringSoon > 0 ? "stat-card--fail" : "")">
+        <div class="stat-card__label">Expiring in 30 Days</div>
+        <div class="stat-card__value">@ViewBag.ExpiringSoon</div>
+    </div>
+</div>
+
+<form method="get" asp-action="Index" style="display:flex;gap:10px;margin-bottom:16px;max-width:440px">
+    <input type="text" name="q" value="@q" placeholder="Search by firm name or client code…" style="flex:1" />
+    <button type="submit" class="btn btn-secondary">Search</button>
+    @if (!string.IsNullOrWhiteSpace(q))
+    {
+        <a asp-action="Index" class="btn btn-secondary">Clear</a>
+    }
+</form>
+
+<div class="card">
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Firm</th><th>Client Code</th><th>Seats</th><th>Engagement Limit</th><th>Expires</th><th>Status</th><th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (Model.Count == 0)
+                {
+                    <tr>
+                        <td colspan="7" class="empty-state">
+                            @(string.IsNullOrWhiteSpace(q) ? "No firms yet — add the first one." : $"No firms match \"{q}\".")
+                        </td>
+                    </tr>
+                }
+                @foreach (var f in Model)
+                {
+                    var expired = f.ExpiresAt < DateTime.UtcNow;
+                    <tr>
+                        <td><strong>@f.Name</strong></td>
+                        <td><code>@f.FirmCode</code></td>
+                        <td>@f.SeatsUsed / @f.SeatCount</td>
+                        <td>@f.EngagementLimit</td>
+                        <td>
+                            @f.ExpiresAt.ToString("dd MMM yyyy")
+                            @if (expired)
+                            {
+                                <span class="badge badge--fail">Expired</span>
+                            }
+                        </td>
+                        <td>
+                            <span class="badge @(f.Status == "Active" && !expired ? "badge--pass" : "badge--fail")">@f.Status</span>
+                        </td>
+                        <td>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap">
+                                <a asp-action="Detail" asp-route-id="@f.Id" class="btn btn-sm btn-primary">Manage</a>
+                                <button type="button" class="btn btn-sm btn-danger js-open-delete-choice"
+                                        data-firm-id="@f.Id" data-firm-name="@f.Name">
+                                    Delete
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<form id="softDeleteForm" asp-action="SoftDelete" asp-route-fromList="true" method="post">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="id" id="softDeleteFirmId" />
+</form>
+<form id="permanentDeleteForm" asp-action="Delete" asp-route-returnTo="list" method="post">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="id" id="permanentDeleteFirmId" />
+</form>
+
+<!-- Step 1: choose how to delete -->
+<div id="deleteChoiceModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+        <h3>Delete <span id="deleteChoiceFirmName"></span>?</h3>
+        <p style="color:var(--text-muted);margin:8px 0 20px">
+            Choose how this firm should be removed. Moving it to the recycle bin is reversible —
+            deleting it permanently is not.
+        </p>
+        <div style="display:flex;flex-direction:column;gap:10px">
+            <button type="button" class="btn btn-warning" style="width:100%;justify-content:center" onclick="submitSoftDelete()">
+                🗑️ Move to Recycle Bin
+            </button>
+            <button type="button" class="btn btn-danger" style="width:100%;justify-content:center" onclick="switchToPermanentModal()">
+                ⚠️ Delete Permanently
+            </button>
+            <button type="button" class="btn btn-secondary" style="width:100%;justify-content:center" onclick="closeDeleteChoiceModal()">
+                Cancel
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Step 2 (permanent path only): type-to-confirm -->
+<div id="permanentDeleteModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+        <h3 style="color:var(--red-bright)">Permanently delete <span id="permanentDeleteFirmName"></span>?</h3>
+        <p style="color:var(--text-muted);margin:8px 0 16px">
+            This immediately removes the firm, its license and all of its users. This skips the
+            recycle bin and cannot be undone.
+        </p>
+        <label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px">Type the firm name to confirm</label>
+        <input type="text" id="permanentDeleteConfirmInput" autocomplete="off" style="margin-bottom:18px" />
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+            <button type="button" class="btn btn-secondary" onclick="closePermanentDeleteModal()">Cancel</button>
+            <button type="button" class="btn btn-danger" id="permanentDeleteConfirmBtn" disabled onclick="submitPermanentDelete()">Delete Permanently</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    var pendingDelete = { id: null, name: null };
+
+    function openDeleteChoiceModal(id, name) {
+        pendingDelete = { id: id, name: name };
+        document.getElementById('deleteChoiceFirmName').textContent = name;
+        document.getElementById('deleteChoiceModal').style.display = 'flex';
+    }
+    function closeDeleteChoiceModal() {
+        document.getElementById('deleteChoiceModal').style.display = 'none';
+    }
+    function submitSoftDelete() {
+        document.getElementById('softDeleteFirmId').value = pendingDelete.id;
+        document.getElementById('softDeleteForm').submit();
+    }
+    function switchToPermanentModal() {
+        closeDeleteChoiceModal();
+        document.getElementById('permanentDeleteFirmName').textContent = pendingDelete.name;
+        var input = document.getElementById('permanentDeleteConfirmInput');
+        input.value = '';
+        document.getElementById('permanentDeleteConfirmBtn').disabled = true;
+        document.getElementById('permanentDeleteModal').style.display = 'flex';
+    }
+    function closePermanentDeleteModal() {
+        document.getElementById('permanentDeleteModal').style.display = 'none';
+    }
+    function submitPermanentDelete() {
+        document.getElementById('permanentDeleteFirmId').value = pendingDelete.id;
+        document.getElementById('permanentDeleteForm').submit();
+    }
+
+    document.getElementById('permanentDeleteConfirmInput').addEventListener('input', function () {
+        document.getElementById('permanentDeleteConfirmBtn').disabled = this.value !== pendingDelete.name;
+    });
+    document.querySelectorAll('.js-open-delete-choice').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            openDeleteChoiceModal(parseInt(btn.dataset.firmId, 10), btn.dataset.firmName);
+        });
+    });
+    document.querySelectorAll('.modal-overlay').forEach(function (overlay) {
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) overlay.style.display = 'none';
+        });
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal-overlay').forEach(function (o) { o.style.display = 'none'; });
+        }
+    });
+</script>

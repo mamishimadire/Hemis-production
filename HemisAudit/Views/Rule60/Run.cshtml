@@ -68,11 +68,10 @@
 <div class="card" style="padding:20px;margin-bottom:20px">
     <h3 class="section-title" style="margin-top:0">Run Summary</h3>
     <div class="r60-summary-grid">
-        <div class="r60-summary-card"><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Database</div><div>@summary.Database</div></div>
         <div class="r60-summary-card"><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Rule</div><div>Rule 60 — CRSE vs H16CRSE Agreement</div></div>
         <div class="r60-summary-card"><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">CRSE Table</div><div>@summary.StudTable</div></div>
-        <div class="r60-summary-card"><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">H16CRSE Table</div><div>@summary.AuditTable</div></div>
-        <div class="r60-summary-card"><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Join Keys</div><div>@summary.StudKey &harr; @summary.AuditKey</div></div>
+        <div class="r60-summary-card"><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">H16CRSE Table</div><div>@summary.H16Table</div></div>
+        <div class="r60-summary-card"><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Join Keys</div><div>@summary.StudKey &harr; @summary.H16Key</div></div>
         <div class="r60-summary-card"><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Status</div><div><span class="badge @(summary.Status == "PASS" ? "badge--pass" : "badge--fail")">@summary.Status</span></div></div>
     </div>
     <div class="stats-grid" style="margin-top:16px">
@@ -171,7 +170,7 @@
                                 {
                                     row.Fields.TryGetValue(pair.Label, out var field);
                                     <td>@(field?.StudValue ?? "—")</td>
-                                    <td>@(field?.AuditValue ?? "—")</td>
+                                    <td>@(field?.H16Value ?? "—")</td>
                                     <td><span class="badge @(string.Equals(field?.Match, "AGREE", StringComparison.OrdinalIgnoreCase) ? "badge--pass" : string.Equals(field?.Match, "DISAGREE", StringComparison.OrdinalIgnoreCase) ? "badge--fail" : "badge--neutral")">@(field?.Match ?? "—")</span></td>
                                 }
                                 <td><span class="badge @(row.OverallResult == "AGREE" ? "badge--pass" : row.OverallResult == "DISAGREE" ? "badge--fail" : "badge--neutral")">@row.OverallResult</span></td>
@@ -218,7 +217,7 @@
                                 {
                                     row.Fields.TryGetValue(pair.Label, out var field);
                                     <td>@(field?.StudValue ?? "—")</td>
-                                    <td>@(field?.AuditValue ?? "—")</td>
+                                    <td>@(field?.H16Value ?? "—")</td>
                                     <td><span class="badge @(string.Equals(field?.Match, "AGREE", StringComparison.OrdinalIgnoreCase) ? "badge--pass" : string.Equals(field?.Match, "DISAGREE", StringComparison.OrdinalIgnoreCase) ? "badge--fail" : "badge--neutral")">@(field?.Match ?? "—")</span></td>
                                 }
                                 <td><span class="badge @(row.OverallResult == "AGREE" ? "badge--pass" : row.OverallResult == "DISAGREE" ? "badge--fail" : "badge--neutral")">@row.OverallResult</span></td>

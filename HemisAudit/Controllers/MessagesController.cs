@@ -420,15 +420,17 @@ namespace HemisAudit.Controllers
             return vm;
         }
 
-        private static List<int> ResolveRecipientIds(MessageSendViewModel model)
+        private static List<string> ResolveRecipientIds(MessageSendViewModel model)
         {
-            var recipientIds = (model.RecipientIds ?? new List<int>()).Distinct().ToList();
+            var recipientIds = (model.RecipientIds ?? new List<string>())
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct()
+                .ToList();
             if (!recipientIds.Any() && !string.IsNullOrWhiteSpace(model.RecipientIdsCsv))
             {
                 recipientIds = model.RecipientIdsCsv
                     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .Select(value => int.TryParse(value, out var id) ? id : 0)
-                    .Where(id => id > 0)
+                    .Where(id => !string.IsNullOrWhiteSpace(id))
                     .Distinct()
                     .ToList();
             }

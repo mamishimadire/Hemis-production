@@ -4,10 +4,9 @@ namespace HemisAudit.Services
 {
     public interface IRule64Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<Rule64TableDiscoveryResult> GetTablesAsync(string server, string database, string driver);
-        Task<Rule64ColumnDiscoveryResult> GetColumnsAsync(string server, string database, string driver, string tableName);
-        Task<Rule64VerifyResult> VerifyTablesAsync(Rule64VerifyRequest request);
+        Task<Rule64TableDiscoveryResult> GetTablesAsync(int clientId);
+        Task<Rule64ColumnDiscoveryResult> GetColumnsAsync(int clientId, string tableName, string tableRole);
+        Task<Rule64VerifyResult> VerifyTablesAsync(Rule64ValidationRequest request);
         Task<Rule64ValidationSummary> RunValidationAsync(Rule64ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<int?> GetClientIdForRunAsync(int runId);
         Task<Rule64ValidationSummary?> GetStoredSummaryAsync(int runId);

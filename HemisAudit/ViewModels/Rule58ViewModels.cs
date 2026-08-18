@@ -11,15 +11,19 @@ namespace HemisAudit.ViewModels
         public string? Error { get; set; }
     }
 
-    public class Rule58VerifyRequest
+    public class Rule58GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string ValpacTable           { get; set; } = "dbo_STAFF_VALPAC";
-        public string ProdTable             { get; set; } = "dbo_STAFF_PRODUCTION";
-        public string ValpacCol037          { get; set; } = "_037";
-        public string ProdColPersonelNumber { get; set; } = "PERSONEL_NUMBER";
+        public int ClientId { get; set; }
+        public string TableName { get; set; } = "";
+        public string TableRole { get; set; } = "";
+    }
+
+    public class Rule58ColumnDiscoveryResult
+    {
+        public bool Success { get; set; }
+        public List<string> Columns { get; set; } = new();
+        public string? AutoSelected { get; set; }
+        public string? Error { get; set; }
     }
 
     public class Rule58VerifyResult
@@ -37,9 +41,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string ValpacTable           { get; set; } = "dbo_STAFF_VALPAC";
         public string ProdTable             { get; set; } = "dbo_STAFF_PRODUCTION";
         public string ValpacCol037          { get; set; } = "_037";
@@ -75,14 +76,11 @@ namespace HemisAudit.ViewModels
         public int TotalRequested { get; set; }
         public int TotalValidated { get; set; }
         public int DisplayedCount { get; set; }
-        public bool IsPreviewOnly { get; set; }
-        public int PreviewLimit { get; set; }
         public int PassCount { get; set; }
         public int FailCount { get; set; }
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string ValpacTable           { get; set; } = "dbo_STAFF_VALPAC";
         public string ProdTable             { get; set; } = "dbo_STAFF_PRODUCTION";
         public string ValpacCol037          { get; set; } = "_037";
@@ -103,9 +101,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string ValpacTable           { get; set; } = "dbo_STAFF_VALPAC";
         public string ProdTable             { get; set; } = "dbo_STAFF_PRODUCTION";
         public string ValpacCol037          { get; set; } = "_037";
@@ -128,7 +123,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule58ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();

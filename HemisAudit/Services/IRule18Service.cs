@@ -4,10 +4,9 @@ namespace HemisAudit.Services
 {
     public interface IRule18Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<Rule18TableDiscoveryResult> GetTablesAsync(string server, string database, string driver);
-        Task<ColumnValuesResult> GetColumnValuesAsync(string server, string database, string driver, string tableName, string columnName);
-        Task<ColumnValuesResult> GetTableColumnsListAsync(string server, string database, string driver, string tableName);
+        Task<Rule18TableDiscoveryResult> GetTablesAsync(int clientId);
+        Task<ColumnListResult> GetColumnsAsync(int clientId, string tableName);
+        Task<ColumnValuesResult> GetColumnValuesAsync(int clientId, string tableName, string columnName);
         Task<Rule18VerifyResult> VerifyTablesAsync(Rule18VerifyRequest request);
         Task<Rule18ValidationSummary> RunValidationAsync(Rule18ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<Rule18ValidationSummary?> GetPendingValidationPreviewAsync(int clientId, string reviewerEmail);
@@ -21,7 +20,5 @@ namespace HemisAudit.Services
         Task RemoveSignoffAsync(int runId, string reviewerEmail);
         Task<string> GenerateSqlAsync(Rule18ValidationRequest request);
         Task<Rule18ValidationSummary> GetExportSummaryAsync(Rule18ValidationRequest request);
-        Task<byte[]> ExportFullExcelAsync(Rule18ValidationSummary summary, string? overrideServer = null);
-        Task<byte[]> ExportFullCsvAsync(Rule18ValidationSummary summary, string? overrideServer = null);
     }
 }

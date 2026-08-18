@@ -55,30 +55,16 @@
         <div class="accordion-item">
             <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
                 <span class="acc-icon">DB</span>
-                <span>Database Connection</span>
+                <span>Engagement Dataset</span>
                 <span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-connection">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label for="server">Server Name</label>
-                        <input id="server" type="text" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                    </div>
-                    <div class="field-group">
-                        <label for="driver">Driver</label>
-                        <select id="driver">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group">
-                        <label for="database">Database</label>
-                        <select id="database"></select>
-                    </div>
+                <div class="alert alert--info" id="datasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
                 <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                    <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
+                    <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                    <button type="button" class="btn btn-primary" id="connectBtn">Refresh Tables</button>
                     <button type="button" class="btn btn-info" id="verifyBtn">Verify Table</button>
                 </div>
                 <div id="connectionOutput" class="status-output"></div>
@@ -310,9 +296,8 @@
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'),
-        driver: document.getElementById('driver'),
-        database: document.getElementById('database'),
+        datasetStatusAlert: document.getElementById('datasetStatusAlert'),
+        datasetsLink: document.getElementById('datasetsLink'),
         profTable: document.getElementById('profTable'),
         column037: document.getElementById('column037'),
         column038: document.getElementById('column038'),
@@ -497,9 +482,6 @@
         return {
             clientId: Number(els.clientId.value || 0),
             runId: state.currentRunId,
-            server: els.server.value.trim(),
-            database: els.database.value || '',
-            driver: els.driver.value,
             profTable: els.profTable.value || '',
             column037: els.column037.value || '_037',
             column038: els.column038.value || '_038',
@@ -750,54 +732,22 @@
         renderCharts(null);
     }
 
-    async function loadDatabases() {
-        if (!els.server.value.trim()) {
-            setOutput(els.connectionOutput, 'warning', 'Enter the SQL Server name first.');
+    async function loadTables(shouldReset = true) {
+        if (!state.clientId) {
+            setOutput(els.connectionOutput, 'warning', 'Select an engagement first.');
             return;
         }
 
-        showSpinner('Connecting to SQL Server...');
-        try {
-            const data = await postJson(`${apiBasePath}/GetDatabases`, {
-                server: els.server.value.trim(),
-                driver: els.driver.value
-            });
-
-            if (!data.success) {
-                setOutput(els.connectionOutput, 'danger', data.error || 'Connection failed.');
-                return;
-            }
-
-            const options = (data.databases || []).map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
-            els.database.innerHTML = options;
-            els.profTable.innerHTML = '';
-            clearMappedColumnSelects();
-            resetForReconnect('SQL connection refreshed. Select the database and run Rule 22 again.');
-            setOutput(els.connectionOutput, 'success', `Loaded ${Number((data.databases || []).length).toLocaleString()} database(s).`);
-            if (els.database.value) await loadTables();
-        } catch (error) {
-            setOutput(els.connectionOutput, 'danger', error.message || 'Connection failed.');
-        } finally {
-            hideSpinner();
-        }
-    }
-
-    async function loadTables(shouldReset = true) {
-        if (!els.database.value || !els.server.value.trim()) return;
-
-        showSpinner('Discovering tables...');
+        showSpinner('Loading tables...');
         try {
             if (shouldReset) {
-                resetForReconnect(`Database changed to ${els.database.value}. Load the required table and rerun Rule 22.`);
+                resetForReconnect('Uploaded tables refreshed. Select the required table and rerun Rule 22.');
             }
-            const data = await postJson(`${apiBasePath}/GetTables`, {
-                server: els.server.value.trim(),
-                database: els.database.value,
-                driver: els.driver.value
-            });
+            const data = await postJson(`${apiBasePath}/GetTables`, { clientId: state.clientId });
 
             if (!data.success) {
-                setOutput(els.configOutput, 'danger', data.error || 'Table discovery failed.');
+                setOutput(els.connectionOutput, 'danger', data.error || 'Failed to load tables.');
+                if (els.datasetStatusAlert) { els.datasetStatusAlert.className = 'alert alert--error'; els.datasetStatusAlert.textContent = data.error || 'Failed to load tables.'; }
                 return;
             }
 
@@ -805,26 +755,25 @@
             els.profTable.innerHTML = options;
             if (data.autoProfTable) els.profTable.value = data.autoProfTable;
             await loadProfColumns(shouldReset);
-            setOutput(els.configOutput, 'success', `Loaded ${Number((data.tables || []).length).toLocaleString()} table(s).`);
+            setOutput(els.connectionOutput, 'success', `Loaded ${Number((data.tables || []).length).toLocaleString()} table(s).`);
+            if (els.datasetStatusAlert) { els.datasetStatusAlert.className = 'alert alert--success'; els.datasetStatusAlert.textContent = `Loaded ${(data.tables || []).length} table(s) from this engagement's dataset.`; }
         } catch (error) {
-            setOutput(els.configOutput, 'danger', error.message || 'Table discovery failed.');
+            setOutput(els.connectionOutput, 'danger', error.message || 'Failed to load tables.');
         } finally {
             hideSpinner();
         }
     }
 
     async function loadProfColumns(shouldReset = true) {
-        if (!els.profTable.value || !els.database.value || !els.server.value.trim()) return;
+        if (!els.profTable.value || !state.clientId) return;
 
         try {
             if (shouldReset) {
                 resetForReconnect(`Table changed to ${els.profTable.value}. Rule 22 is ready for a new run after columns load.`);
             }
             const data = await postJson(`${apiBasePath}/GetProfColumns`, {
-                server: els.server.value.trim(),
-                database: els.database.value,
-                driver: els.driver.value,
-                profTable: els.profTable.value
+                clientId: state.clientId,
+                tableName: els.profTable.value
             });
 
             if (!data.success) {
@@ -1153,11 +1102,11 @@
             state.resultsVisible = !!data.resultsVisible;
             state.currentRunId = workspace.runId || null;
 
-            els.server.value = workspace.server || '';
-            els.database.innerHTML = workspace.database ? `<option value="${escapeHtml(workspace.database)}">${escapeHtml(workspace.database)}</option>` : '';
-            els.database.value = workspace.database || '';
+            if (els.datasetsLink) els.datasetsLink.href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
             els.profTable.innerHTML = workspace.profTable ? `<option value="${escapeHtml(workspace.profTable)}">${escapeHtml(workspace.profTable)}</option>` : '';
             els.profTable.value = workspace.profTable || '';
+            await loadTables(false).catch(() => { /* best-effort background refresh */ });
+            if (workspace.profTable) els.profTable.value = workspace.profTable;
             await loadProfColumns(false);
             mappedColumnFields.forEach(field => {
                 const select = getColumnSelect(field.key);
@@ -1193,11 +1142,11 @@
     document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => setTab(btn.dataset.tab)));
     els.clientId.addEventListener('change', async () => {
         state.clientId = Number(els.clientId.value || 0);
+        if (els.datasetsLink) els.datasetsLink.href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
         await loadWorkspace();
     });
-    document.getElementById('connectBtn').addEventListener('click', loadDatabases);
-    els.database.addEventListener('change', loadTables);
-    els.profTable.addEventListener('change', loadProfColumns);
+    document.getElementById('connectBtn').addEventListener('click', () => loadTables());
+    els.profTable.addEventListener('change', () => loadProfColumns());
     document.getElementById('verifyBtn').addEventListener('click', verifyTables);
     document.getElementById('verifyBtnBar').addEventListener('click', verifyTables);
     document.getElementById('runBtn').addEventListener('click', runValidation);

@@ -96,7 +96,7 @@
         </div>
         <div class="stat-card">
             <div class="stat-card__label">Status</div>
-            <div class="stat-card__value"><span class="badge @(summary.Status == "PASS" ? "badge--pass" : "badge--fail")">@summary.Status</span></div>
+            <div class="stat-card__value"><span class="badge badge--neutral">Sample Selected</span></div>
         </div>
     </div>
 
@@ -104,10 +104,6 @@
         <div>
             <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Rule</div>
             <div>Rule 61 — Masters / Doctoral Research Time Validation</div>
-        </div>
-        <div>
-            <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Database</div>
-            <div>@summary.Database</div>
         </div>
         <div>
             <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">STUD Table</div>
@@ -199,14 +195,18 @@
 <div class="card" style="padding:20px;margin-bottom:20px">
     <h3 class="section-title" style="margin-top:0">Validation Rows</h3>
 
-    @if (summary.IsPreviewOnly)
+    @if (!string.IsNullOrWhiteSpace(summary.Warning))
     {
         <div class="alert alert--warning" style="margin-bottom:16px">
-            Browser preview is limited to the first @summary.PreviewLimit exception row(s) and @summary.PreviewLimit pass row(s). Use the workspace to regenerate or export the full result set.
+            @summary.Warning
         </div>
     }
 
     <h4 style="margin:0 0 12px">Exceptions</h4>
+    @if (failRows.Count > 10)
+    {
+        <div class="alert alert--info" style="margin-bottom:12px">Showing preview (first 10 rows) — see stat cards above for full counts. Download for full results.</div>
+    }
     @if (failRows.Any())
     {
                 <div style="overflow:auto;margin-bottom:20px">
@@ -228,7 +228,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var row in failRows)
+                    @foreach (var row in failRows.Take(10))
                     {
                         <tr>
                             <td><strong>@row.StudentNo</strong></td>
@@ -241,7 +241,7 @@
                             <td>@row.QualName</td>
                             <td>@(string.IsNullOrWhiteSpace(row.PqmName) ? "Not found in PQM" : row.PqmName)</td>
                             <td>@row.PqmResearchTime</td>
-                            <td><span class="badge badge--fail">@row.ValidationResult</span></td>
+                            <td><span class="badge badge--neutral">Sample Selected</span></td>
                             <td style="text-align:left">@row.ValidationExplanation</td>
                         </tr>
                     }
@@ -255,6 +255,10 @@
     }
 
     <h4 style="margin:0 0 12px">Pass Rows</h4>
+    @if (passRows.Count > 10)
+    {
+        <div class="alert alert--info" style="margin-bottom:12px">Showing preview (first 10 rows) — see stat cards above for full counts. Download for full results.</div>
+    }
     @if (passRows.Any())
     {
         <div style="overflow:auto">
@@ -276,7 +280,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var row in passRows)
+                    @foreach (var row in passRows.Take(10))
                     {
                         <tr>
                             <td><strong>@row.StudentNo</strong></td>
@@ -289,7 +293,7 @@
                             <td>@row.QualName</td>
                             <td>@(string.IsNullOrWhiteSpace(row.PqmName) ? "Not found in PQM" : row.PqmName)</td>
                             <td>@row.PqmResearchTime</td>
-                            <td><span class="badge badge--pass">@row.ValidationResult</span></td>
+                            <td><span class="badge badge--neutral">Sample Selected</span></td>
                             <td style="text-align:left">@row.ValidationExplanation</td>
                         </tr>
                     }

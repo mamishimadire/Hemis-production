@@ -163,7 +163,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = _rule38.GenerateSql(new Rule38ValidationRequest
             {
                 ClientId              = review.ClientId,
-                Database              = review.Summary.Database,
                 QualTable             = review.Summary.QualTable,
                 QualIdCol             = review.Summary.QualIdCol,
                 QualNameCol           = review.Summary.QualNameCol,
@@ -193,17 +192,13 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule38.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule38.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule38.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule38GetColumnsRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule38.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName, model.TableRole)));
+                await _rule38.GetColumnsAsync(model.ClientId, model.TableName, model.TableRole)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule38VerifyRequest request) =>
@@ -715,7 +710,6 @@ namespace HemisAudit.Controllers
             var request = new Rule38ValidationRequest
             {
                 ClientId              = review.ClientId,
-                Database              = review.Summary.Database,
                 QualTable             = review.Summary.QualTable,
                 QualIdCol             = review.Summary.QualIdCol,
                 QualNameCol           = review.Summary.QualNameCol,

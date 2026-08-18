@@ -1,4 +1,4 @@
-﻿@using HemisAudit.Models
+@using HemisAudit.Models
 @{
     ViewData["Title"] = "Rule 46 - Foundation Student Chain Validation";
     Layout = "~/Views/Shared/_Layout.cshtml";
@@ -49,8 +49,8 @@
             <h1 class="rule-header__title">HEMIS RULE 46: Foundation Student Chain Validation</h1>
             <p class="rule-header__sub">
                 Rule 46 validates foundation students through the qualification chain:
-                <code>dbo_STUD → dbo_QUAL → PQM</code>.<br />
-                Foundation students are selected from <code>STUD._106 = 'Y'</code> and their qualification name must exist in the PQM table.
+                <code>STUD -&gt; QUAL -&gt; PQM</code>.<br />
+                Foundation students are selected from the configured STUD filter column/value and their qualification name must exist in the PQM table.
             </p>
         </div>
         <div class="rule-header__badge" id="r46StatusBadge" style="display:none"></div>
@@ -61,29 +61,15 @@
         <div class="accordion-stack">
             <div class="accordion-item">
                 <button class="accordion-toggle" type="button" onclick="toggleAccordion('r46-conn')">
-                    <span class="acc-icon">DB</span><span>Database Connection</span><span class="acc-chevron">v</span>
+                    <span class="acc-icon">DB</span><span>Engagement Dataset</span><span class="acc-chevron">v</span>
                 </button>
                 <div class="accordion-body" id="body-r46-conn">
-                    <div class="form-grid">
-                        <div class="field-group">
-                            <label for="r46Server">Server Name</label>
-                            <input id="r46Server" type="text" placeholder="SERVER\INSTANCE" />
-                        </div>
-                        <div class="field-group">
-                            <label for="r46Driver">Driver</label>
-                            <select id="r46Driver">
-                                <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                                <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                                <option value="SQL Server">SQL Server</option>
-                            </select>
-                        </div>
-                        <div class="field-group">
-                            <label for="r46Db">Database</label>
-                            <select id="r46Db" onchange="r46LoadTables()"></select>
-                        </div>
+                    <div class="alert alert--info" id="r46DatasetStatusAlert">
+                        Select an engagement above to load its uploaded tables.
                     </div>
                     <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
-                        <button type="button" class="btn btn-primary" onclick="r46Connect()">Connect</button>
+                        <a class="btn btn-secondary" id="r46DatasetsLink" href="#">Manage Datasets</a>
+                        <button type="button" class="btn btn-primary" onclick="r46LoadTables()">Refresh Tables</button>
                     </div>
                     <div id="r46ConnOut" class="status-output"></div>
                 </div>
@@ -97,10 +83,10 @@
                     <div class="info-box info-box--red" style="margin-bottom:14px">
                         <strong>Rule 46 logic:</strong><br />
                         Step 1: select foundation students where <code>STUD.[Filter Col] = 'Filter Value'</code><br />
-                        Step 2: join <code>STUD._001 → QUAL._001</code><br />
-                        Step 3: match <code>QUAL._003 → PQM.[Name Column]</code><br />
+                        Step 2: join <code>STUD._001 -&gt; QUAL._001</code><br />
+                        Step 3: match <code>QUAL._003 -&gt; PQM.[Name Column]</code><br />
                         Step 4: PASS if QUAL record exists and qualification name is found in PQM<br />
-                        All columns and tables are configurable. Auto-detected on connect.
+                        All columns and tables are configurable. Auto-detected from this engagement's uploaded data.
                     </div>
 
                     <h4 style="margin:0 0 10px;font-size:.9rem;color:#555">STUD Table</h4>
@@ -173,7 +159,6 @@
 
                     <div class="action-bar" style="justify-content:flex-start;margin:4px 0">
                         <button type="button" class="btn btn-info" onclick="r46Verify()">Verify Tables</button>
-                        <button type="button" class="btn btn-secondary" onclick="r46DetectColumns()">Auto-Detect Columns</button>
                     </div>
                     <div id="r46CfgOut" class="status-output"></div>
                 </div>
@@ -287,7 +272,6 @@ window.r46Tab = function(tab) {
     function g(id) { return document.getElementById(id); }
     function gv(id) { var el = g(id); return el ? el.value : ''; }
     function show(id, visible) { var el = g(id); if (el) el.style.display = visible ? '' : 'none'; }
-    function setHtml(id, html) { var el = g(id); if (el) el.innerHTML = html; }
     function fmt(n) { return Number(n || 0).toLocaleString(); }
     function esc(v) {
         return String(v == null ? '' : v)
@@ -334,6 +318,24 @@ window.r46Tab = function(tab) {
         });
     }
 
+    // Only ever selects a column that actually exists in the uploaded table. Never fabricates
+    // an option for a hardcoded default that isn't really there.
+    function fillColumnSelect(id, columns, preferred, autoSelected) {
+        var select = g(id);
+        if (!select) return;
+        var cols = columns || [];
+        var val = (preferred && cols.includes(preferred)) ? preferred
+                : (autoSelected && cols.includes(autoSelected)) ? autoSelected
+                : '';
+        select.innerHTML = '<option value="">Select column</option>';
+        cols.forEach(function(c) {
+            var o = document.createElement('option');
+            o.value = c; o.textContent = c;
+            if (c === val) o.selected = true;
+            select.appendChild(o);
+        });
+    }
+
     async function post(url, body) {
         return await window.fetchJsonWithProgress(url, {
             method: 'POST',
@@ -361,9 +363,6 @@ window.r46Tab = function(tab) {
         return {
             clientId: st.clientId,
             runId: st.runId,
-            server: gv('r46Server').trim(),
-            database: gv('r46Db'),
-            driver: gv('r46Driver') || 'ODBC Driver 17 for SQL Server',
             studTable: gv('r46StudTable') || 'dbo_STUD',
             studKey: gv('r46StudKey') || '_001',
             studIdCol: gv('r46StudIdCol') || '_008',
@@ -450,8 +449,8 @@ window.r46Tab = function(tab) {
         }
 
         var statusClass = String(summary.status || '').toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail';
-        var previewHtml = summary.isPreviewOnly
-            ? '<div class="alert alert--warning" style="margin-bottom:12px">Browser preview is limited to the first ' + fmt(summary.previewLimit || 0) + ' representative row(s). Download Excel or CSV for the full result set.</div>'
+        var previewHtml = summary.warning
+            ? '<div class="alert alert--warning" style="margin-bottom:12px">' + esc(summary.warning) + '</div>'
             : '';
         var controlSummary = (summary.controlSummaries || [])[0] || null;
         var controlHtml = controlSummary
@@ -481,7 +480,6 @@ window.r46Tab = function(tab) {
             '</div>' +
             '<div class="card" style="padding:12px;margin-bottom:16px">' +
                 '<div class="form-grid">' +
-                    '<div><div class="stat-label">Database</div><div>' + esc(summary.database || '') + '</div></div>' +
                     '<div><div class="stat-label">Foundation Filter</div><div>' + esc(summary.studTable || '') + '.' + esc(summary.studFilterCol || '_106') + ' = \'' + esc(summary.studFilterValue || 'Y') + '\'</div></div>' +
                     '<div><div class="stat-label">STUD ID Column</div><div>' + esc(summary.studTable || '') + '.' + esc(summary.studIdCol || '_008') + '</div></div>' +
                     '<div><div class="stat-label">STUD _026 Column</div><div>' + esc(summary.studTable || '') + '.' + esc(summary.stud026Col || '_026') + '</div></div>' +
@@ -511,10 +509,6 @@ window.r46Tab = function(tab) {
             return;
         }
 
-        var previewHtml = st.summary.isPreviewOnly
-            ? '<div class="alert alert--warning" style="margin-bottom:12px">Showing the first ' + fmt(rows.length) + ' representative browser row(s). Download Excel or CSV for the full result set.</div>'
-            : '';
-
         var body = filtered.map(function(row) {
             var isPass = String(row.validationResult || '').toUpperCase() === 'PASS';
             var rowClass = isPass ? 'pass-row' : 'fail-row';
@@ -538,7 +532,6 @@ window.r46Tab = function(tab) {
         }).join('');
 
         pane.innerHTML =
-            previewHtml +
             '<div style="overflow-x:auto">' +
                 '<table class="r46-tbl">' +
                     '<thead><tr>' +
@@ -590,185 +583,79 @@ window.r46Tab = function(tab) {
         updateButtons();
     }
 
-    function applyWorkspace(ws, resultsVisible) {
-        if (!ws) {
-            st.runId = null;
-            st.summary = null;
-            st.isWorkspaceSaved = false;
-            st.currentUserHasSignedOff = false;
-            st.resultsVisible = false;
-            st.currentUserEngagementRole = '';
-            setWorkspaceMessage('No saved Rule 46 workspace for this engagement yet.', 'info');
-            var runState = g('r46RunState');
-            if (runState) runState.textContent = 'No saved run loaded';
-            var runLabel = g('r46RunLabel');
-            if (runLabel) runLabel.textContent = 'No saved run yet';
-            var statusLabel = g('r46StatusLabel');
-            if (statusLabel) statusLabel.textContent = '-';
-            var editedLabel = g('r46EditedLabel');
-            if (editedLabel) editedLabel.textContent = '-';
-            applySummary(null);
+    async function loadTables(options) {
+        options = options || {};
+        if (!st.clientId) return;
+        var data = await post(API + '/GetTables', { clientId: st.clientId });
+        if (!data.success) {
+            var alertEl = g('r46DatasetStatusAlert');
+            if (alertEl) { alertEl.className = 'alert alert--error'; alertEl.textContent = data.error || 'Failed to load tables.'; }
+            setStatusOutput('r46CfgOut', data.error || 'Failed to load tables.', 'error');
             return;
         }
-
-        st.runId = ws.runId || null;
-        st.resultsVisible = !!resultsVisible;
-        st.currentUserEngagementRole = ws.currentUserEngagementRole || '';
-
-        if (!IS_RESULTS_ONLY) {
-            if (ws.server) g('r46Server').value = ws.server;
-            if (ws.driver) g('r46Driver').value = ws.driver;
-            if (ws.database) fillSelect('r46Db', [ws.database], ws.database);
-            if (ws.studTable) fillSelect('r46StudTable', [ws.studTable], ws.studTable);
-            if (ws.qualTable) fillSelect('r46QualTable', [ws.qualTable], ws.qualTable);
-            if (ws.pqmTable) fillSelect('r46PqmTable', [ws.pqmTable], ws.pqmTable);
-            if (ws.studKey) fillSelect('r46StudKey', [ws.studKey], ws.studKey);
-            if (ws.studIdCol) fillSelect('r46StudIdCol', [ws.studIdCol], ws.studIdCol);
-            if (ws.stud007Col) fillSelect('r46Stud007Col', [ws.stud007Col], ws.stud007Col);
-            if (ws.stud010Col) fillSelect('r46Stud010Col', [ws.stud010Col], ws.stud010Col);
-            if (ws.stud012Col) fillSelect('r46Stud012Col', [ws.stud012Col], ws.stud012Col);
-            if (ws.stud026Col) fillSelect('r46Stud026Col', [ws.stud026Col], ws.stud026Col);
-            if (ws.studFilterCol) fillSelect('r46StudFilterCol', [ws.studFilterCol], ws.studFilterCol);
-            if (ws.studFilterValue) g('r46StudFilterValue').value = ws.studFilterValue;
-            if (ws.qualKey) fillSelect('r46QualKey', [ws.qualKey], ws.qualKey);
-            if (ws.qualNameCol) fillSelect('r46QualNameCol', [ws.qualNameCol], ws.qualNameCol);
-            if (ws.pqmNameCol) fillSelect('r46PqmNameCol', [ws.pqmNameCol], ws.pqmNameCol);
-        }
-
-        applyWsMeta(ws);
-
-        if (!resultsVisible) {
-            setWorkspaceMessage('Saved Rule 46 results are not available for your role.', 'info');
-            applySummary(null);
-            return;
-        }
-
-        setWorkspaceMessage(ws.summary ? 'Saved Rule 46 workspace loaded.' : 'Rule 46 workspace loaded. Run validation to generate results.', 'success');
-        applySummary(ws.summary || null, { fromWorkspace: true });
+        var tables = data.tables || [];
+        fillSelect('r46StudTable', tables, options.preferredStudTable || data.autoStudTable);
+        fillSelect('r46QualTable', tables, options.preferredQualTable || data.autoQualTable);
+        fillSelect('r46PqmTable', tables, options.preferredPqmTable || data.autoPqmTable);
+        show('body-r46-cfg', true);
+        var alertEl2 = g('r46DatasetStatusAlert');
+        if (alertEl2) { alertEl2.className = 'alert alert--success'; alertEl2.textContent = 'Loaded ' + tables.length + " table(s) from this engagement's dataset."; }
+        setStatusOutput('r46CfgOut', 'Loaded ' + tables.length + ' table(s). Detecting columns...', 'success');
+        await Promise.all([
+            loadColumnsForTable(gv('r46StudTable'), [
+                { selectEl: 'r46StudKey',       role: 'stud_key',    preferred: options.preferredStudKey },
+                { selectEl: 'r46StudIdCol',     role: 'stud_id',     preferred: options.preferredStudIdCol },
+                { selectEl: 'r46Stud007Col',    role: 'stud_007',    preferred: options.preferredStud007Col },
+                { selectEl: 'r46Stud010Col',    role: 'stud_010',    preferred: options.preferredStud010Col },
+                { selectEl: 'r46Stud012Col',    role: 'stud_012',    preferred: options.preferredStud012Col },
+                { selectEl: 'r46Stud026Col',    role: 'stud_026',    preferred: options.preferredStud026Col },
+                { selectEl: 'r46StudFilterCol', role: 'stud_filter', preferred: options.preferredStudFilterCol }
+            ]),
+            loadColumnsForTable(gv('r46QualTable'), [
+                { selectEl: 'r46QualKey',     role: 'qual_key',  preferred: options.preferredQualKey },
+                { selectEl: 'r46QualNameCol', role: 'qual_name', preferred: options.preferredQualNameCol }
+            ]),
+            loadColumnsForTable(gv('r46PqmTable'), [
+                { selectEl: 'r46PqmNameCol', role: 'pqm_name', preferred: options.preferredPqmNameCol }
+            ])
+        ]);
+        if (!options.silent) setStatusOutput('r46CfgOut', 'Column mapping detected from selected tables.', 'success');
     }
 
-    function loadWorkspace() {
-        if (!st.clientId) {
-            applyWorkspace(null, false);
-            return Promise.resolve();
+    async function loadColumnsForTable(tableName, groups) {
+        if (!tableName || !st.clientId) return;
+        for (var i = 0; i < groups.length; i++) {
+            var group = groups[i];
+            try {
+                var data = await post(API + '/GetColumns', { clientId: st.clientId, tableName: tableName, tableRole: group.role });
+                if (!data.success || !Array.isArray(data.columns)) continue;
+                fillColumnSelect(group.selectEl, data.columns, group.preferred, data.autoSelected);
+            } catch (e) {}
         }
-
-        setWorkspaceMessage('Loading saved workspace...', 'info');
-        var fetcher = window.fetchJsonWithProgress || function(url, options) {
-            return fetch(url, options).then(function(response) { return response.json(); });
-        };
-
-        return fetcher(API + '/GetWorkspaceState?clientId=' + st.clientId, { method: 'GET' })
-            .then(function(data) {
-                if (!data.success) throw new Error(data.error || 'Failed to load workspace.');
-                applyWorkspace(data.workspace, data.resultsVisible);
-            });
     }
 
-    function loadColumns(role, tableName) {
-        if (!tableName || !gv('r46Server') || !gv('r46Db')) return Promise.resolve();
-
-        return post(API + '/GetColumns', {
-            server: gv('r46Server').trim(),
-            database: gv('r46Db'),
-            driver: gv('r46Driver'),
-            tableName: tableName
-        }).then(function(data) {
-            if (!data.success) return;
-            var cols = data.columns || [];
-            var preferred = function(column, fallback) {
-                return cols.find(function(item) { return item === column; }) || cols[0] || fallback;
-            };
-
-            if (role === 'stud') {
-                fillSelect('r46StudKey', cols, preferred('_001', '_001'));
-                fillSelect('r46StudIdCol', cols, preferred('_008', '_008'));
-                fillSelect('r46Stud007Col', cols, preferred('_007', '_007'));
-                fillSelect('r46Stud010Col', cols, preferred('_010', '_010'));
-                fillSelect('r46Stud012Col', cols, preferred('_012', '_012'));
-                fillSelect('r46Stud026Col', cols, preferred('_026', '_026'));
-                fillSelect('r46StudFilterCol', cols, preferred('_106', '_106'));
-            }
-            if (role === 'qual') {
-                fillSelect('r46QualKey', cols, preferred('_001', '_001'));
-                fillSelect('r46QualNameCol', cols, preferred('_003', '_003'));
-            }
-            if (role === 'pqm') {
-                fillSelect('r46PqmNameCol', cols, preferred('Authorised_Qualification_Name', 'Authorised_Qualification_Name'));
-            }
-        });
-    }
-
-    window.r46Connect = function() {
-        var server = gv('r46Server').trim();
-        if (!server) {
-            setStatusOutput('r46ConnOut', 'Enter the SQL Server name first.', 'error');
-            return;
-        }
-
-        spin('Loading databases...');
-        post(API + '/GetDatabases', { server: server, driver: gv('r46Driver') })
-            .then(function(data) {
-                unspin();
-                if (!data.success) {
-                    setStatusOutput('r46ConnOut', data.error || 'Failed to load databases.', 'error');
-                    return;
-                }
-                fillSelect('r46Db', data.databases || []);
-                setStatusOutput('r46ConnOut', 'Loaded ' + fmt((data.databases || []).length) + ' database(s).', 'success');
-                if ((data.databases || []).length) r46LoadTables();
-            })
-            .catch(function(error) {
-                unspin();
-                setStatusOutput('r46ConnOut', error.message, 'error');
-            });
-    };
-
-    window.r46LoadTables = function() {
-        var db = gv('r46Db');
-        if (!db) return;
-
-        spin('Loading tables...');
-        post(API + '/GetTables', {
-            server: gv('r46Server').trim(),
-            database: db,
-            driver: gv('r46Driver')
-        }).then(function(data) {
-            unspin();
-            if (!data.success) {
-                setStatusOutput('r46CfgOut', data.error || 'Failed to load tables.', 'error');
-                return;
-            }
-            var tables = data.tables || [];
-            fillSelect('r46StudTable', tables, data.autoStudTable || 'dbo_STUD');
-            fillSelect('r46QualTable', tables, data.autoQualTable || 'dbo_QUAL');
-            fillSelect('r46PqmTable', tables, data.autoPqmTable || 'PQM');
-            show('body-r46-cfg', true);
-            setStatusOutput('r46CfgOut', 'Tables loaded. Detecting columns...', 'success');
-            r46DetectColumns();
-        }).catch(function(error) {
-            unspin();
-            setStatusOutput('r46CfgOut', error.message, 'error');
-        });
-    };
+    window.r46LoadTables = function() { loadTables().catch(function(e) { setStatusOutput('r46CfgOut', e.message, 'error'); }); };
 
     window.r46LoadCols = function(role, tableName) {
-        loadColumns(role, tableName);
-    };
-
-    window.r46DetectColumns = function() {
-        spin('Detecting columns...');
-        Promise.all([
-            loadColumns('stud', gv('r46StudTable')),
-            loadColumns('qual', gv('r46QualTable')),
-            loadColumns('pqm', gv('r46PqmTable')),
-        ]).then(function() {
-            unspin();
-            setStatusOutput('r46CfgOut', 'Column mapping detected from selected tables.', 'success');
-        }).catch(function(error) {
-            unspin();
-            setStatusOutput('r46CfgOut', error.message, 'error');
-        });
+        var map = {
+            stud: [
+                { selectEl: 'r46StudKey', role: 'stud_key' },
+                { selectEl: 'r46StudIdCol', role: 'stud_id' },
+                { selectEl: 'r46Stud007Col', role: 'stud_007' },
+                { selectEl: 'r46Stud010Col', role: 'stud_010' },
+                { selectEl: 'r46Stud012Col', role: 'stud_012' },
+                { selectEl: 'r46Stud026Col', role: 'stud_026' },
+                { selectEl: 'r46StudFilterCol', role: 'stud_filter' }
+            ],
+            qual: [
+                { selectEl: 'r46QualKey', role: 'qual_key' },
+                { selectEl: 'r46QualNameCol', role: 'qual_name' }
+            ],
+            pqm: [
+                { selectEl: 'r46PqmNameCol', role: 'pqm_name' }
+            ]
+        };
+        loadColumnsForTable(tableName, map[role] || []);
     };
 
     window.r46Verify = function() {
@@ -798,7 +685,9 @@ window.r46Tab = function(tab) {
         }
 
         try {
+            spin('Running Rule 46...');
             var data = await post(API + '/RunValidation', buildReq());
+            unspin();
             if (!data.success) {
                 setWorkspaceMessage(data.error || 'Rule 46 failed.', 'error');
                 return;
@@ -807,13 +696,13 @@ window.r46Tab = function(tab) {
             st.currentUserHasSignedOff = false;
             st.isWorkspaceSaved = false;
             st.resultsVisible = true;
-            st.summary = data;
             applySummary(data);
             setWorkspaceMessage(
                 'Rule 46 complete. Total: ' + fmt(data.totalValidated) + ' | Pass: ' + fmt(data.passCount) + ' | Fail: ' + fmt(data.failCount) + ' | Status: ' + data.status,
                 String(data.status || '').toUpperCase() === 'PASS' ? 'success' : 'warning');
         } catch(error) {
-                setWorkspaceMessage(error.message, 'error');
+            unspin();
+            setWorkspaceMessage(error.message, 'error');
         }
     };
 
@@ -935,6 +824,85 @@ window.r46Tab = function(tab) {
             label: 'Downloading SQL'
         });
     };
+
+    function applyWorkspace(ws, resultsVisible) {
+        var datasetsLinkEl = g('r46DatasetsLink');
+        if (datasetsLinkEl) datasetsLinkEl.href = st.clientId ? '/EngagementDatasets?clientId=' + st.clientId : '#';
+
+        if (!ws) {
+            st.runId = null;
+            st.summary = null;
+            st.isWorkspaceSaved = false;
+            st.currentUserHasSignedOff = false;
+            st.resultsVisible = false;
+            st.currentUserEngagementRole = '';
+            setWorkspaceMessage('No saved Rule 46 workspace for this engagement yet.', 'info');
+            var runState = g('r46RunState');
+            if (runState) runState.textContent = 'No saved run loaded';
+            var runLabel = g('r46RunLabel');
+            if (runLabel) runLabel.textContent = 'No saved run yet';
+            var statusLabel = g('r46StatusLabel');
+            if (statusLabel) statusLabel.textContent = '-';
+            var editedLabel = g('r46EditedLabel');
+            if (editedLabel) editedLabel.textContent = '-';
+            applySummary(null);
+            if (!IS_RESULTS_ONLY) loadTables().catch(function() {});
+            return;
+        }
+
+        st.runId = ws.runId || null;
+        st.resultsVisible = !!resultsVisible;
+        st.currentUserEngagementRole = ws.currentUserEngagementRole || '';
+
+        if (!IS_RESULTS_ONLY) {
+            if (ws.studFilterValue) g('r46StudFilterValue').value = ws.studFilterValue;
+            loadTables({
+                preferredStudTable: ws.studTable,
+                preferredQualTable: ws.qualTable,
+                preferredPqmTable: ws.pqmTable,
+                preferredStudKey: ws.studKey,
+                preferredStudIdCol: ws.studIdCol,
+                preferredStud007Col: ws.stud007Col,
+                preferredStud010Col: ws.stud010Col,
+                preferredStud012Col: ws.stud012Col,
+                preferredStud026Col: ws.stud026Col,
+                preferredStudFilterCol: ws.studFilterCol,
+                preferredQualKey: ws.qualKey,
+                preferredQualNameCol: ws.qualNameCol,
+                preferredPqmNameCol: ws.pqmNameCol,
+                silent: true
+            }).catch(function() {});
+        }
+
+        applyWsMeta(ws);
+
+        if (!resultsVisible) {
+            setWorkspaceMessage('Saved Rule 46 results are not available for your role.', 'info');
+            applySummary(null);
+            return;
+        }
+
+        setWorkspaceMessage(ws.summary ? 'Saved Rule 46 workspace loaded.' : 'Rule 46 workspace loaded. Run validation to generate results.', 'success');
+        applySummary(ws.summary || null, { fromWorkspace: true });
+    }
+
+    function loadWorkspace() {
+        if (!st.clientId) {
+            applyWorkspace(null, false);
+            return Promise.resolve();
+        }
+
+        setWorkspaceMessage('Loading saved workspace...', 'info');
+        var fetcher = window.fetchJsonWithProgress || function(url, options) {
+            return fetch(url, options).then(function(response) { return response.json(); });
+        };
+
+        return fetcher(API + '/GetWorkspaceState?clientId=' + st.clientId, { method: 'GET' })
+            .then(function(data) {
+                if (!data.success) throw new Error(data.error || 'Failed to load workspace.');
+                applyWorkspace(data.workspace, data.resultsVisible);
+            });
+    }
 
     window.r46OnClientChange = function(value) {
         st.clientId = parseInt(value, 10) || 0;

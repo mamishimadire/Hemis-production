@@ -1,0 +1,96 @@
+@{
+    ViewData["Title"] = "Importing…";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    int clientId = ViewBag.ClientId;
+    int jobId = ViewBag.JobId;
+}
+
+<div class="page-header">
+    <div>
+        <h1>Importing your data</h1>
+        <p>This can keep running in the background — you can leave this page and come back, the import won't be interrupted.</p>
+    </div>
+</div>
+
+<div class="card" style="max-width:640px;margin:0 auto;padding:24px;">
+    <div id="statusLabel" style="font-weight:700;margin-bottom:8px">Starting…</div>
+    <div style="background:var(--border);border-radius:8px;height:18px;overflow:hidden;margin-bottom:10px;">
+        <div id="progressBar" style="background:var(--brand,#2563eb);height:100%;width:0%;transition:width .3s;"></div>
+    </div>
+    <div id="progressText" style="color:var(--text-muted);font-size:14px;margin-bottom:20px">Queued…</div>
+
+    <div id="errorBox" class="alert alert--error" style="display:none;margin-bottom:16px"></div>
+    <div id="warningBox" class="alert" style="display:none;margin-bottom:16px;background:#fff8e1;color:#8a6100;border:1px solid #f0d58c;border-radius:8px;padding:12px 16px;"></div>
+
+    <div id="doneActions" style="display:none;">
+        <a href="@Url.Action("Index", "EngagementDatasets", new { clientId })" class="btn btn-success">Go to tables →</a>
+    </div>
+    <div id="failActions" style="display:none;">
+        <a href="@Url.Action("Index", "EngagementDatasets", new { clientId })" class="btn btn-secondary">Back to engagement</a>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+(function () {
+    var clientId = @clientId;
+    var jobId = @jobId;
+    var statusLabel = document.getElementById('statusLabel');
+    var progressBar = document.getElementById('progressBar');
+    var progressText = document.getElementById('progressText');
+    var errorBox = document.getElementById('errorBox');
+    var warningBox = document.getElementById('warningBox');
+    var doneActions = document.getElementById('doneActions');
+    var failActions = document.getElementById('failActions');
+
+    function formatNumber(n) {
+        return n.toLocaleString();
+    }
+
+    function poll() {
+        fetch('/EngagementDatasets/UploadJobStatus?clientId=' + clientId + '&jobId=' + jobId, { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (s) {
+                if (s.status === 'Queued') {
+                    statusLabel.textContent = 'Queued…';
+                    progressText.textContent = 'Waiting for a worker slot…';
+                    setTimeout(poll, 1500);
+                } else if (s.status === 'Running') {
+                    statusLabel.textContent = 'Importing "' + s.tableName + '"…';
+                    if (s.totalRows) {
+                        var pct = Math.min(100, Math.round((s.processedRows / s.totalRows) * 100));
+                        progressBar.style.width = pct + '%';
+                        progressText.textContent = pct + '% — ' + formatNumber(s.processedRows) + ' / ' + formatNumber(s.totalRows) + ' rows imported';
+                    } else {
+                        progressBar.style.width = '100%';
+                        progressBar.style.opacity = '0.5';
+                        progressText.textContent = formatNumber(s.processedRows) + ' rows imported so far…';
+                    }
+                    setTimeout(poll, 1500);
+                } else if (s.status === 'Completed') {
+                    statusLabel.textContent = 'Done — "' + s.tableName + '" created.';
+                    progressBar.style.width = '100%';
+                    progressBar.style.opacity = '1';
+                    progressText.textContent = formatNumber(s.processedRows) + ' row(s) imported.';
+                    if (s.errorMessage) {
+                        warningBox.textContent = '⚠️ ' + s.errorMessage;
+                        warningBox.style.display = 'block';
+                    }
+                    doneActions.style.display = 'block';
+                } else if (s.status === 'Failed') {
+                    statusLabel.textContent = 'Import failed';
+                    errorBox.textContent = '❌ ' + (s.errorMessage || 'The import failed.');
+                    errorBox.style.display = 'block';
+                    failActions.style.display = 'block';
+                }
+            })
+            .catch(function () {
+                progressText.textContent = 'Checking progress…';
+                setTimeout(poll, 3000);
+            });
+    }
+
+    poll();
+})();
+</script>
+}

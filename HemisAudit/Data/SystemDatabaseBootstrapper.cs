@@ -1,474 +1,295 @@
-using BCrypt.Net;
-using HemisAudit.Services;
-using Microsoft.Data.SqlClient;
-using Newtonsoft.Json;
+using Npgsql;
 
 namespace HemisAudit.Data
 {
+    // Creates the operational tables (engagements, assignments, validation runs, audit log,
+    // sign-offs, messaging, favorites, rule scope) on the same Supabase Postgres database
+    // that hosts Identity. There is no more separate "Users" mirror table — every user
+    // reference here is a text FK straight to AspNetUsers("Id").
     public static class SystemDatabaseBootstrapper
     {
         public static async Task EnsureCreatedAsync(IConfiguration configuration)
         {
-            var server = configuration["SystemDatabase:Server"] ?? @"(localdb)\MSSQLLocalDB";
-            var database = configuration["SystemDatabase:Name"] ?? "HEMISBaseSystem";
-            var trustServerCertificate = configuration.GetValue("SystemDatabase:TrustServerCertificate", true);
+            var connectionString = PostgresConnectionStringHelper.WithResiliencyDefaults(
+                configuration.GetConnectionString("Postgres")
+                    ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured."));
 
-            await EnsureDatabaseExistsAsync(server, database, trustServerCertificate);
-
-            var connectionString = BuildConnectionString(server, database, trustServerCertificate);
-            using var connection = new SqlConnection(connectionString);
-            await connection.OpenAsync();
-
-            await ExecuteSchemaAsync(connection);
-            await SeedAdminAsync(connection);
+            // This runs once at startup, before any of the app's own retry/resiliency wrapping
+            // is in play — a single transient Supabase hiccup here would otherwise crash the
+            // whole app before it can start serving requests at all. The DDL below is entirely
+            // idempotent (CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS), so retrying
+            // the whole sequence on a transient failure is safe.
+            const int maxAttempts = 3;
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    await using var connection = new NpgsqlConnection(connectionString);
+                    await connection.OpenAsync();
+                    await ExecuteSchemaAsync(connection);
+                    return;
+                }
+                catch (Exception ex) when (attempt < maxAttempts && IsTransient(ex))
+                {
+                    await Task.Delay(500 * attempt);
+                }
+            }
         }
 
-        private static async Task EnsureDatabaseExistsAsync(string server, string database, bool trustServerCertificate)
-        {
-            var masterConnectionString = BuildConnectionString(server, "master", trustServerCertificate);
-            using var connection = new SqlConnection(masterConnectionString);
-            await connection.OpenAsync();
+        private static bool IsTransient(Exception ex) =>
+            ex is NpgsqlException
+            || ex is System.Net.Sockets.SocketException
+            || ex is System.IO.IOException
+            || ex is TimeoutException;
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = $@"
-IF DB_ID(N'{EscapeSqlLiteral(database)}') IS NULL
-BEGIN
-    CREATE DATABASE [{database}];
-END";
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private static async Task ExecuteSchemaAsync(SqlConnection connection)
+        private static async Task ExecuteSchemaAsync(NpgsqlConnection connection)
         {
             var ddlStatements = new[]
             {
-                @"
-IF OBJECT_ID(N'dbo.Users', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.Users (
-      UserID            INT IDENTITY(1,1) PRIMARY KEY,
-      FirstName         NVARCHAR(100) NOT NULL,
-      LastName          NVARCHAR(100) NOT NULL,
-      Email             NVARCHAR(255) NOT NULL UNIQUE,
-      EmployeeCode      NVARCHAR(50) NULL,
-      PasswordHash      NVARCHAR(255) NOT NULL,
-      SystemRole        NVARCHAR(50) NOT NULL CHECK (SystemRole IN ('Admin','Director','Manager','DataAnalyst','Trainee')),
-      IsActive          BIT NOT NULL DEFAULT 1,
-      MustResetPassword BIT NOT NULL DEFAULT 1,
-      PasswordSetDate   DATETIME NOT NULL DEFAULT GETDATE(),
-      PasswordHistory   NVARCHAR(MAX) NULL,
-      CreatedAt         DATETIME NOT NULL DEFAULT GETDATE(),
-      CreatedBy         INT NULL
-    );
-END",
-                @"
-IF OBJECT_ID(N'dbo.Clients', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.Clients (
-      ClientID        INT IDENTITY(1,1) PRIMARY KEY,
-      EngagementName  NVARCHAR(255) NOT NULL,
-      MaconomyNumber  NVARCHAR(100) NOT NULL UNIQUE,
-      Industry        NVARCHAR(100) NULL,
-      DirectorName    NVARCHAR(200) NOT NULL,
-      DirectorEmail   NVARCHAR(255) NOT NULL,
-      DirectorEmpCode NVARCHAR(50)  NOT NULL,
-      ManagerName     NVARCHAR(200) NOT NULL,
-      ManagerEmail    NVARCHAR(255) NOT NULL,
-      ManagerEmpCode  NVARCHAR(50)  NOT NULL,
-      Status          NVARCHAR(50) NOT NULL DEFAULT 'Pending',
-      CreatedBy       INT NOT NULL,
-      ApprovedBy      INT NULL,
-      ApprovedAt      DATETIME NULL,
-      ArchivedBy      INT NULL,
-      ArchivedAt      DATETIME NULL,
-      CreatedAt       DATETIME NOT NULL DEFAULT GETDATE()
-    );
-END",
-                @"
-IF OBJECT_ID(N'dbo.UserClientAssignments', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.UserClientAssignments (
-      AssignmentID INT IDENTITY(1,1) PRIMARY KEY,
-      UserID       INT NOT NULL REFERENCES dbo.Users(UserID),
-      ClientID     INT NOT NULL REFERENCES dbo.Clients(ClientID),
-      EngagementRole NVARCHAR(50) NOT NULL DEFAULT 'DataAnalyst',
-      AssignedBy   INT NOT NULL REFERENCES dbo.Users(UserID),
-      AssignedAt   DATETIME NOT NULL DEFAULT GETDATE(),
-      CONSTRAINT UQ_UserClientAssignments_User_Client UNIQUE (UserID, ClientID)
-    );
-END",
-                @"
-IF OBJECT_ID(N'dbo.ValidationRuns', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.ValidationRuns (
-      RunID         INT IDENTITY(1,1) PRIMARY KEY,
-      ClientID      INT NOT NULL REFERENCES dbo.Clients(ClientID),
-      UserID        INT NOT NULL REFERENCES dbo.Users(UserID),
-      HemisServer   NVARCHAR(255) NULL,
-      AuditDatabase NVARCHAR(255) NOT NULL,
-      StudTable     NVARCHAR(255) NULL,
-      DeceasedTable NVARCHAR(255) NULL,
-      BridgeTable   NVARCHAR(255) NULL,
-      CrseTable     NVARCHAR(255) NULL,
-      StudColumn    NVARCHAR(255) NULL,
-      DeceasedColumn NVARCHAR(255) NULL,
-      RuleNumber    INT NULL,
-      RuleName      NVARCHAR(255) NULL,
-      Status        NVARCHAR(50) NULL,
-      RunTimestamp  DATETIME NOT NULL DEFAULT GETDATE(),
-      TotalRecords  INT NULL,
-      PassCount     INT NULL,
-      FailCount     INT NULL,
-      ExceptionRate DECIMAL(10,4) NULL,
-      ExceptionsJSON NVARCHAR(MAX) NULL,
-      ResultsJSON   NVARCHAR(MAX) NULL,
-      RunByUserName NVARCHAR(255) NULL,
-      LastEditedByUserName NVARCHAR(255) NULL,
-      LastEditedAt  DATETIME NULL,
-      PreviousHash  NVARCHAR(128) NULL,
-      RecordHash    NVARCHAR(128) NULL,
-      IsCurrent     BIT NOT NULL DEFAULT 1
-    );
-END",
-                @"
-IF COL_LENGTH('dbo.ValidationRuns', 'WorkspaceSavedAt') IS NULL
-BEGIN
-    ALTER TABLE dbo.ValidationRuns
-    ADD WorkspaceSavedAt DATETIME NULL;
-END",
-                @"
-IF OBJECT_ID(N'dbo.AuditLog', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.AuditLog (
-      LogID       INT IDENTITY(1,1) PRIMARY KEY,
-      UserID      INT NULL REFERENCES dbo.Users(UserID),
-      Action      NVARCHAR(255) NOT NULL,
-      EntityType  NVARCHAR(100) NULL,
-      EntityID    INT NULL,
-      OldValues   NVARCHAR(MAX) NULL,
-      NewValues   NVARCHAR(MAX) NULL,
-      IPAddress   NVARCHAR(50) NULL,
-      Timestamp   DATETIME NOT NULL DEFAULT GETDATE(),
-      PreviousHash NVARCHAR(128) NULL,
-      RecordHash   NVARCHAR(128) NULL
-    );
-END",
-                @"
-IF OBJECT_ID(N'dbo.ReviewSignoffs', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.ReviewSignoffs (
-      SignoffID   INT IDENTITY(1,1) PRIMARY KEY,
-      ClientID    INT NOT NULL REFERENCES dbo.Clients(ClientID),
-      RunID       INT NULL REFERENCES dbo.ValidationRuns(RunID),
-      ReviewerID  INT NOT NULL REFERENCES dbo.Users(UserID),
-      SignoffRole NVARCHAR(50) NOT NULL DEFAULT 'DataAnalyst',
-      ReviewType  NVARCHAR(50) NOT NULL CHECK (ReviewType IN ('Preliminary','Final')),
-      Comment     NVARCHAR(MAX) NULL,
-      SignedOffAt DATETIME NOT NULL DEFAULT GETDATE()
-    );
-END",
-                @"
-IF OBJECT_ID(N'dbo.PasswordResetTokens', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.PasswordResetTokens (
-      TokenID   INT IDENTITY(1,1) PRIMARY KEY,
-      UserID    INT NOT NULL REFERENCES dbo.Users(UserID),
-      Token     NVARCHAR(500) NOT NULL UNIQUE,
-      ExpiresAt DATETIME NOT NULL,
-      Used      BIT NOT NULL DEFAULT 0,
-      CreatedAt DATETIME NOT NULL DEFAULT GETDATE()
-    );
-END",
-                @"
-IF OBJECT_ID(N'dbo.ImpersonationLog', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.ImpersonationLog (
-      ImpersonationID    INT IDENTITY(1,1) PRIMARY KEY,
-      AdminUserID        INT NOT NULL REFERENCES dbo.Users(UserID),
-      ImpersonatedRole   NVARCHAR(50) NOT NULL,
-      ImpersonatedUserID INT NULL REFERENCES dbo.Users(UserID),
-      StartedAt          DATETIME NOT NULL DEFAULT GETDATE(),
-      EndedAt            DATETIME NULL
-    );
-END",
-                @"
-IF OBJECT_ID(N'dbo.MessageThreads', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.MessageThreads (
-      ThreadID     INT IDENTITY(1,1) PRIMARY KEY,
-      ClientID     INT NULL REFERENCES dbo.Clients(ClientID),
-      Subject      NVARCHAR(255) NOT NULL,
-      CreatedByUserID INT NOT NULL REFERENCES dbo.Users(UserID),
-      CreatedAt    DATETIME NOT NULL DEFAULT GETDATE(),
-      LastMessageAt DATETIME NOT NULL DEFAULT GETDATE(),
-      PreviousHash NVARCHAR(128) NULL,
-      RecordHash   NVARCHAR(128) NULL
-    );
-END",
-                @"
-IF OBJECT_ID(N'dbo.ThreadMessages', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.ThreadMessages (
-      MessageID    INT IDENTITY(1,1) PRIMARY KEY,
-      ThreadID     INT NOT NULL REFERENCES dbo.MessageThreads(ThreadID),
-      SenderUserID INT NOT NULL REFERENCES dbo.Users(UserID),
-      Body         NVARCHAR(MAX) NOT NULL,
-      ReplyToMessageID INT NULL REFERENCES dbo.ThreadMessages(MessageID),
-      SentAt       DATETIME NOT NULL DEFAULT GETDATE(),
-      PreviousHash NVARCHAR(128) NULL,
-      RecordHash   NVARCHAR(128) NULL
-    );
-END",
-                @"
-IF OBJECT_ID(N'dbo.ThreadMessageRecipients', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.ThreadMessageRecipients (
-      RecipientID  INT IDENTITY(1,1) PRIMARY KEY,
-      MessageID    INT NOT NULL REFERENCES dbo.ThreadMessages(MessageID),
-      UserID       INT NOT NULL REFERENCES dbo.Users(UserID),
-      IsRead       BIT NOT NULL DEFAULT 0,
-      ReadAt       DATETIME NULL,
-      CONSTRAINT UQ_ThreadMessageRecipients_Message_User UNIQUE (MessageID, UserID)
-    );
-END"
-                ,
-                @"
-IF OBJECT_ID(N'dbo.ThreadUserStates', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.ThreadUserStates (
-      StateID      INT IDENTITY(1,1) PRIMARY KEY,
-      ThreadID     INT NOT NULL REFERENCES dbo.MessageThreads(ThreadID),
-      UserID       INT NOT NULL REFERENCES dbo.Users(UserID),
-      IsDeleted    BIT NOT NULL DEFAULT 0,
-      DeletedAt    DATETIME NULL,
-      CONSTRAINT UQ_ThreadUserStates_Thread_User UNIQUE (ThreadID, UserID)
-    );
-END"
-                ,
-                @"
-IF OBJECT_ID(N'dbo.ThreadMessageAttachments', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.ThreadMessageAttachments (
-      AttachmentID     INT IDENTITY(1,1) PRIMARY KEY,
-      MessageID        INT NOT NULL REFERENCES dbo.ThreadMessages(MessageID),
-      FileName         NVARCHAR(255) NOT NULL,
-      FilePath         NVARCHAR(500) NOT NULL,
-      ContentType      NVARCHAR(100) NOT NULL,
-      FileSize         BIGINT NOT NULL,
-      AttachmentKind   NVARCHAR(20) NOT NULL DEFAULT 'file',
-      CreatedAt        DATETIME NOT NULL DEFAULT GETDATE()
-    );
-END"
-                ,
-                @"
-IF OBJECT_ID(N'dbo.ClientFavorites', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.ClientFavorites (
-      FavoriteID   INT IDENTITY(1,1) PRIMARY KEY,
-      UserID       INT NOT NULL REFERENCES dbo.Users(UserID),
-      ClientID     INT NOT NULL REFERENCES dbo.Clients(ClientID),
-      CreatedAt    DATETIME NOT NULL DEFAULT GETDATE(),
-      CONSTRAINT UQ_ClientFavorites_User_Client UNIQUE (UserID, ClientID)
-    );
-END"
-                ,
-                @"
-IF OBJECT_ID(N'dbo.EngagementRuleScope', N'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.EngagementRuleScope (
-      ScopeID         INT IDENTITY(1,1) PRIMARY KEY,
-      ClientID        INT NOT NULL REFERENCES dbo.Clients(ClientID),
-      RuleNumber      INT NOT NULL,
-      AddedAt         DATETIME NOT NULL DEFAULT GETDATE(),
-      AddedByUserID   INT NOT NULL REFERENCES dbo.Users(UserID),
-      AddedByUserName NVARCHAR(200) NOT NULL DEFAULT '',
-      CONSTRAINT UQ_EngagementRuleScope_Client_Rule UNIQUE (ClientID, RuleNumber)
-    );
-END"
+                @"CREATE TABLE IF NOT EXISTS ""Clients"" (
+                    ""ClientID""        integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""FirmID""          integer NOT NULL,
+                    ""EngagementName""  varchar(255) NOT NULL,
+                    ""MaconomyNumber""  varchar(100) NOT NULL UNIQUE,
+                    ""Industry""        varchar(100) NULL,
+                    ""DirectorName""    varchar(200) NOT NULL DEFAULT '',
+                    ""DirectorEmail""   varchar(255) NOT NULL DEFAULT '',
+                    ""DirectorEmpCode"" varchar(50)  NOT NULL DEFAULT '',
+                    ""ManagerName""     varchar(200) NOT NULL DEFAULT '',
+                    ""ManagerEmail""    varchar(255) NOT NULL DEFAULT '',
+                    ""ManagerEmpCode""  varchar(50)  NOT NULL DEFAULT '',
+                    ""Status""          varchar(50) NOT NULL DEFAULT 'Pending'
+                                        CHECK (""Status"" IN ('Pending','Approved','Active','Archived','Rejected')),
+                    ""CreatedBy""       text NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""ApprovedBy""      text NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""ApprovedAt""      timestamptz NULL,
+                    ""ArchivedBy""      text NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""ArchivedAt""      timestamptz NULL,
+                    ""CreatedAt""       timestamptz NOT NULL DEFAULT now()
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""UserClientAssignments"" (
+                    ""AssignmentID""   integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""UserID""         text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""ClientID""       integer NOT NULL REFERENCES ""Clients""(""ClientID""),
+                    ""EngagementRole"" varchar(50) NOT NULL DEFAULT 'DataAnalyst',
+                    ""AssignedBy""     text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""AssignedAt""     timestamptz NOT NULL DEFAULT now(),
+                    CONSTRAINT ""UQ_UserClientAssignments_User_Client"" UNIQUE (""UserID"", ""ClientID"")
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""ValidationRuns"" (
+                    ""RunID""          integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""ClientID""       integer NOT NULL REFERENCES ""Clients""(""ClientID""),
+                    ""UserID""         text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""HemisServer""    varchar(255) NULL,
+                    ""AuditDatabase""  varchar(255) NOT NULL,
+                    ""StudTable""      varchar(255) NULL,
+                    ""DeceasedTable""  varchar(255) NULL,
+                    ""BridgeTable""    varchar(255) NULL,
+                    ""CrseTable""      varchar(255) NULL,
+                    ""StudColumn""     varchar(255) NULL,
+                    ""DeceasedColumn"" varchar(255) NULL,
+                    ""RuleNumber""     integer NULL,
+                    ""RuleName""       varchar(255) NULL,
+                    ""Status""         varchar(50) NULL,
+                    ""RunTimestamp""   timestamptz NOT NULL DEFAULT now(),
+                    ""TotalRecords""   integer NULL,
+                    ""PassCount""      integer NULL,
+                    ""FailCount""      integer NULL,
+                    ""ExceptionRate""  numeric(10,4) NULL,
+                    ""ExceptionsJSON"" text NULL,
+                    ""ResultsJSON""    text NULL,
+                    ""RunByUserName""  varchar(255) NULL,
+                    ""LastEditedByUserName"" varchar(255) NULL,
+                    ""LastEditedAt""   timestamptz NULL,
+                    ""PreviousHash""   varchar(128) NULL,
+                    ""RecordHash""     varchar(128) NULL,
+                    ""IsCurrent""      boolean NOT NULL DEFAULT true,
+                    ""WorkspaceSavedAt"" timestamptz NULL
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""AuditLog"" (
+                    ""LogID""        integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""UserID""       text NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""Action""       varchar(255) NOT NULL,
+                    ""EntityType""   varchar(100) NULL,
+                    ""EntityID""     integer NULL,
+                    ""OldValues""    text NULL,
+                    ""NewValues""    text NULL,
+                    ""IPAddress""    varchar(50) NULL,
+                    ""Timestamp""    timestamptz NOT NULL DEFAULT now(),
+                    ""PreviousHash"" varchar(128) NULL,
+                    ""RecordHash""   varchar(128) NULL
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""ReviewSignoffs"" (
+                    ""SignoffID""   integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""ClientID""    integer NOT NULL REFERENCES ""Clients""(""ClientID""),
+                    ""RunID""       integer NULL REFERENCES ""ValidationRuns""(""RunID""),
+                    ""ReviewerID""  text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""SignoffRole"" varchar(50) NOT NULL DEFAULT 'DataAnalyst',
+                    ""ReviewType""  varchar(50) NOT NULL CHECK (""ReviewType"" IN ('Preliminary','Final')),
+                    ""Comment""     text NULL,
+                    ""SignedOffAt"" timestamptz NOT NULL DEFAULT now(),
+                    CONSTRAINT ""UQ_ReviewSignoffs_Run_Reviewer"" UNIQUE (""RunID"", ""ReviewerID"")
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""PasswordResetTokens"" (
+                    ""TokenID""   integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""UserID""    text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""Token""     varchar(500) NOT NULL UNIQUE,
+                    ""ExpiresAt"" timestamptz NOT NULL,
+                    ""Used""      boolean NOT NULL DEFAULT false,
+                    ""CreatedAt"" timestamptz NOT NULL DEFAULT now()
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""ImpersonationLog"" (
+                    ""ImpersonationID""    integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""AdminUserID""        text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""ImpersonatedRole""   varchar(50) NOT NULL,
+                    ""ImpersonatedUserID"" text NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""StartedAt""          timestamptz NOT NULL DEFAULT now(),
+                    ""EndedAt""            timestamptz NULL
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""MessageThreads"" (
+                    ""ThreadID""        integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""ClientID""        integer NULL REFERENCES ""Clients""(""ClientID""),
+                    ""Subject""         varchar(255) NOT NULL,
+                    ""CreatedByUserID"" text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""CreatedAt""       timestamptz NOT NULL DEFAULT now(),
+                    ""LastMessageAt""   timestamptz NOT NULL DEFAULT now(),
+                    ""PreviousHash""    varchar(128) NULL,
+                    ""RecordHash""      varchar(128) NULL
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""ThreadMessages"" (
+                    ""MessageID""        integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""ThreadID""         integer NOT NULL REFERENCES ""MessageThreads""(""ThreadID""),
+                    ""SenderUserID""     text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""Body""             text NOT NULL,
+                    ""ReplyToMessageID"" integer NULL REFERENCES ""ThreadMessages""(""MessageID""),
+                    ""SentAt""           timestamptz NOT NULL DEFAULT now(),
+                    ""PreviousHash""     varchar(128) NULL,
+                    ""RecordHash""       varchar(128) NULL,
+                    ""EditedAt""         timestamptz NULL,
+                    ""IsDeleted""        boolean NOT NULL DEFAULT false,
+                    ""DeletedAt""        timestamptz NULL
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""ThreadMessageRecipients"" (
+                    ""RecipientID"" integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""MessageID""   integer NOT NULL REFERENCES ""ThreadMessages""(""MessageID""),
+                    ""UserID""      text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""IsRead""      boolean NOT NULL DEFAULT false,
+                    ""ReadAt""      timestamptz NULL,
+                    CONSTRAINT ""UQ_ThreadMessageRecipients_Message_User"" UNIQUE (""MessageID"", ""UserID"")
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""ThreadUserStates"" (
+                    ""StateID""   integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""ThreadID""  integer NOT NULL REFERENCES ""MessageThreads""(""ThreadID""),
+                    ""UserID""    text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""IsDeleted"" boolean NOT NULL DEFAULT false,
+                    ""DeletedAt"" timestamptz NULL,
+                    CONSTRAINT ""UQ_ThreadUserStates_Thread_User"" UNIQUE (""ThreadID"", ""UserID"")
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""ThreadMessageAttachments"" (
+                    ""AttachmentID""   integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""MessageID""      integer NOT NULL REFERENCES ""ThreadMessages""(""MessageID""),
+                    ""FileName""       varchar(255) NOT NULL,
+                    ""FilePath""       varchar(500) NOT NULL,
+                    ""ContentType""    varchar(100) NOT NULL,
+                    ""FileSize""       bigint NOT NULL,
+                    ""AttachmentKind"" varchar(20) NOT NULL DEFAULT 'file',
+                    ""CreatedAt""      timestamptz NOT NULL DEFAULT now()
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""ClientFavorites"" (
+                    ""FavoriteID"" integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""UserID""     text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""ClientID""   integer NOT NULL REFERENCES ""Clients""(""ClientID""),
+                    ""CreatedAt""  timestamptz NOT NULL DEFAULT now(),
+                    CONSTRAINT ""UQ_ClientFavorites_User_Client"" UNIQUE (""UserID"", ""ClientID"")
+                );",
+
+                @"CREATE TABLE IF NOT EXISTS ""EngagementRuleScope"" (
+                    ""ScopeID""         integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""ClientID""        integer NOT NULL REFERENCES ""Clients""(""ClientID""),
+                    ""RuleNumber""      integer NOT NULL,
+                    ""AddedAt""         timestamptz NOT NULL DEFAULT now(),
+                    ""AddedByUserID""   text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""AddedByUserName"" varchar(200) NOT NULL DEFAULT '',
+                    CONSTRAINT ""UQ_EngagementRuleScope_Client_Rule"" UNIQUE (""ClientID"", ""RuleNumber"")
+                );",
+
+                // One named "database" per engagement — the data analyst creates this first;
+                // it's a friendly label over the engagement's own Postgres schema
+                // (engagement_{ClientID}, always computed server-side, never from this name).
+                // Uploads are blocked until a row exists here for the engagement.
+                @"CREATE TABLE IF NOT EXISTS ""EngagementDatabases"" (
+                    ""ClientID""        integer PRIMARY KEY REFERENCES ""Clients""(""ClientID""),
+                    ""DatabaseName""    varchar(200) NOT NULL,
+                    ""SchemaName""      varchar(100) NOT NULL DEFAULT '',
+                    ""CreatedByUserID"" text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""CreatedAt""       timestamptz NOT NULL DEFAULT now()
+                );",
+
+                // CREATE TABLE IF NOT EXISTS above won't retroactively add this column to a
+                // table created before SchemaName existed, so make sure it's really there.
+                @"ALTER TABLE ""EngagementDatabases"" ADD COLUMN IF NOT EXISTS ""SchemaName"" varchar(100) NOT NULL DEFAULT '';",
+
+                // Tracks a dataset upload's progress once it's handed off to the background
+                // import worker, so a huge file (millions of rows) can be imported without
+                // tying up the HTTP request that started it — the browser polls this row's
+                // Status/ProcessedRows instead of waiting on the request to complete.
+                @"CREATE TABLE IF NOT EXISTS ""DatasetUploadJobs"" (
+                    ""JobID""           integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    ""ClientID""        integer NOT NULL REFERENCES ""Clients""(""ClientID""),
+                    ""TableName""       varchar(100) NOT NULL,
+                    ""Token""           varchar(64) NOT NULL,
+                    ""Status""          varchar(20) NOT NULL DEFAULT 'Queued'
+                                        CHECK (""Status"" IN ('Queued','Running','Completed','Failed')),
+                    ""TotalRows""       bigint NULL,
+                    ""ProcessedRows""   bigint NOT NULL DEFAULT 0,
+                    ""ErrorMessage""    text NULL,
+                    ""CreatedByUserID"" text NOT NULL REFERENCES ""AspNetUsers""(""Id""),
+                    ""CreatedAt""       timestamptz NOT NULL DEFAULT now(),
+                    ""StartedAt""       timestamptz NULL,
+                    ""CompletedAt""     timestamptz NULL
+                );",
+                @"CREATE INDEX IF NOT EXISTS ""IX_DatasetUploadJobs_Client"" ON ""DatasetUploadJobs"" (""ClientID"");"
             };
 
             foreach (var ddl in ddlStatements)
             {
-                await using var command = connection.CreateConfiguredCommand();
+                await using var command = connection.CreateCommand();
                 command.CommandText = ddl;
                 await command.ExecuteNonQueryAsync();
             }
 
-            await EnsureCompatibilityColumnsAsync(connection);
-            await EnsureIndexAsync(connection, "Users", "IX_Users_Email", true, "[Email]");
-            await EnsureIndexAsync(connection, "Clients", "IX_Clients_MaconomyNumber", true, "[MaconomyNumber]");
-            await EnsureIndexAsync(connection, "ValidationRuns", "IX_ValidationRuns_Client_Rule_Current", false, "[ClientID], [RuleNumber], [IsCurrent]");
-            await EnsureIndexAsync(connection, "ReviewSignoffs", "IX_ReviewSignoffs_Run_Reviewer", true, "[RunID], [ReviewerID]");
-            await EnsureIndexAsync(connection, "AuditLog", "IX_AuditLog_Timestamp", false, "[Timestamp]");
-            await EnsureIndexAsync(connection, "AuditLog", "IX_AuditLog_UserID", false, "[UserID]");
-            await EnsureIndexAsync(connection, "MessageThreads", "IX_MessageThreads_Client_LastMessage", false, "[ClientID], [LastMessageAt]");
-            await EnsureIndexAsync(connection, "ThreadMessages", "IX_ThreadMessages_Thread_SentAt", false, "[ThreadID], [SentAt]");
-            await EnsureIndexAsync(connection, "ThreadMessageRecipients", "IX_ThreadMessageRecipients_User_Read", false, "[UserID], [IsRead]");
-            await EnsureIndexAsync(connection, "ThreadUserStates", "IX_ThreadUserStates_User_Deleted", false, "[UserID], [IsDeleted]");
-            await EnsureIndexAsync(connection, "ThreadMessageAttachments", "IX_ThreadMessageAttachments_Message", false, "[MessageID]");
-            await EnsureIndexAsync(connection, "ClientFavorites", "IX_ClientFavorites_User", false, "[UserID]");
-        }
-
-        private static async Task EnsureCompatibilityColumnsAsync(SqlConnection connection)
-        {
-            // Existing LocalDB databases may have been created from an older schema.
-            // These additive upgrades keep startup idempotent and aligned with the queries in SystemDatabaseService.
-            await EnsureColumnAsync(connection, "Clients", "DirectorName", "NVARCHAR(200) NOT NULL CONSTRAINT DF_Clients_DirectorName DEFAULT ''");
-            await EnsureColumnAsync(connection, "Clients", "DirectorEmail", "NVARCHAR(255) NOT NULL CONSTRAINT DF_Clients_DirectorEmail DEFAULT ''");
-            await EnsureColumnAsync(connection, "Clients", "DirectorEmpCode", "NVARCHAR(50) NOT NULL CONSTRAINT DF_Clients_DirectorEmpCode DEFAULT ''");
-            await EnsureColumnAsync(connection, "Clients", "Industry", "NVARCHAR(100) NULL");
-            await EnsureColumnAsync(connection, "Clients", "ManagerName", "NVARCHAR(200) NOT NULL CONSTRAINT DF_Clients_ManagerName DEFAULT ''");
-            await EnsureColumnAsync(connection, "Clients", "ManagerEmail", "NVARCHAR(255) NOT NULL CONSTRAINT DF_Clients_ManagerEmail DEFAULT ''");
-            await EnsureColumnAsync(connection, "Clients", "ManagerEmpCode", "NVARCHAR(50) NOT NULL CONSTRAINT DF_Clients_ManagerEmpCode DEFAULT ''");
-            await EnsureColumnAsync(connection, "Clients", "Status", "NVARCHAR(50) NOT NULL CONSTRAINT DF_Clients_Status DEFAULT 'Pending'");
-            await EnsureColumnAsync(connection, "Clients", "CreatedBy", "INT NULL");
-            await EnsureColumnAsync(connection, "Clients", "ApprovedBy", "INT NULL");
-            await EnsureColumnAsync(connection, "Clients", "ApprovedAt", "DATETIME NULL");
-            await EnsureColumnAsync(connection, "Clients", "ArchivedBy", "INT NULL");
-            await EnsureColumnAsync(connection, "Clients", "ArchivedAt", "DATETIME NULL");
-            await EnsureColumnAsync(connection, "Clients", "CreatedAt", "DATETIME NOT NULL CONSTRAINT DF_Clients_CreatedAt DEFAULT GETDATE()");
-
-            await EnsureColumnAsync(connection, "ValidationRuns", "RuleNumber", "INT NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "RuleName", "NVARCHAR(255) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "HemisServer", "NVARCHAR(255) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "Status", "NVARCHAR(50) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "RunTimestamp", "DATETIME NOT NULL CONSTRAINT DF_ValidationRuns_RunTimestamp DEFAULT GETDATE()");
-            await EnsureColumnAsync(connection, "ValidationRuns", "StudTable", "NVARCHAR(255) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "DeceasedTable", "NVARCHAR(255) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "BridgeTable", "NVARCHAR(255) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "CrseTable", "NVARCHAR(255) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "StudColumn", "NVARCHAR(255) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "DeceasedColumn", "NVARCHAR(255) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "TotalRecords", "INT NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "PassCount", "INT NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "FailCount", "INT NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "ExceptionRate", "DECIMAL(10,4) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "ExceptionsJSON", "NVARCHAR(MAX) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "ResultsJSON", "NVARCHAR(MAX) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "RunByUserName", "NVARCHAR(255) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "LastEditedByUserName", "NVARCHAR(255) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "LastEditedAt", "DATETIME NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "PreviousHash", "NVARCHAR(128) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "RecordHash", "NVARCHAR(128) NULL");
-            await EnsureColumnAsync(connection, "ValidationRuns", "IsCurrent", "BIT NOT NULL CONSTRAINT DF_ValidationRuns_IsCurrent DEFAULT 1");
-
-            await EnsureColumnAsync(connection, "UserClientAssignments", "EngagementRole", "NVARCHAR(50) NOT NULL CONSTRAINT DF_UserClientAssignments_EngagementRole DEFAULT 'DataAnalyst'");
-            await EnsureColumnAsync(connection, "ReviewSignoffs", "SignoffRole", "NVARCHAR(50) NOT NULL CONSTRAINT DF_ReviewSignoffs_SignoffRole DEFAULT 'DataAnalyst'");
-            await EnsureColumnAsync(connection, "AuditLog", "PreviousHash", "NVARCHAR(128) NULL");
-            await EnsureColumnAsync(connection, "AuditLog", "RecordHash", "NVARCHAR(128) NULL");
-            await EnsureColumnAsync(connection, "MessageThreads", "PreviousHash", "NVARCHAR(128) NULL");
-            await EnsureColumnAsync(connection, "MessageThreads", "RecordHash", "NVARCHAR(128) NULL");
-            await EnsureColumnAsync(connection, "ThreadMessages", "PreviousHash", "NVARCHAR(128) NULL");
-            await EnsureColumnAsync(connection, "ThreadMessages", "RecordHash", "NVARCHAR(128) NULL");
-            await EnsureColumnAsync(connection, "ThreadMessages", "EditedAt", "DATETIME NULL");
-            await EnsureColumnAsync(connection, "ThreadMessages", "IsDeleted", "BIT NOT NULL CONSTRAINT DF_ThreadMessages_IsDeleted DEFAULT 0");
-            await EnsureColumnAsync(connection, "ThreadMessages", "DeletedAt", "DATETIME NULL");
-            await EnsureClientStatusConstraintAsync(connection);
-        }
-
-        private static async Task EnsureIndexAsync(SqlConnection connection, string table, string indexName, bool unique, string columns)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = $@"
-IF NOT EXISTS (
-    SELECT 1
-    FROM sys.indexes
-    WHERE name = N'{EscapeSqlLiteral(indexName)}'
-      AND object_id = OBJECT_ID(N'dbo.{table}')
-)
-BEGIN
-    CREATE {(unique ? "UNIQUE " : string.Empty)}INDEX [{indexName}] ON dbo.[{table}] ({columns});
-END";
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private static async Task EnsureColumnAsync(SqlConnection connection, string table, string column, string definition)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = $@"
-IF COL_LENGTH(N'dbo.{EscapeSqlLiteral(table)}', N'{EscapeSqlLiteral(column)}') IS NULL
-BEGIN
-    ALTER TABLE dbo.[{table}] ADD [{column}] {definition};
-END";
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private static async Task EnsureClientStatusConstraintAsync(SqlConnection connection)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-IF OBJECT_ID(N'dbo.Clients', N'U') IS NOT NULL
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM sys.check_constraints
-        WHERE parent_object_id = OBJECT_ID(N'dbo.Clients')
-          AND name = N'CK_Clients_Status'
-    )
-    BEGIN
-        DECLARE @existingConstraint SYSNAME;
-        SELECT TOP 1 @existingConstraint = cc.name
-        FROM sys.check_constraints cc
-        WHERE cc.parent_object_id = OBJECT_ID(N'dbo.Clients')
-          AND cc.definition LIKE '%Status%';
-
-        IF @existingConstraint IS NOT NULL
-        BEGIN
-            EXEC(N'ALTER TABLE dbo.Clients DROP CONSTRAINT [' + @existingConstraint + N'];');
-        END
-
-        ALTER TABLE dbo.Clients WITH NOCHECK
-        ADD CONSTRAINT CK_Clients_Status
-        CHECK (Status IN ('Pending','Approved','Active','Archived','Rejected'));
-    END
-END";
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private static async Task SeedAdminAsync(SqlConnection connection)
-        {
-            const string email = "Mamishi.Madire@sng.gt.com";
-            const string password = "Admin@123!";
-            var hash = BCrypt.Net.BCrypt.HashPassword(password, workFactor: 12);
-
-            await using var check = connection.CreateConfiguredCommand();
-            check.CommandText = "SELECT COUNT(1) FROM dbo.Users WHERE Email = @Email;";
-            check.Parameters.AddWithValue("@Email", email);
-            var exists = Convert.ToInt32(await check.ExecuteScalarAsync()) > 0;
-            if (exists)
-                return;
-
-            await using var insert = connection.CreateConfiguredCommand();
-            insert.CommandText = @"
-INSERT INTO dbo.Users
-(FirstName, LastName, Email, EmployeeCode, PasswordHash, SystemRole, IsActive, MustResetPassword, PasswordSetDate, PasswordHistory, CreatedAt, CreatedBy)
-VALUES
-(@FirstName, @LastName, @Email, @EmployeeCode, @PasswordHash, 'Admin', 1, 0, GETDATE(), @PasswordHistory, GETDATE(), NULL);";
-            insert.Parameters.AddWithValue("@FirstName", "Mamishi");
-            insert.Parameters.AddWithValue("@LastName", "Madire");
-            insert.Parameters.AddWithValue("@Email", email);
-            insert.Parameters.AddWithValue("@EmployeeCode", "MADM007");
-            insert.Parameters.AddWithValue("@PasswordHash", hash);
-            insert.Parameters.AddWithValue("@PasswordHistory", JsonConvert.SerializeObject(new[] { hash }));
-            await insert.ExecuteNonQueryAsync();
-        }
-
-        private static string BuildConnectionString(string server, string database, bool trustServerCertificate)
-        {
-            var builder = new SqlConnectionStringBuilder
+            var indexStatements = new[]
             {
-                DataSource = server,
-                InitialCatalog = database,
-                IntegratedSecurity = true,
-                TrustServerCertificate = trustServerCertificate,
-                Encrypt = false,
-                ConnectTimeout = 180
+                @"CREATE INDEX IF NOT EXISTS ""IX_Clients_FirmID"" ON ""Clients"" (""FirmID"");",
+                @"CREATE INDEX IF NOT EXISTS ""IX_ValidationRuns_Client_Rule_Current"" ON ""ValidationRuns"" (""ClientID"", ""RuleNumber"", ""IsCurrent"");",
+                @"CREATE INDEX IF NOT EXISTS ""IX_AuditLog_Timestamp"" ON ""AuditLog"" (""Timestamp"");",
+                @"CREATE INDEX IF NOT EXISTS ""IX_AuditLog_UserID"" ON ""AuditLog"" (""UserID"");",
+                @"CREATE INDEX IF NOT EXISTS ""IX_MessageThreads_Client_LastMessage"" ON ""MessageThreads"" (""ClientID"", ""LastMessageAt"");",
+                @"CREATE INDEX IF NOT EXISTS ""IX_ThreadMessages_Thread_SentAt"" ON ""ThreadMessages"" (""ThreadID"", ""SentAt"");",
+                @"CREATE INDEX IF NOT EXISTS ""IX_ThreadMessageRecipients_User_Read"" ON ""ThreadMessageRecipients"" (""UserID"", ""IsRead"");",
+                @"CREATE INDEX IF NOT EXISTS ""IX_ThreadUserStates_User_Deleted"" ON ""ThreadUserStates"" (""UserID"", ""IsDeleted"");",
+                @"CREATE INDEX IF NOT EXISTS ""IX_ThreadMessageAttachments_Message"" ON ""ThreadMessageAttachments"" (""MessageID"");",
+                @"CREATE INDEX IF NOT EXISTS ""IX_ClientFavorites_User"" ON ""ClientFavorites"" (""UserID"");"
             };
 
-            return builder.ConnectionString;
+            foreach (var ddl in indexStatements)
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = ddl;
+                await command.ExecuteNonQueryAsync();
+            }
         }
-
-        private static string EscapeSqlLiteral(string value) =>
-            value.Replace("'", "''");
     }
 }

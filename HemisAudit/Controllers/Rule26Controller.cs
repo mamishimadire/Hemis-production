@@ -153,7 +153,6 @@ namespace HemisAudit.Controllers
                 review.GeneratedSql = await _rule26.GenerateSqlAsync(new Rule26ValidationRequest
                 {
                     ClientId = review.ClientId,
-                    Database = review.Summary.Database,
                     ProfTable = review.Summary.ProfTable,
                     PayrollTable = review.Summary.PayrollTable,
                     ProfPersonnelColumn = review.Summary.ProfPersonnelColumn,
@@ -178,17 +177,13 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule26.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule26.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule26.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule26GetColumnsRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule26.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName, model.IsProfTable)));
+                await _rule26.GetColumnsAsync(model.ClientId, model.TableName, model.IsProfTable)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule26VerifyRequest request) =>
@@ -611,7 +606,6 @@ namespace HemisAudit.Controllers
             var request = new Rule26ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
                 ProfTable = review.Summary.ProfTable,
                 PayrollTable = review.Summary.PayrollTable,
                 ProfPersonnelColumn = review.Summary.ProfPersonnelColumn,

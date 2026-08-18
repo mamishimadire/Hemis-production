@@ -1,10 +1,10 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
 using HemisAudit.Helpers;
 using HemisAudit.Models;
 using HemisAudit.Services;
 using HemisAudit.ViewModels;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.AspNetCore.Mvc;
 
 namespace HemisAudit.Controllers
 {
@@ -17,18 +17,9 @@ namespace HemisAudit.Controllers
         private readonly UserManager<ApplicationUser> _users;
         private readonly ISystemDatabaseService _systemDb;
 
-        public BiomedicalController(
-            IBiomedicalService biomedical,
-            IExportService export,
-            IAuditLogService audit,
-            UserManager<ApplicationUser> users,
-            ISystemDatabaseService systemDb)
+        public BiomedicalController(IBiomedicalService biomedical, IExportService export, IAuditLogService audit, UserManager<ApplicationUser> users, ISystemDatabaseService systemDb)
         {
-            _biomedical = biomedical;
-            _export = export;
-            _audit = audit;
-            _users = users;
-            _systemDb = systemDb;
+            _biomedical = biomedical; _export = export; _audit = audit; _users = users; _systemDb = systemDb;
         }
 
         public async Task<IActionResult> Index(int clientId = 0)
@@ -48,25 +39,17 @@ namespace HemisAudit.Controllers
             }
 
             var clients = await _systemDb.GetClientsAsync(user, role, approvedOnly: true);
-
             if (clientId > 0 && !await _systemDb.CanAccessClientResultsAsync(clientId, user, role))
             {
                 TempData["Error"] = "You cannot access this engagement.";
                 return RedirectToAction("Index", "Dashboard");
             }
 
-            ViewBag.Clients = clients
-                .Select(c => new Client
-                {
-                    Id = c.Id,
-                    Name = c.EngagementName,
-                    FiscalYear = c.MaconomyNumber,
-                    Status = c.Status,
-                    CreatedAt = c.CreatedAt,
-                    CreatedByUserId = "",
-                    IsActive = true
-                })
-                .ToList();
+            ViewBag.Clients = clients.Select(c => new Client
+            {
+                Id = c.Id, Name = c.EngagementName, FiscalYear = c.MaconomyNumber,
+                Status = c.Status, CreatedAt = c.CreatedAt, CreatedByUserId = "", IsActive = true
+            }).ToList();
             ViewBag.ClientId = clientId;
             ViewBag.CurrentSystemRole = role;
             ViewBag.ModuleNavigation = ModuleSequenceNavigationHelper.BuildForWorkspace(74, clientId);
@@ -79,10 +62,7 @@ namespace HemisAudit.Controllers
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
             await _systemDb.NormalizeCompletedRunStatusesAsync();
-
-            if (clientId <= 0)
-                return Json(new { success = true, hasWorkspace = false });
-
+            if (clientId <= 0) return Json(new { success = true, hasWorkspace = false });
             if (!await _systemDb.CanAccessClientResultsAsync(clientId, user, role))
             {
                 Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -92,67 +72,101 @@ namespace HemisAudit.Controllers
             var workspace = await _biomedical.GetCurrentWorkspaceStateAsync(clientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
-
             if (workspace != null && !resultsVisible) workspace.Summary = null;
 
             return Json(new { success = true, hasWorkspace = workspace != null, resultsVisible, workspace });
         }
 
-        [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model)
+        [HttpGet]
+        public async Task<IActionResult> Run(int id)
         {
-            var result = await RequireDataAnalystAsync(
-                async () => await _biomedical.GetDatabasesAsync(model.Server, model.Driver));
-            return Json(result);
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            await _systemDb.NormalizeCompletedRunStatusesAsync();
+
+            var review = await _biomedical.GetSavedRunAsync(id, user?.Email);
+            if (review == null) return NotFound();
+
+            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
+            {
+                TempData["Error"] = "You do not have access to this saved validation run.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+            if (!CanViewSavedRun(review, role))
+            {
+                TempData["Error"] = "Only analyst-signed validation results are available for review.";
+                return RedirectToAction("Index", "Dashboard");
+            }
+
+            ViewBag.IsAdmin = string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+            ViewBag.CanDownloadSavedRun = CanDownloadSavedRun(review, role);
+            ViewBag.CanManageEngagement =
+                string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(role, "Director", StringComparison.OrdinalIgnoreCase);
+            var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
+            var isArchived = clientDetail?.IsArchived == true;
+            ViewBag.IsArchived = isArchived;
+            ViewBag.ModuleNavigation = ModuleSequenceNavigationHelper.BuildForSavedRun(74, review.ClientId, clientDetail?.ValidationRuns, role, review.CurrentUserEngagementRole);
+            ViewBag.CanOpenWorkspace =
+                !isArchived &&
+                await _systemDb.CanAccessClientModuleAsync(review.ClientId, user, role) &&
+                (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+
+            return View(review);
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model)
-        {
-            var result = await RequireDataAnalystAsync(
-                async () => await _biomedical.GetTablesAsync(model.Server, model.Database, model.Driver));
-            return Json(result);
-        }
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _biomedical.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] BiomedicalVerifyRequest request)
-        {
-            var tableName = !string.IsNullOrWhiteSpace(request.TableName) ? request.TableName : request.BiomedicalTable;
-            var result = await RequireDataAnalystAsync(
-                async () => await _biomedical.GetColumnsAsync(request.Server, request.Database, request.Driver, tableName));
-            return Json(result);
-        }
+        public async Task<IActionResult> GetColumns([FromBody] BiomedicalGetColumnsRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _biomedical.GetColumnsAsync(model.ClientId, model.TableName, model.TableRole)));
 
         [HttpPost]
-        public async Task<IActionResult> VerifyTables([FromBody] BiomedicalVerifyRequest request)
-        {
-            var result = await RequireDataAnalystAsync(
-                async () => await _biomedical.VerifyTablesAsync(request));
-            return Json(result);
-        }
+        public async Task<IActionResult> VerifyTables([FromBody] BiomedicalVerifyRequest request) =>
+            Json(await RequireDataAnalystAsync(async () => await _biomedical.VerifyTablesAsync(request)));
 
         [HttpPost]
         public async Task<IActionResult> RunValidation([FromBody] BiomedicalValidationRequest request)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
-
-            if (request.ClientId <= 0)
-                return Json(new BiomedicalValidationSummary { Success = false, Error = "Select an approved engagement before running validation." });
-
-            if (!await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
-                return Json(new BiomedicalValidationSummary { Success = false, Error = "You cannot access this engagement." });
+            if (request.ClientId <= 0) return Json(new BiomedicalValidationSummary { Success = false, Error = "Select an approved engagement before running validation." });
+            if (!await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role)) return Json(new BiomedicalValidationSummary { Success = false, Error = "You cannot access this engagement." });
 
             var engagementRole = await _systemDb.GetEngagementRoleAsync(request.ClientId, user, role);
-            if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(engagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
-                return Json(new BiomedicalValidationSummary { Success = false, Error = "Only the assigned data analyst can run Biomedical validation." });
+            if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) || !string.Equals(engagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
+                return Json(new BiomedicalValidationSummary { Success = false, Error = "Only the assigned data analyst can run this validation." });
 
-            var result = await _biomedical.RunValidationAsync(request, user?.Email, user?.FullName ?? user?.Email);
+            async Task<BiomedicalValidationSummary> Execute(IBiomedicalService svc, IAuditLogService auditSvc)
+            {
+                var result = await svc.RunValidationAsync(request, user?.Email, user?.FullName ?? user?.Email);
+                if (result.Success)
+                    await auditSvc.LogAsync("run_validation", $"Rule 74 (Biomedical) on client {request.ClientId}: {result.Status} ({result.FailCount} fail rows).", user?.Id, user?.Email);
+                return result;
+            }
 
-            if (result.Success)
-                await _audit.LogAsync("run_validation", $"Biomedical on client {request.ClientId}: {result.Status} ({result.FailCount} fail rows).", user?.Id, user?.Email);
+            if (ValidationOperationHttpHelper.IsAsyncRequested(Request))
+            {
+                return ValidationOperationHttpHelper.Queue(this, HttpContext.RequestServices.GetRequiredService<IValidationOperationService>(),
+                    ValidationOperationHttpHelper.ResolveOwnerKey(User), "Rule 74 validation",
+                    async (sp, ct) => await Execute(sp.GetRequiredService<IBiomedicalService>(), sp.GetRequiredService<IAuditLogService>()));
+            }
 
+            return Json(await Execute(_biomedical, _audit));
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> BeginWorkspaceEdit([FromBody] BiomedicalValidationRequest request)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            if (!await CanEditWorkspaceAsync(request.ClientId, user, role)) return Json(new BiomedicalWorkspaceSaveResult { Success = false, Error = "Only the assigned data analyst can edit a saved workspace." });
+            if (!request.RunId.HasValue || request.RunId.Value <= 0) return Json(new BiomedicalWorkspaceSaveResult { Success = false, Error = "Select a saved run before editing." });
+            var result = await _biomedical.BeginWorkspaceEditAsync(request.RunId.Value, user!.Email!, user.FullName);
+            if (result.Success) await _audit.LogAsync("workspace_edit_started", $"DataAnalyst started editing Rule 74 run {request.RunId.Value}.", user?.Id, user?.Email);
             return Json(result);
         }
 
@@ -161,119 +175,197 @@ namespace HemisAudit.Controllers
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
+            if (!await CanEditWorkspaceAsync(request.ClientId, user, role)) return Json(new BiomedicalWorkspaceSaveResult { Success = false, Error = "Only the assigned data analyst can save a workspace." });
+            var result = await _biomedical.SaveWorkspaceAsync(request, user!.Email!, user.FullName);
+            if (result.Success) await _audit.LogAsync("save_validation_workspace", $"DataAnalyst saved Rule 74 workspace for client {request.ClientId}. Run: {result.Workspace?.RunId}", user?.Id, user?.Email);
+            return Json(result);
+        }
 
-            if (request.ClientId <= 0)
-                return Json(new { success = false, error = "Select an engagement before saving." });
+        [HttpPost]
+        public async Task<IActionResult> SignOffWorkspace([FromBody] BiomedicalWorkspaceSignoffInputModel model)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            if (model.ClientId <= 0) return Json(new { success = false, error = "Select an engagement before signing off." });
+            if (!await ValidationRunAccessPolicy.CanAssignedUserRemoveOwnSignoffAsync(_systemDb, model.ClientId, user, role)) return Json(new { success = false, error = "Only the assigned data analyst, manager, or director can sign off." });
+            if (!model.RunId.HasValue || model.RunId.Value <= 0) return Json(new { success = false, error = "Run the validation first." });
 
-            if (!await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
-                return Json(new { success = false, error = "You cannot access this engagement." });
+            var review = await _biomedical.GetSavedRunAsync(model.RunId.Value, user?.Email);
+            if (review == null || review.ClientId != model.ClientId) return Json(new { success = false, error = "The saved validation run could not be found." });
+            if (!review.IsCurrentRun) return Json(new { success = false, error = "History results are read-only." });
+            var clientDetail = await _systemDb.GetClientDetailAsync(model.ClientId, user, role);
+            if (clientDetail?.IsArchived == true) return Json(new { success = false, error = "Archived engagements are read-only." });
+            if (!ValidationRunAccessPolicy.CanCompleteReviewSignoff(role, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff))
+                return Json(new { success = false, error = "The assigned data analyst must sign off before this review can be completed." });
 
-            var result = await _biomedical.SaveWorkspaceStateAsync(request.ClientId, request, user?.Email);
-
-            if (result)
+            try
             {
-                await _audit.LogAsync("save_validation_workspace", $"DataAnalyst saved Biomedical workspace for client {request.ClientId}.", user?.Id, user?.Email);
-                var workspace = await _biomedical.GetCurrentWorkspaceStateAsync(request.ClientId, user?.Email);
-                var resultsVisible = CanViewWorkspaceResults(role, workspace);
-                if (workspace != null) workspace.ResultsVisible = resultsVisible;
-                if (workspace != null && !resultsVisible) workspace.Summary = null;
-                return Json(new { success = true, message = "Workspace saved.", workspace, resultsVisible });
+                await _biomedical.AddOrUpdateSignoffAsync(model.RunId.Value, user!.Email!, model.Comment);
+                await _audit.LogAsync("signoff_validation_run", $"Rule 74 signoff saved for run {model.RunId.Value}", user.Id, user.Email);
             }
+            catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
 
-            return Json(new { success = false, message = "Failed to save workspace." });
+            var workspace = await _biomedical.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email);
+            var resultsVisible = CanViewWorkspaceResults(role, workspace);
+            if (workspace != null) workspace.ResultsVisible = resultsVisible;
+            return Json(new { success = true, message = "Signoff saved.", resultsVisible, workspace });
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> RemoveWorkspaceSignoff([FromBody] BiomedicalWorkspaceSignoffInputModel model)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            if (model.ClientId <= 0 || !model.RunId.HasValue || model.RunId.Value <= 0) return Json(new { success = false, error = "Select a saved run before removing signoff." });
+            if (!await ValidationRunAccessPolicy.CanAssignedUserRemoveOwnSignoffAsync(_systemDb, model.ClientId, user, role)) return Json(new { success = false, error = "Only the assigned data analyst, manager, or director can remove signoff." });
+
+            var review = await _biomedical.GetSavedRunAsync(model.RunId.Value, user?.Email);
+            if (review == null || review.ClientId != model.ClientId) return Json(new { success = false, error = "The saved validation run could not be found." });
+            if (!review.IsCurrentRun) return Json(new { success = false, error = "History results are read-only." });
+            var clientDetail = await _systemDb.GetClientDetailAsync(model.ClientId, user, role);
+            if (clientDetail?.IsArchived == true) return Json(new { success = false, error = "Archived engagements are read-only." });
+            if (!review.CurrentUserHasSignedOff) return Json(new { success = false, error = "There is no signoff to remove." });
+
+            try { await _biomedical.RemoveSignoffAsync(model.RunId.Value, user!.Email!); }
+            catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
+
+            var workspace = await _biomedical.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email);
+            var resultsVisible = CanViewWorkspaceResults(role, workspace);
+            if (workspace != null) workspace.ResultsVisible = resultsVisible;
+            await _audit.LogAsync("remove_validation_signoff", $"{review.CurrentUserEngagementRole} removed signoff for Rule 74 run {model.RunId.Value}", user?.Id, user?.Email);
+            return Json(new { success = true, message = "Signoff removed.", resultsVisible, workspace });
         }
 
         [HttpPost]
         public async Task<IActionResult> GenerateSql([FromBody] BiomedicalValidationRequest request)
         {
-            var result = await RequireDataAnalystAsync(async () =>
-            {
-                var sql = await _biomedical.GenerateSqlAsync(request);
-                return new { success = true, sql } as object;
-            });
-            return Json(result);
-        }
-
-        [HttpPost]
-        public async Task<IActionResult> AddSignoff([FromBody] QualSurnameSignoffInput model)
-        {
             var user = await _users.GetUserAsync(User);
-            if (user == null) return Json(new { success = false, error = "Not authenticated." });
-            try
-            {
-                await _biomedical.AddOrUpdateSignoffAsync(model.RunId, user.Email!, model.Comment);
-                await _audit.LogAsync("add_signoff", $"Biomedical signoff added for run {model.RunId}.", user.Id, user.Email);
-                return Json(new { success = true });
-            }
-            catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
-        }
-
-        [HttpPost]
-        public async Task<IActionResult> RemoveSignoff([FromBody] QualSurnameSignoffInput model)
-        {
-            var user = await _users.GetUserAsync(User);
-            if (user == null) return Json(new { success = false, error = "Not authenticated." });
-            try
-            {
-                await _biomedical.RemoveSignoffAsync(model.RunId, user.Email!);
-                await _audit.LogAsync("remove_signoff", $"Biomedical signoff removed for run {model.RunId}.", user.Id, user.Email);
-                return Json(new { success = true });
-            }
-            catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
-        }
-
-        [HttpPost]
-        public async Task<IActionResult> BeginEdit([FromBody] QualSurnameSignoffInput model)
-        {
-            var user = await _users.GetUserAsync(User);
-            if (user == null) return Json(new { success = false, error = "Not authenticated." });
             var role = await GetCurrentSystemRoleAsync(user);
-            var workspace = await _biomedical.GetCurrentWorkspaceStateAsync(model.ClientId, user.Email);
-            var resultsVisible = CanViewWorkspaceResults(role, workspace);
-            if (workspace != null) workspace.ResultsVisible = resultsVisible;
-            if (workspace != null && !resultsVisible) workspace.Summary = null;
-            return Json(new { success = true, message = "Workspace is ready for editing.", workspace, resultsVisible });
+            if (request.ClientId > 0 && !await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
+                return Json(new BiomedicalSqlResult { Success = false, Error = "You cannot access this engagement." });
+            return Json(await RequireDataAnalystAsync(async () => new BiomedicalSqlResult { Success = true, Sql = _biomedical.GenerateSql(request) }));
         }
 
-        [HttpPost]
-        public async Task<IActionResult> DownloadExcel([FromBody] QualSurnameSignoffInput model)
-        {
-            var summary = await _biomedical.GetFullSummaryByRunIdAsync(model.RunId);
-            if (summary == null) return NotFound();
-            var rows = (summary.ReviewRows ?? new()).Select(r => (r.BiomedicalQualification, r.BiomedicalSurname, r.Status, r.ProductionQualification, r.ProductionSurname));
-            var bytes = _export.ExportQualSurnameExcel("Biomedical", 74, summary.TotalValidated, summary.PassCount, summary.FailCount, summary.ExceptionRate, summary.Status ?? "", "Biomedical", "Clinical_Production", "QUALIFICATION", "Surname", rows);
-            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Rule74_Biomedical.xlsx");
-        }
-
-        [HttpPost]
-        public async Task<IActionResult> DownloadCsv([FromBody] QualSurnameSignoffInput model)
-        {
-            var summary = await _biomedical.GetFullSummaryByRunIdAsync(model.RunId);
-            if (summary == null) return NotFound();
-            var rows = (summary.ReviewRows ?? new()).Select(r => (r.BiomedicalQualification, r.BiomedicalSurname, r.Status, r.ProductionQualification, r.ProductionSurname));
-            var bytes = _export.ExportQualSurnameCsv(rows);
-            return File(bytes, "text/csv", "Rule74_Biomedical.csv");
-        }
-
-        [HttpPost]
-        public async Task<IActionResult> DownloadSql([FromBody] BiomedicalValidationRequest request)
-        {
-            var sql = await _biomedical.GenerateSqlAsync(request);
-            var bytes = System.Text.Encoding.UTF8.GetBytes(sql);
-            return File(bytes, "text/plain", "Rule74_Biomedical.sql");
-        }
-
-        // ── Helper methods ─────────────────────────────────────────────────────
-
-        private async Task<T> RequireDataAnalystAsync<T>(Func<Task<T>> operation) where T : class
+        [HttpPost, ValidateAntiForgeryToken]
+        public async Task<IActionResult> AddSignoff(BiomedicalRunSignoffInputModel model)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
+            var review = await _biomedical.GetSavedRunAsync(model.RunId, user?.Email);
+            if (review == null) return NotFound();
+            var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
+            if (clientDetail?.IsArchived == true) { TempData["Error"] = "Archived engagements are read-only."; return RedirectToAction(nameof(Run), new { id = model.RunId }); }
+            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role)) { TempData["Error"] = "You do not have access."; return RedirectToAction("Index", "Dashboard"); }
+            if (!CanViewSavedRun(review, role)) { TempData["Error"] = "Only analyst-signed results are available."; return RedirectToAction("Index", "Dashboard"); }
+            if (!review.IsCurrentRun) { TempData["Error"] = "History results are read-only."; return RedirectToAction(nameof(Run), new { id = model.RunId }); }
+            if (!review.CanCurrentUserSignOff) { TempData["Error"] = "Only the assigned data analyst, manager, or director can sign off."; return RedirectToAction(nameof(Run), new { id = model.RunId }); }
+            if (!ValidationRunAccessPolicy.CanCompleteReviewSignoff(role, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff))
+            { TempData["Error"] = "The data analyst must sign off first."; return RedirectToAction(nameof(Run), new { id = model.RunId }); }
+            await _biomedical.AddOrUpdateSignoffAsync(model.RunId, user!.Email!, model.Comment);
+            await _audit.LogAsync("signoff_validation_run", $"{review.CurrentUserEngagementRole} signed off Rule 74 run {model.RunId}", user.Id, user.Email);
+            TempData["Success"] = "Signoff saved.";
+            return RedirectToAction(nameof(Run), new { id = model.RunId });
+        }
 
-            if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
-                return new { success = false, error = "Only data analysts can perform this operation." } as T ?? (T)(object)new { };
+        [HttpPost, ValidateAntiForgeryToken]
+        public async Task<IActionResult> RemoveSignoff(int runId)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            var review = await _biomedical.GetSavedRunAsync(runId, user?.Email);
+            if (review == null) return NotFound();
+            var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
+            if (clientDetail?.IsArchived == true) { TempData["Error"] = "Archived engagements are read-only."; return RedirectToAction(nameof(Run), new { id = runId }); }
+            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role)) { TempData["Error"] = "You do not have access."; return RedirectToAction("Index", "Dashboard"); }
+            if (!review.IsCurrentRun) { TempData["Error"] = "History results are read-only."; return RedirectToAction(nameof(Run), new { id = runId }); }
+            if (!review.CurrentUserHasSignedOff) { TempData["Error"] = "No signoff to remove."; return RedirectToAction(nameof(Run), new { id = runId }); }
+            await _biomedical.RemoveSignoffAsync(runId, user!.Email!);
+            await _audit.LogAsync("remove_validation_signoff", $"{review.CurrentUserEngagementRole} removed signoff for Rule 74 run {runId}", user?.Id, user?.Email);
+            TempData["Success"] = "Signoff removed.";
+            return RedirectToAction(nameof(Run), new { id = runId });
+        }
 
-            return await operation();
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedExcel(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
+            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
+            var fullSummary = await _biomedical.GetStoredSummaryAsync(runId) ?? review.Summary;
+            var rows = (fullSummary.ReviewRows ?? new()).Select(r => (
+                r.DisplayValues.TryGetValue("SOURCE_QUAL", out var q) ? q ?? "" : "",
+                r.DisplayValues.TryGetValue("SOURCE_SURNAME", out var s) ? s ?? "" : "",
+                r.ValidationResult,
+                string.Equals(r.ValidationResult, "PASS", StringComparison.OrdinalIgnoreCase) ? (r.DisplayValues.TryGetValue("SOURCE_QUAL", out var pq) ? pq ?? "" : "") : "",
+                r.DisplayValues.TryGetValue("PRODUCTION_SURNAME", out var ps) ? ps ?? "" : ""));
+            var bytes = _export.ExportQualSurnameExcel("Biomedical", 74, fullSummary.TotalValidated, fullSummary.PassCount, fullSummary.FailCount, fullSummary.ExceptionRate, fullSummary.Status ?? "", fullSummary.BiomedicalTable, fullSummary.ProductionTable, fullSummary.QualificationColumn, fullSummary.SurnameColumn, rows);
+            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule74_Biomedical_Run_{runId}.xlsx");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedCsv(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
+            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
+            var fullSummary = await _biomedical.GetStoredSummaryAsync(runId) ?? review.Summary;
+            var rows = (fullSummary.ReviewRows ?? new()).Select(r => (
+                r.DisplayValues.TryGetValue("SOURCE_QUAL", out var q) ? q ?? "" : "",
+                r.DisplayValues.TryGetValue("SOURCE_SURNAME", out var s) ? s ?? "" : "",
+                r.ValidationResult,
+                string.Equals(r.ValidationResult, "PASS", StringComparison.OrdinalIgnoreCase) ? (r.DisplayValues.TryGetValue("SOURCE_QUAL", out var pq) ? pq ?? "" : "") : "",
+                r.DisplayValues.TryGetValue("PRODUCTION_SURNAME", out var ps) ? ps ?? "" : ""));
+            return File(_export.ExportQualSurnameCsv(rows), "text/csv", $"Rule74_Biomedical_Run_{runId}.csv");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedSql(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
+            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
+            var sql = _biomedical.GenerateSql(BuildRequestFromSummary(review.ClientId, review.Summary));
+            return File(_export.ExportSql(sql), "application/sql", $"Rule74_Biomedical_{runId}.sql");
+        }
+
+        // ─── Private helpers ─────────────────────────────────────────────────
+
+        private static BiomedicalValidationRequest BuildRequestFromSummary(int clientId, BiomedicalValidationSummary summary) => new()
+        {
+            ClientId = clientId,
+            BiomedicalTable = summary.BiomedicalTable,
+            ProductionTable = summary.ProductionTable,
+            QualificationColumn = summary.QualificationColumn,
+            SurnameColumn = summary.SurnameColumn
+        };
+
+        private async Task<BiomedicalRunReviewViewModel?> LoadAuthorizedSavedRunAsync(int runId, bool requireDownloadAccess)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            var review = await _biomedical.GetSavedRunAsync(runId, user?.Email);
+            if (review == null) { TempData["Error"] = "Saved validation run was not found."; return null; }
+            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role)) { TempData["Error"] = "You do not have access."; return null; }
+            if (!CanViewSavedRun(review, role)) { TempData["Error"] = "Only analyst-signed results are available."; return null; }
+            if (requireDownloadAccess && !CanDownloadSavedRun(review, role)) { TempData["Error"] = "The data analyst must sign off first."; return null; }
+            return review;
+        }
+
+        private static bool CanDownloadSavedRun(BiomedicalRunReviewViewModel review, string systemRole)
+            => ValidationRunAccessPolicy.CanDownloadSignedResults(systemRole, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff);
+
+        private static bool CanViewSavedRun(BiomedicalRunReviewViewModel review, string systemRole)
+            => ValidationRunAccessPolicy.CanViewSignedResults(systemRole, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff);
+
+        private static bool CanViewWorkspaceResults(string role, BiomedicalWorkspaceStateViewModel? workspace)
+        {
+            if (workspace == null) return false;
+            return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
+        }
+
+        private async Task<bool> CanEditWorkspaceAsync(int clientId, ApplicationUser? user, string role)
+        {
+            if (user == null || !string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) || clientId <= 0) return false;
+            if (!await _systemDb.CanAccessClientResultsAsync(clientId, user, role)) return false;
+            var engagementRole = await _systemDb.GetEngagementRoleAsync(clientId, user, role);
+            return ValidationRunAccessPolicy.IsAssignedDataAnalyst(engagementRole);
         }
 
         private async Task<string> GetCurrentSystemRoleAsync(ApplicationUser? user)
@@ -284,12 +376,14 @@ namespace HemisAudit.Controllers
             return roles.FirstOrDefault() ?? "";
         }
 
-        private static bool CanViewWorkspaceResults(string role, BiomedicalWorkspaceState? workspace)
+        private async Task<object> RequireDataAnalystAsync<T>(Func<Task<T>> action) where T : class
         {
-            if (workspace == null) return false;
-            if (string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase)) return true;
-            return workspace.IsWorkspaceSaved && workspace.HasDataAnalystSignoff;
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
+                return new { success = false, error = "Only the assigned data analyst can configure or run this module." };
+            var result = await action();
+            return result ?? (object)new { success = false, error = "Action returned no result." };
         }
     }
 }

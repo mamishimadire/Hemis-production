@@ -4,9 +4,8 @@ namespace HemisAudit.Services
 {
     public interface IRule22Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<Rule22TableDiscoveryResult> GetTablesAsync(string server, string database, string driver);
-        Task<Rule22ColumnResult> GetProfColumnsAsync(string server, string database, string driver, string profTable);
+        Task<Rule22TableDiscoveryResult> GetTablesAsync(int clientId);
+        Task<Rule22ColumnResult> GetProfColumnsAsync(int clientId, string profTable);
         Task<Rule22VerifyResult> VerifyTablesAsync(Rule22VerifyRequest request);
         Task<Rule22ValidationSummary> RunValidationAsync(Rule22ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<int?> GetClientIdForRunAsync(int runId);

@@ -154,7 +154,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = await _rule22.GenerateSqlAsync(new Rule22ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
                 ProfTable = review.Summary.ProfTable,
                 Column037 = review.Summary.Column037,
                 Column038 = review.Summary.Column038,
@@ -178,16 +177,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule22.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule22.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule22.GetTablesAsync(model.Server, model.Database, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetProfColumns([FromBody] Rule22ColumnRequest model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule22.GetProfColumnsAsync(model.Server, model.Database, model.Driver, model.ProfTable)));
+        public async Task<IActionResult> GetProfColumns([FromBody] Rule16ColumnsRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule22.GetProfColumnsAsync(model.ClientId, model.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule22VerifyRequest request) =>
@@ -199,11 +194,9 @@ namespace HemisAudit.Controllers
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
             _logger.LogInformation(
-                "Rule22 RunValidation requested by {Email}. ClientId={ClientId}, Server={Server}, Database={Database}, ProfTable={ProfTable}, Column041={Column041}, Column039={Column039}",
+                "Rule22 RunValidation requested by {Email}. ClientId={ClientId}, ProfTable={ProfTable}, Column041={Column041}, Column039={Column039}",
                 user?.Email,
                 request.ClientId,
-                request.Server,
-                request.Database,
                 request.ProfTable,
                 request.Column041,
                 request.Column039);
@@ -630,7 +623,6 @@ namespace HemisAudit.Controllers
             var request = new Rule22ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
                 ProfTable = review.Summary.ProfTable,
                 Column037 = review.Summary.Column037,
                 Column038 = review.Summary.Column038,
@@ -775,9 +767,6 @@ namespace HemisAudit.Controllers
                     return await _rule22.GetExportSummaryAsync(new Rule22ValidationRequest
                     {
                         ClientId = review.ClientId,
-                        Server = review.SourceServer,
-                        Database = review.Summary.Database,
-                        Driver = "ODBC Driver 17 for SQL Server",
                         ProfTable = review.Summary.ProfTable,
                         Column037 = review.Summary.Column037,
                         Column038 = review.Summary.Column038,
@@ -811,9 +800,6 @@ namespace HemisAudit.Controllers
                         {
                             ClientId = review.ClientId,
                             RunId = review.RunId,
-                            Server = review.SourceServer,
-                            Database = review.Summary.Database,
-                            Driver = "ODBC Driver 17 for SQL Server",
                             ProfTable = review.Summary.ProfTable,
                             Column037 = review.Summary.Column037,
                             Column038 = review.Summary.Column038,

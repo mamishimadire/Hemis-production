@@ -175,14 +175,10 @@
 <div class="layout app-shell">
     <aside class="sidebar">
         <a href="/Dashboard" class="sidebar__brand sidebar__brand-link" aria-label="Go to dashboard home">
-            <span class="sidebar__brand-icon" aria-hidden="true">
-                <svg class="sidebar__brand-glyph" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path fill-rule="evenodd" clip-rule="evenodd" d="M8 0C12.4183 0 16 3.58172 16 8C16 12.4183 12.4183 16 8 16C3.58172 16 0 12.4183 0 8C0 3.58172 3.58172 0 8 0ZM6.0723 5.0642C3.3673 5.0642 1.16934 7.23514 1.12565 9.9297L1.12498 10.0115C1.9471 12.8471 4.47997 14.9554 7.53328 15.1517C5.5806 14.2235 4.23085 12.2332 4.23085 9.92762C4.23085 7.95745 5.22572 6.17059 6.8031 5.11776C6.56464 5.08259 6.32017 5.0642 6.0723 5.0642ZM9.92762 11.7691C7.95787 11.7691 6.17135 10.7746 5.11843 9.19784C5.08254 9.43603 5.0642 9.68013 5.0642 9.92762C5.0642 12.6326 7.23514 14.8306 9.9297 14.8743L10.0115 14.8749C12.8471 14.0529 14.9554 11.52 15.1517 8.46672C14.2235 10.4193 12.2332 11.7691 9.92762 11.7691ZM8.46672 0.848301L8.4769 0.853207C10.4239 1.78323 11.7691 3.77068 11.7691 6.0723C11.7691 8.04205 10.7746 9.82857 9.19784 10.8815C9.43603 10.9174 9.68013 10.9357 9.92762 10.9357C12.6326 10.9357 14.8306 8.76479 14.8743 6.07022L14.8749 5.98841C14.0527 3.15272 11.5199 1.04457 8.46672 0.848301ZM7.94602 5.4319L8.08588 5.36895C6.86503 5.88531 5.92024 6.86061 5.43195 8.05384L5.36895 7.91404C5.88546 9.13523 6.86115 10.0802 8.05485 10.5684L7.91404 10.631C9.13523 10.1145 10.0802 9.13877 10.5684 7.94508L10.6251 8.07204C10.1071 6.85764 9.13463 5.91827 7.94602 5.4319ZM5.9881 1.1196C3.15272 1.94731 1.04457 4.4801 0.848301 7.53328C1.77645 5.5806 3.76676 4.23085 6.0723 4.23085C8.04164 4.23085 9.82807 5.22483 10.8812 6.80163C10.9174 6.56321 10.9357 6.31944 10.9357 6.0723C10.9357 3.3673 8.76479 1.16934 6.07022 1.12565L5.98841 1.12498L5.9881 1.1196Z" fill="currentColor" />
-                </svg>
-            </span>
+            <span class="sidebar__brand-icon" aria-hidden="true"></span>
             <span class="sidebar__brand-copy">
-                <span class="sidebar__brand-title">SNG Grant Thornton</span>
-                <span class="sidebar__brand-sub">South Africa</span>
+                <span class="sidebar__brand-title">Mamishi IT Audit Solutions</span>
+                <span class="sidebar__brand-sub">HEMIS Audit Suite</span>
             </span>
         </a>
 
@@ -293,6 +289,20 @@
                 <span class="sidebar__nav-label">SAQA Search</span>
             </a>
 
+            @if (role == "ServiceProvider")
+            {
+                <div class="sidebar__nav-section">Service Provider</div>
+                <a href="/Firms" class="sidebar__nav-item @(currentPath.StartsWith("/firms") ? "sidebar__nav-item--active" : "")">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" class="nav-icon__svg" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M4 21V9l8-5 8 5v12" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                            <path d="M9 21v-6h6v6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                        </svg>
+                    </span>
+                    <span class="sidebar__nav-label">Firms</span>
+                </a>
+            }
+
             @if (role == "Admin" || role == "Director")
             {
                 <div class="sidebar__nav-section">Administration</div>
@@ -342,7 +352,12 @@
                 </div>
                 <form asp-controller="Account" asp-action="Logout" method="post" style="margin:0">
                     @Html.AntiForgeryToken()
-                    <button type="submit" class="btn-logout" title="Sign out">Out</button>
+                    <button type="submit" class="btn-logout" title="Sign out" aria-label="Sign out">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                            <path d="M15 4H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M10 12h11m0 0-3.5-3.5M21 12l-3.5 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
                 </form>
             </div>
             <div class="sidebar__signature">Author: Mamishi Tonny Madire</div>
@@ -1171,6 +1186,11 @@
         var percent = 3;
         if (card) {
             updateDownloadCard(card, percent, pendingText, secondaryText);
+            // Pages define their own full-screen "Loading..." overlay (id="spinner") around these same
+            // calls. It sits on top of and hides this percentage card, so suppress it for the duration -
+            // the tracked operation card is the single, uniform loading indicator across all rule pages.
+            var localOverlay = document.getElementById('spinner');
+            if (localOverlay) localOverlay.style.display = 'none';
         }
         if (typeof options.onStart === 'function') {
             options.onStart(percent, pendingText, secondaryText);

@@ -1,0 +1,7 @@
+.run/
+*.log
+*.pid
+5001-181785134_medium.mp4
+bin/
+obj/
+.vs/

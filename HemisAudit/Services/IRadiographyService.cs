@@ -4,28 +4,18 @@ namespace HemisAudit.Services
 {
     public interface IRadiographyService
     {
-        // Database discovery
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<RadiographyTableDiscoveryResult> GetTablesAsync(string server, string database, string driver);
-        Task<ColumnListResult> GetColumnsAsync(string server, string database, string driver, string tableName);
-
-        // Verification
+        Task<RadiographyTableDiscoveryResult> GetTablesAsync(int clientId);
+        Task<RadiographyColumnDiscoveryResult> GetColumnsAsync(int clientId, string tableName, string tableRole);
         Task<RadiographyVerifyResult> VerifyTablesAsync(RadiographyVerifyRequest request);
-
-        // Validation
         Task<RadiographyValidationSummary> RunValidationAsync(RadiographyValidationRequest request, string? userEmail = null, string? userName = null);
-        Task<string> GenerateSqlAsync(RadiographyValidationRequest request);
-        Task<string> GenerateRScriptAsync(RadiographyValidationRequest request);
-
-        // Workspace state
-        Task<RadiographyWorkspaceState?> GetCurrentWorkspaceStateAsync(int clientId, string? userEmail = null);
-        Task<bool> SaveWorkspaceStateAsync(int clientId, RadiographyValidationRequest config, string? userEmail = null);
-
-        // Signoff
-        Task AddOrUpdateSignoffAsync(int runId, string email, string comment);
-        Task RemoveSignoffAsync(int runId, string email);
-
-        // Full export
-        Task<RadiographyValidationSummary?> GetFullSummaryByRunIdAsync(int runId);
+        string GenerateSql(RadiographyValidationRequest request);
+        Task<int?> GetClientIdForRunAsync(int runId);
+        Task<RadiographyValidationSummary?> GetStoredSummaryAsync(int runId);
+        Task<RadiographyWorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null);
+        Task<RadiographyRunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null);
+        Task<RadiographyWorkspaceSaveResult> SaveWorkspaceAsync(RadiographyValidationRequest request, string reviewerEmail, string? reviewerName = null);
+        Task<RadiographyWorkspaceSaveResult> BeginWorkspaceEditAsync(int runId, string reviewerEmail, string? reviewerName = null);
+        Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment);
+        Task RemoveSignoffAsync(int runId, string reviewerEmail);
     }
 }

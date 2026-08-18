@@ -4,10 +4,9 @@ namespace HemisAudit.Services
 {
     public interface IRule61Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<Rule61TableDiscoveryResult> GetTablesAsync(string server, string database, string driver);
-        Task<Rule61ColumnDiscoveryResult> GetColumnsAsync(string server, string database, string driver, string tableName);
-        Task<Rule61VerifyResult> VerifyTablesAsync(Rule61VerifyRequest request);
+        Task<Rule61TableDiscoveryResult> GetTablesAsync(int clientId);
+        Task<Rule61ColumnDiscoveryResult> GetColumnsAsync(int clientId, string tableName, string tableRole);
+        Task<Rule61VerifyResult> VerifyDataAsync(Rule61ValidationRequest request);
         Task<Rule61ValidationSummary> RunValidationAsync(Rule61ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<int?> GetClientIdForRunAsync(int runId);
         Task<Rule61ValidationSummary?> GetStoredSummaryAsync(int runId);

@@ -56,30 +56,16 @@
         <div class="accordion-item">
             <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
                 <span class="acc-icon">DB</span>
-                <span>Database Connection</span>
+                <span>Engagement Dataset</span>
                 <span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-connection">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label for="server">Server Name</label>
-                        <input id="server" type="text" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                    </div>
-                    <div class="field-group">
-                        <label for="driver">Driver</label>
-                        <select id="driver">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group">
-                        <label for="database">Database</label>
-                        <select id="database"></select>
-                    </div>
+                <div class="alert alert--info" id="datasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
                 <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                    <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
+                    <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                    <button type="button" class="btn btn-primary" id="connectBtn">Refresh Tables</button>
                     <button type="button" class="btn btn-info" id="verifyBtn">Verify Table</button>
                 </div>
                 <div id="connectionOutput" class="status-output"></div>
@@ -239,9 +225,8 @@
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'),
-        driver: document.getElementById('driver'),
-        database: document.getElementById('database'),
+        datasetStatusAlert: document.getElementById('datasetStatusAlert'),
+        datasetsLink: document.getElementById('datasetsLink'),
         tableName: document.getElementById('tableName'),
         duplicateColumn: document.getElementById('duplicateColumn'),
         connectionOutput: document.getElementById('connectionOutput'),
@@ -287,7 +272,7 @@
         select.innerHTML = '';
         const defaultOption = document.createElement('option');
         defaultOption.value = '';
-        defaultOption.textContent = select === els.database ? 'Select database' : 'Select option';
+        defaultOption.textContent = 'Select option';
         select.appendChild(defaultOption);
         (items || []).forEach(item => {
             const option = document.createElement('option');
@@ -508,9 +493,6 @@
         return {
             clientId: parseInt(els.clientId.value || '0', 10) || 0,
             runId: state.currentRunId,
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
             tableName: els.tableName.value,
             duplicateColumn: els.duplicateColumn.value
         };
@@ -550,7 +532,6 @@
             <div class="card" style="padding:20px">
                 <h3 class="section-title" style="margin-top:0">Run Summary</h3>
                 <div class="form-grid">
-                    <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Database</div><div>${escapeHtml(summary.database)}</div></div>
                     <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Table</div><div>${escapeHtml(summary.tableName)}</div></div>
                     <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Duplicate Field</div><div>${escapeHtml(summary.duplicateColumn)}</div></div>
                     <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Status</div><div>${escapeHtml(summary.status)}</div></div>
@@ -747,15 +728,15 @@
         state.lastWorkspaceInfoSignature = '';
         if (clearClient) state.clientId = 0;
 
-        els.server.value = '';
-        els.driver.value = 'ODBC Driver 17 for SQL Server';
-        els.database.innerHTML = '<option value="">Select database</option>';
         els.tableName.innerHTML = '<option value="">Select option</option>';
         els.duplicateColumn.innerHTML = '<option value="">Select option</option>';
         els.workspaceSignoffComment.value = '';
         els.connectionOutput.innerHTML = '';
         els.configOutput.innerHTML = '';
         els.sqlText.value = '';
+        els.datasetStatusAlert.className = 'alert alert--info';
+        els.datasetStatusAlert.textContent = 'Select an engagement above to load its uploaded tables.';
+        els.datasetsLink.href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
 
         document.querySelector('[data-tab-panel="analysis"]').innerHTML = '<div class="empty-state"><p>Run Rule 35 to see validation results here.</p></div>';
         document.querySelector('[data-tab-panel="details"]').innerHTML = '<div class="empty-state"><p>Run Rule 35 to see validation rows here.</p></div>';
@@ -775,60 +756,27 @@
         bindDownloadButtons();
     }
 
-    async function connect(options = {}) {
-        const server = els.server.value.trim();
-        const driver = els.driver.value;
-        if (!server) {
-            setStatus('connectionOutput', 'Enter a server name first.', 'warning');
-            return null;
-        }
-
-        if (!options.silent) {
-            showSpinner('Connecting to SQL Server...');
-        }
-
-        try {
-            const data = await postJson(`${apiBasePath}/GetDatabases`, { server, driver });
-            if (!data.success) {
-                setStatus('connectionOutput', escapeHtml(data.error || 'Connection failed.'), 'error');
-                return null;
-            }
-
-            setOptions(els.database, data.databases || [], options.preferredDatabase || data.databases?.[0] || '');
-            setStatus('connectionOutput', options.statusMessage || `Connection successful. ${data.databases.length} database(s) loaded.`, 'success');
-            if (els.database.value) {
-                await loadTables({ ...options, preferredTableName: options.preferredTableName, preferredDuplicateColumn: options.preferredDuplicateColumn });
-            }
-            return data;
-        } finally {
-            if (!options.silent) {
-                hideSpinner();
-            }
-        }
-    }
-
     async function loadTables(options = {}) {
-        if (!els.database.value) return null;
+        if (!state.clientId) return null;
 
         if (!options.silent) {
-            showSpinner('Loading tables...');
+            showSpinner('Loading uploaded tables...');
         }
 
-        const data = await postJson(`${apiBasePath}/GetTables`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value
-        });
-
         try {
+            const data = await postJson(`${apiBasePath}/GetTables`, { clientId: state.clientId });
             if (!data.success) {
+                els.datasetStatusAlert.className = 'alert alert--error';
+                els.datasetStatusAlert.textContent = data.error || 'Unable to load tables.';
                 setStatus('configOutput', escapeHtml(data.error || 'Could not load tables.'), 'error');
                 return null;
             }
 
+            const tables = data.tables || [];
+            els.datasetStatusAlert.className = 'alert alert--success';
+            els.datasetStatusAlert.textContent = `Loaded ${tables.length} table(s) from this engagement's dataset.`;
             const preferredTable = options.preferredTableName || data.autoStudTable || '';
-            setOptions(els.tableName, data.tables || [], preferredTable);
-            setStatus('configOutput', `Database selected. ${data.tables.length} table(s) loaded.`, 'success');
+            setOptions(els.tableName, tables, preferredTable);
             if (els.tableName.value) {
                 await loadColumns({ ...options, preferredDuplicateColumn: options.preferredDuplicateColumn });
             }
@@ -844,9 +792,7 @@
         if (!els.tableName.value) return null;
 
         const data = await postJson(`${apiBasePath}/GetColumns`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
+            clientId: state.clientId,
             tableName: els.tableName.value
         });
         if (!data.success) {
@@ -906,6 +852,7 @@
 
     async function loadWorkspace() {
         state.clientId = parseInt(els.clientId.value || '0', 10) || 0;
+        els.datasetsLink.href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
         if (!state.clientId) {
             renderWorkspaceState();
             return;
@@ -920,6 +867,7 @@
             }
             if (!data.hasWorkspace || !data.workspace) {
                 resetWorkspaceState();
+                await loadTables().catch(() => { /* best-effort background refresh */ });
                 return;
             }
 
@@ -938,36 +886,27 @@
             state.editWarningAccepted = false;
             state.isDirty = false;
 
-            els.server.value = workspace.server || '';
-            els.driver.value = workspace.driver || 'ODBC Driver 17 for SQL Server';
-
             if (workspace.summary) {
                 if (state.resultsVisible) {
                     renderSummary(workspace.summary, { fromWorkspace: true, preserveDirty: true });
                 } else {
-                    updateHeaderBadge(workspace.summary.status || workspace.currentStatus || '');
+                    setStatusBadge(workspace.summary.status || workspace.currentStatus || '');
                 }
             } else {
-                updateHeaderBadge(workspace.currentStatus || '');
+                setStatusBadge(workspace.currentStatus || '');
             }
 
             try {
-                if (workspace.server) {
-                    await connect({
-                        preferredDatabase: workspace.database || '',
-                        preferredTableName: workspace.tableName || '',
-                        preferredDuplicateColumn: workspace.duplicateColumn || '',
-                        silent: true,
-                        statusMessage: workspace.database
-                            ? `Connection successful. <strong>${escapeHtml(workspace.database)}</strong> was restored from saved run #${workspace.runId}.`
-                            : 'Connection restored using the saved Rule 35 workspace.'
-                    });
-                }
+                await loadTables({
+                    preferredTableName: workspace.tableName || '',
+                    preferredDuplicateColumn: workspace.duplicateColumn || '',
+                    silent: true
+                });
             } catch (error) {
                 reconnectWarning = state.resultsVisible
-                    ? 'Saved workspace results are still loaded from SQL, but the live source could not be reconnected. The restored results remain on screen.'
-                    : 'The saved workspace was found in SQL, but the live source could not be reconnected.';
-                setStatus('connectionOutput', `Warning: ${escapeHtml(error?.message || 'Live SQL reconnect failed.')}`, 'warning');
+                    ? 'Saved workspace results are still loaded, but the uploaded tables could not be refreshed. The restored results remain on screen.'
+                    : 'The saved workspace was found, but the uploaded tables could not be refreshed.';
+                setStatus('connectionOutput', `Warning: ${escapeHtml(error?.message || 'Unable to load tables.')}`, 'warning');
             }
         } finally {
             state.isHydrating = false;
@@ -1086,7 +1025,7 @@
         document.getElementById('downloadSqlBtn')?.addEventListener('click', () => downloadPost(`${apiBasePath}/DownloadSql`, buildRequest(), 'Rule35_Duplicate_Check.sql'));
     }
 
-    document.getElementById('connectBtn').addEventListener('click', connect);
+    document.getElementById('connectBtn').addEventListener('click', () => loadTables());
     document.getElementById('verifyBtn').addEventListener('click', verify);
     document.getElementById('verifyBtnBar').addEventListener('click', verify);
     document.getElementById('runBtn').addEventListener('click', runValidation);
@@ -1097,17 +1036,11 @@
     els.signoffBtn.addEventListener('click', signoffWorkspace);
     els.removeSignoffBtn.addEventListener('click', removeSignoffWorkspace);
     els.clientId.addEventListener('change', loadWorkspace);
-    els.database.addEventListener('change', async () => {
-        await loadTables();
-        await markWorkspaceDirty();
-    });
     els.tableName.addEventListener('change', async () => {
         await loadColumns();
         await markWorkspaceDirty();
     });
     els.duplicateColumn.addEventListener('change', markWorkspaceDirty);
-    els.server.addEventListener('input', markWorkspaceDirty);
-    els.driver.addEventListener('change', markWorkspaceDirty);
 
     bindDownloadButtons();
     renderWorkspaceState();

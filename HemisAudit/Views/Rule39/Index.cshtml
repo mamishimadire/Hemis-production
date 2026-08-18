@@ -165,35 +165,21 @@
 
     <div class="accordion-stack">
 
-        <!-- 1. Database Connection -->
+        <!-- 1. Engagement Dataset -->
         <div class="accordion-item" id="acc-connection">
             <button class="accordion-toggle" onclick="toggleAccordion('connection')">
                 <span class="acc-icon">DB</span>
-                <span>Database Connection</span>
+                <span>Engagement Dataset</span>
                 <span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-connection">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label>Server Name</label>
-                        <input type="text" id="serverInput" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                    </div>
-                    <div class="field-group">
-                        <label>Driver</label>
-                        <select id="driverSelect">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group" id="dbFieldGroup" style="display:none">
-                        <label>Database</label>
-                        <select id="databaseSelect">
-                            <option value="">Select database</option>
-                        </select>
-                    </div>
+                <div class="alert alert--info" id="datasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
-                <button class="btn btn-primary" id="connectBtn" onclick="connectServer()">Connect</button>
+                <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
+                    <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                    <button type="button" class="btn btn-primary" id="connectBtn" onclick="loadTables()">Refresh Tables</button>
+                </div>
                 <div class="status-output" id="connectionStatus"></div>
             </div>
         </div>
@@ -479,9 +465,6 @@ const currentSystemRole = '@(ViewBag.CurrentSystemRole ?? "")';
 const uiPreviewRowLimit = 10;
 
 const state = {
-    server: '',
-    database: '',
-    driver: 'ODBC Driver 17 for SQL Server',
     studTable: '',
     qualTable: '',
     nalTable: '',
@@ -665,7 +648,6 @@ async function markWorkspaceDirty() {
 // ── Reset / Hydrate ───────────────────────────────────────────────────────────
 function resetWorkspaceState(clearClient = false) {
     Object.assign(state, {
-        server: '', database: '', driver: 'ODBC Driver 17 for SQL Server',
         studTable: '', qualTable: '', nalTable: '', studQualRefCol: '', stud007Col: '', stud008Col: '', studFirstTimeCol: '', stud012Col: '', stud026Col: '', studFirstTimeValue: '',
         qualCodeCol: '', qualNameCol: '',
         nalRefCol: '', nalNameCol: '', nalAlignedCol: '', nalCategoryCol: '', nalCategoryValue: '',
@@ -677,13 +659,9 @@ function resetWorkspaceState(clearClient = false) {
     });
     if (clearClient) state.clientId = 0;
 
-    document.getElementById('serverInput').value = '';
-    document.getElementById('driverSelect').value = 'ODBC Driver 17 for SQL Server';
-    document.getElementById('databaseSelect').innerHTML = '<option value="">Select database</option>';
     document.getElementById('studTableSelect').innerHTML = '<option value="">Select table</option>';
     document.getElementById('qualTableSelect').innerHTML = '<option value="">Select table</option>';
     document.getElementById('nalTableSelect').innerHTML = '<option value="">Select table</option>';
-    document.getElementById('dbFieldGroup').style.display = 'none';
     document.getElementById('signoffComment').value = '';
     document.getElementById('validationPreview').style.display = 'none';
     document.getElementById('downloadAllBtn').disabled = true;
@@ -742,6 +720,8 @@ function resetWorkspaceState(clearClient = false) {
 async function handleClientChange(value) {
     state.clientId = parseInt(value || '0') || 0;
     resetWorkspaceState();
+    const datasetsLink = document.getElementById('datasetsLink');
+    if (datasetsLink) datasetsLink.href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
     if (!state.clientId) return;
     await loadWorkspaceState();
 }
@@ -770,11 +750,7 @@ async function hydrateWorkspace(workspace) {
         state.resultsVisible = !!workspace.resultsVisible;
         state.editWarningAccepted = false;
 
-        document.getElementById('serverInput').value = workspace.server || '';
-        document.getElementById('driverSelect').value = workspace.driver || 'ODBC Driver 17 for SQL Server';
         document.getElementById('signoffComment').value = workspace.currentUserSignoffComment || '';
-        state.server = workspace.server || '';
-        state.driver = workspace.driver || 'ODBC Driver 17 for SQL Server';
 
         if (workspace.summary) {
             if (state.resultsVisible) applyValidationResult(workspace.summary, { switchToValidation: false, fromWorkspace: true });
@@ -784,42 +760,36 @@ async function hydrateWorkspace(workspace) {
         }
 
         try {
-            if (workspace.server) {
-                await connectServer({ preferredDatabase: workspace.database || '', silent: true,
-                    statusMessage: workspace.database ? `Connected to <strong>${workspace.database}</strong>. Restored from saved run #${workspace.runId}.` : 'Connected using the saved Rule 39 workspace.' });
-            }
-            if (workspace.database) {
-                await loadTables({
-                    preferredStudTable: workspace.studTable || '',
-                    preferredQualTable: workspace.qualTable || '',
-                    preferredNalTable: workspace.nalTable || '',
-                    preferredStudQualRefCol: workspace.studQualRefColumn || '',
-                    preferredStud007Col: workspace.stud007Column || '',
-                    preferredStud008Col: workspace.stud008Column || '',
-                    preferredStudFirstTimeCol: workspace.studFirstTimeColumn || '',
-                    preferredStud012Col: workspace.stud012Column || '',
-                    preferredStud026Col: workspace.stud026Column || '',
-                    preferredStudFirstTimeValue: workspace.studFirstTimeValue || '',
-                    preferredQualCodeCol: workspace.qualCodeColumn || '',
-                    preferredQualNameCol: workspace.qualNameColumn || '',
-                    preferredNalRefCol: workspace.nalRefColumn || '',
-                    preferredNalNameCol: workspace.nalNameColumn || '',
-                    preferredNalAlignedCol: workspace.nalAlignedColumn || '',
-                    preferredNalCategoryCol: workspace.nalCategoryColumn || '',
-                    preferredNalCategoryValue: workspace.nalCategoryValue || '',
-                    preferredNalHeqsfRefCol: workspace.nalHeqsfRefColumn || '',
-                    preferredNalSaqaIdCol: workspace.nalSaqaIdColumn || '',
-                    preferredNalNqfCol: workspace.nalNqfColumn || '',
-                    preferredNalCreditsCol: workspace.nalCreditsColumn || '',
-                    preferredNalOutcomeCol: workspace.nalOutcomeColumn || '',
-                    silent: true
-                });
-            }
+            await loadTables({
+                preferredStudTable: workspace.studTable || '',
+                preferredQualTable: workspace.qualTable || '',
+                preferredNalTable: workspace.nalTable || '',
+                preferredStudQualRefCol: workspace.studQualRefColumn || '',
+                preferredStud007Col: workspace.stud007Column || '',
+                preferredStud008Col: workspace.stud008Column || '',
+                preferredStudFirstTimeCol: workspace.studFirstTimeColumn || '',
+                preferredStud012Col: workspace.stud012Column || '',
+                preferredStud026Col: workspace.stud026Column || '',
+                preferredStudFirstTimeValue: workspace.studFirstTimeValue || '',
+                preferredQualCodeCol: workspace.qualCodeColumn || '',
+                preferredQualNameCol: workspace.qualNameColumn || '',
+                preferredNalRefCol: workspace.nalRefColumn || '',
+                preferredNalNameCol: workspace.nalNameColumn || '',
+                preferredNalAlignedCol: workspace.nalAlignedColumn || '',
+                preferredNalCategoryCol: workspace.nalCategoryColumn || '',
+                preferredNalCategoryValue: workspace.nalCategoryValue || '',
+                preferredNalHeqsfRefCol: workspace.nalHeqsfRefColumn || '',
+                preferredNalSaqaIdCol: workspace.nalSaqaIdColumn || '',
+                preferredNalNqfCol: workspace.nalNqfColumn || '',
+                preferredNalCreditsCol: workspace.nalCreditsColumn || '',
+                preferredNalOutcomeCol: workspace.nalOutcomeColumn || '',
+                silent: true
+            });
         } catch (error) {
             reconnectWarning = state.resultsVisible
-                ? 'Saved workspace results are still loaded from SQL, but the live source could not be reconnected.'
-                : 'The saved workspace was found in SQL, but the live source could not be reconnected.';
-            setStatus('connectionStatus', `Warning: ${escapeHtml(error?.message || 'Live SQL reconnect failed.')}`, 'warning');
+                ? 'Saved workspace results are still loaded, but the uploaded tables could not be refreshed.'
+                : 'The saved workspace was found, but the uploaded tables could not be refreshed.';
+            setStatus('connectionStatus', `Warning: ${escapeHtml(error?.message || 'Failed to refresh tables.')}`, 'warning');
         }
     } finally {
         state.isHydrating = false;
@@ -829,40 +799,23 @@ async function hydrateWorkspace(workspace) {
     }
 }
 
-// ── Connection / Table Loading ─────────────────────────────────────────────────
-async function connectServer(options = {}) {
-    state.server = document.getElementById('serverInput').value.trim();
-    state.driver = document.getElementById('driverSelect').value;
-    if (!state.server) { setStatus('connectionStatus', 'Enter a server name.', 'error'); return null; }
-    if (!options.silent) showSpinner('Connecting to server...');
-    setStatus('connectionStatus', 'Connecting...', 'info');
-    const result = await post('/Rule39/GetDatabases', { server: state.server, driver: state.driver });
-    if (!options.silent) hideSpinner();
-    if (!result.success) { setStatus('connectionStatus', `Error: ${result.error}`, 'error'); return null; }
-
-    const dbSelect = document.getElementById('databaseSelect');
-    dbSelect.innerHTML = '<option value="">Select database</option>';
-    result.databases.forEach(db => dbSelect.appendChild(new Option(db, db)));
-    document.getElementById('dbFieldGroup').style.display = 'block';
-
-    if (options.preferredDatabase && result.databases.includes(options.preferredDatabase)) {
-        dbSelect.value = options.preferredDatabase;
-        state.database = options.preferredDatabase;
-    }
-    setStatus('connectionStatus', options.statusMessage || `Connected. Found ${result.databases.length} database(s). Select one below.`, 'success');
-    return result;
-}
-
+// ── Table Loading (this engagement's uploaded datasets) ────────────────────────
 async function loadTables(options = {}) {
-    state.database = document.getElementById('databaseSelect').value;
-    if (!state.database) return null;
+    if (!state.clientId) return null;
     if (!options.silent) showSpinner('Loading tables...');
 
-    const result = await post('/Rule39/GetTables', { server: state.server, database: state.database, driver: state.driver });
+    const result = await post('/Rule39/GetTables', { clientId: state.clientId });
     if (!options.silent) hideSpinner();
-    if (!result.success) { setStatus('connectionStatus', `Error: ${result.error}`, 'error'); return null; }
+    if (!result.success) {
+        setStatus('connectionStatus', `Error: ${result.error}`, 'error');
+        const alertEl = document.getElementById('datasetStatusAlert');
+        if (alertEl) { alertEl.className = 'alert alert--error'; alertEl.textContent = result.error || 'Failed to load tables.'; }
+        return null;
+    }
 
-    setStatus('connectionStatus', `Connected to <strong>${state.database}</strong>. Found ${result.tables.length} tables.`, 'success');
+    setStatus('connectionStatus', `Found ${result.tables.length} table(s).`, 'success');
+    const alertEl = document.getElementById('datasetStatusAlert');
+    if (alertEl) { alertEl.className = 'alert alert--success'; alertEl.textContent = `Loaded ${result.tables.length} table(s) from this engagement's dataset.`; }
 
     ['studTableSelect', 'qualTableSelect', 'nalTableSelect'].forEach(id => {
         const sel = document.getElementById(id);
@@ -925,9 +878,7 @@ async function loadColumns(which, options = {}) {
     else state.nalTable = tableName;
     if (!options.silent) showSpinner(`Loading columns for ${tableName}...`);
 
-    const result = await post('/Rule39/GetColumns', {
-        server: state.server, database: state.database, driver: state.driver, tableName, tableRole: which
-    });
+    const result = await post('/Rule39/GetColumns', { clientId: state.clientId, tableName });
     if (!options.silent) hideSpinner();
     if (!result.success) { setStatus('tableStatus', `Error: ${result.error}`, 'error'); return null; }
 
@@ -1054,8 +1005,7 @@ async function loadDistinctValues(which, columnName, preferred) {
     if (!tableName || !columnName) return;
 
     const result = await post('/Rule39/GetDistinctValues', {
-        server: state.server, database: state.database, driver: state.driver,
-        tableName, columnName, preferredValue: preferred
+        clientId: state.clientId, tableName, columnName, preferredValue: preferred
     });
 
     if (!result.success) return;
@@ -1123,7 +1073,7 @@ async function verifyTables() {
     showSpinner('Verifying tables...');
     try {
         const result = await post('/Rule39/VerifyTables', {
-            server: state.server, database: state.database, driver: state.driver,
+            clientId: state.clientId,
             studTable: state.studTable, qualTable: state.qualTable, nalTable: state.nalTable,
             studQualRefColumn: state.studQualRefCol || '_001',
             studFirstTimeColumn: state.studFirstTimeCol,
@@ -1215,7 +1165,7 @@ function renderValidationSummary(r) {
     el.innerHTML = `
         ${renderSectionHeader(
             'Rule 39: First-Time Entering vs Non-Aligned Qualifications',
-            `Database: ${escapeHtml(r.database)} | STUD ${escapeHtml(r.studTable)}.[${escapeHtml(r.studFirstTimeColumn)}]='${escapeHtml(r.studFirstTimeValue)}' | NAL ${escapeHtml(r.nalTable)}.[${escapeHtml(r.nalCategoryColumn)}]='${escapeHtml(r.nalCategoryValue)}'`,
+            `STUD ${escapeHtml(r.studTable)}.[${escapeHtml(r.studFirstTimeColumn)}]='${escapeHtml(r.studFirstTimeValue)}' | NAL ${escapeHtml(r.nalTable)}.[${escapeHtml(r.nalCategoryColumn)}]='${escapeHtml(r.nalCategoryValue)}'`,
             `Join: STUD.[${escapeHtml(r.studQualRefColumn)}] = QUAL.[${escapeHtml(r.qualCodeColumn)}] -> NAL.[${escapeHtml(r.nalRefColumn)}]<br>Run: ${escapeHtml(r.timestamp)}`
         )}
         <div class="stats-grid">
@@ -1425,7 +1375,7 @@ async function generateSql() {
         const el = document.getElementById('sqlContent');
         el.classList.remove('empty-state');
         el.innerHTML = `
-            ${renderSectionHeader('Rule 39 SQL Code', 'Generated SQL matches the notebook validation formula', `Database: ${escapeHtml(state.database || '')}`)}
+            ${renderSectionHeader('Rule 39 SQL Code', 'Generated SQL matches the notebook validation formula', '')}
             <div class="sql-toolbar">
                 <button class="btn btn-sm btn-primary" onclick="copyToClipboard('sqlCode')">Copy</button>
                 <button class="btn btn-sm btn-info" onclick="downloadSql()">Download SQL</button>
@@ -1625,8 +1575,6 @@ function applyWorkspaceAccessMode(canEditWorkspace) {
 function validateConfig() {
     const missing = [];
     if (!state.clientId) missing.push('engagement');
-    if (!state.server) missing.push('server');
-    if (!state.database) missing.push('database');
     if (!state.studTable) missing.push('STUD table');
     if (!state.qualTable) missing.push('QUAL table');
     if (!state.nalTable) missing.push('NAL table');
@@ -1652,9 +1600,6 @@ function buildRequest() {
     return {
         clientId: state.clientId,
         runId: state.currentRunId,
-        server: state.server,
-        database: state.database,
-        driver: state.driver,
         studTable: state.studTable,
         qualTable: state.qualTable,
         nalTable: state.nalTable,
@@ -1686,15 +1631,8 @@ function copyToClipboard(elId) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    document.getElementById('serverInput').addEventListener('input', async () => {
-        state.server = document.getElementById('serverInput').value.trim(); await markWorkspaceDirty();
-    });
-    document.getElementById('driverSelect').addEventListener('change', async () => {
-        state.driver = document.getElementById('driverSelect').value; await markWorkspaceDirty();
-    });
-    document.getElementById('databaseSelect').addEventListener('change', async e => {
-        state.database = e.target.value; await markWorkspaceDirty(); await loadTables();
-    });
+    const datasetsLink = document.getElementById('datasetsLink');
+    if (datasetsLink) datasetsLink.href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
     document.getElementById('studTableSelect').addEventListener('change', async e => {
         state.studTable = e.target.value; await markWorkspaceDirty(); await loadColumns('stud');
     });

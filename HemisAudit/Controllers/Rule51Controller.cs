@@ -1,10 +1,10 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
 using HemisAudit.Helpers;
 using HemisAudit.Models;
 using HemisAudit.Services;
 using HemisAudit.ViewModels;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.AspNetCore.Mvc;
 
 namespace HemisAudit.Controllers
 {
@@ -74,7 +74,6 @@ namespace HemisAudit.Controllers
             var workspace = await _rule51.GetCurrentWorkspaceStateAsync(clientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
-
             if (workspace != null && !resultsVisible) workspace.Summary = null;
 
             return Json(new { success = true, hasWorkspace = workspace != null, resultsVisible, workspace });
@@ -108,46 +107,30 @@ namespace HemisAudit.Controllers
                 string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(role, "Director", StringComparison.OrdinalIgnoreCase);
             var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
-            ViewBag.IsArchived = clientDetail?.IsArchived == true;
+            var isArchived = clientDetail?.IsArchived == true;
+            ViewBag.IsArchived = isArchived;
             ViewBag.ModuleNavigation = ModuleSequenceNavigationHelper.BuildForSavedRun(51, review.ClientId, clientDetail?.ValidationRuns, role, review.CurrentUserEngagementRole);
             ViewBag.CanOpenWorkspace =
-                clientDetail?.IsArchived != true &&
+                !isArchived &&
                 await _systemDb.CanAccessClientModuleAsync(review.ClientId, user, role) &&
                 (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
 
-            review.GeneratedSql = await _rule51.GenerateSqlAsync(new Rule51ValidationRequest
-            {
-                ClientId = review.ClientId, Server = review.SourceServer, Database = review.Summary.Database,
-                ValpacTable = review.Summary.ValpacTable, ProdTable = review.Summary.ProdTable,
-                ValpacCol007 = review.Summary.ValpacCol007, ValpacCol008 = review.Summary.ValpacCol008,
-                ValpacCol001 = review.Summary.ValpacCol001, ValpacColYear = review.Summary.ValpacColYear,
-                ProdColStNo = review.Summary.ProdColStNo, ProdColIdNo = review.Summary.ProdColIdNo,
-                ProdColQual = review.Summary.ProdColQual, ProdColYear = review.Summary.ProdColYear,
-                ColumnMappings = (review.Summary.ColumnMappings ?? new List<Rule51ColumnMapping>())
-                    .Select(m => new Rule51ColumnMapping { ValpacColumn = m.ValpacColumn, ProdColumn = m.ProdColumn, Label = m.Label })
-                    .ToList()
-            });
-
+            review.GeneratedSql = _rule51.GenerateSql(BuildRequestFromSummary(review.ClientId, review.Summary));
             return View(review);
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule51.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule51.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule51.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetColumns([FromBody] Rule51GetColumnsRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule51.GetColumnsAsync(model.ClientId, model.TableName, model.TableRole)));
 
         [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] Rule51VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                await _rule51.GetColumnsAsync(request.Server, request.Database, request.Driver, request.ValpacTable)));
-
-        [HttpPost]
-        public async Task<IActionResult> VerifyTables([FromBody] Rule51VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule51.VerifyTablesAsync(request)));
+        public async Task<IActionResult> VerifyTables([FromBody] Rule51ValidationRequest request) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule51.VerifyDataAsync(request)));
 
         [HttpPost]
         public async Task<IActionResult> RunValidation([FromBody] Rule51ValidationRequest request)
@@ -231,7 +214,7 @@ namespace HemisAudit.Controllers
             }
             catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
 
-            var workspace = await _rule51.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email, includeSummary: false);
+            var workspace = await _rule51.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
             return Json(new { success = true, message = "Signoff saved.", resultsVisible, workspace });
@@ -257,7 +240,7 @@ namespace HemisAudit.Controllers
             try { await _rule51.RemoveSignoffAsync(model.RunId.Value, user!.Email!); }
             catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
 
-            var workspace = await _rule51.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email, includeSummary: false);
+            var workspace = await _rule51.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
             await _audit.LogAsync("remove_validation_signoff", $"{review.CurrentUserEngagementRole} removed signoff for Rule 51 run {model.RunId.Value}", user?.Id, user?.Email);
@@ -271,8 +254,9 @@ namespace HemisAudit.Controllers
             var role = await GetCurrentSystemRoleAsync(user);
             if (request.ClientId > 0 && !await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
                 return Json(new Rule51SqlResult { Success = false, Error = "You cannot access this engagement." });
-            return Json(await RequireDataAnalystAsync(async () => new Rule51SqlResult { Success = true, Sql = await _rule51.GenerateSqlAsync(request) }));
+            return Json(await RequireDataAnalystAsync(async () => new Rule51SqlResult { Success = true, Sql = _rule51.GenerateSql(request) }));
         }
+
         [HttpPost]
         public async Task<IActionResult> GenerateRScript([FromBody] Rule51ValidationRequest request)
         {
@@ -337,7 +321,8 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            return File(_export.ExportRule51Excel(review.Summary), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule51_VALPAC_Production_Run_{runId}.xlsx");
+            var fullSummary = await _rule51.GetStoredSummaryAsync(runId) ?? review.Summary;
+            return File(_export.ExportRule51Excel(fullSummary), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule51_VALPAC_Production_Run_{runId}.xlsx");
         }
 
         [HttpGet]
@@ -345,7 +330,8 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            return File(_export.ExportRule51Csv(review.Summary), "text/csv", $"Rule51_VALPAC_Production_Run_{runId}.csv");
+            var fullSummary = await _rule51.GetStoredSummaryAsync(runId) ?? review.Summary;
+            return File(_export.ExportRule51Csv(fullSummary), "text/csv", $"Rule51_VALPAC_Production_Run_{runId}.csv");
         }
 
         [HttpGet]
@@ -353,18 +339,7 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var sql = await _rule51.GenerateSqlAsync(new Rule51ValidationRequest
-            {
-                ClientId = review.ClientId, Server = review.SourceServer, Database = review.Summary.Database,
-                ValpacTable = review.Summary.ValpacTable, ProdTable = review.Summary.ProdTable,
-                ValpacCol007 = review.Summary.ValpacCol007, ValpacCol008 = review.Summary.ValpacCol008,
-                ValpacCol001 = review.Summary.ValpacCol001, ValpacColYear = review.Summary.ValpacColYear,
-                ProdColStNo = review.Summary.ProdColStNo, ProdColIdNo = review.Summary.ProdColIdNo,
-                ProdColQual = review.Summary.ProdColQual, ProdColYear = review.Summary.ProdColYear,
-                ColumnMappings = (review.Summary.ColumnMappings ?? new List<Rule51ColumnMapping>())
-                    .Select(m => new Rule51ColumnMapping { ValpacColumn = m.ValpacColumn, ProdColumn = m.ProdColumn, Label = m.Label })
-                    .ToList()
-            });
+            var sql = _rule51.GenerateSql(BuildRequestFromSummary(review.ClientId, review.Summary));
             return File(_export.ExportSql(sql), "application/sql", $"Rule51_VALPAC_Production_{runId}.sql");
         }
 
@@ -388,16 +363,34 @@ namespace HemisAudit.Controllers
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
             if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase)) return Json(new { success = false, error = "Only the assigned data analyst can download the SQL script." });
-            return File(_export.ExportSql(await _rule51.GenerateSqlAsync(request)), "application/sql", $"Rule51_VALPAC_Production_{Ts()}.sql");
+            return File(_export.ExportSql(_rule51.GenerateSql(request)), "application/sql", $"Rule51_VALPAC_Production_{Ts()}.sql");
         }
 
-        // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Private helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        // ─── Private helpers ─────────────────────────────────────────────────
+
+        private static Rule51ValidationRequest BuildRequestFromSummary(int clientId, Rule51ValidationSummary summary) => new()
+        {
+            ClientId = clientId,
+            ValpacTable = summary.ValpacTable,
+            ProdTable = summary.ProdTable,
+            ValpacCol007 = summary.ValpacCol007, ValpacCol008 = summary.ValpacCol008,
+            ValpacCol001 = summary.ValpacCol001, ValpacColYear = summary.ValpacColYear,
+            ProdColStNo = summary.ProdColStNo, ProdColIdNo = summary.ProdColIdNo,
+            ProdColQual = summary.ProdColQual, ProdColYear = summary.ProdColYear,
+            ValpacCol049 = summary.ValpacCol049, SaNationalValues = summary.SaNationalValues,
+            ValpacCol008ZPlaceholders = summary.ValpacCol008ZPlaceholders,
+            CregTable = summary.CregTable, CregIdCol = summary.CregIdCol,
+            CregCompletionStatusCol = summary.CregCompletionStatusCol, CregCompletionStatusValues = summary.CregCompletionStatusValues,
+            ColumnMappings = (summary.ColumnMappings ?? new List<Rule51ColumnMapping>())
+                .Select(m => new Rule51ColumnMapping { ValpacColumn = m.ValpacColumn, ProdColumn = m.ProdColumn, Label = m.Label })
+                .ToList()
+        };
 
         private async Task<Rule51RunReviewViewModel?> LoadAuthorizedSavedRunAsync(int runId, bool requireDownloadAccess)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
-            var review = await _rule51.GetSavedRunAsync(runId, user?.Email, includeFullResults: requireDownloadAccess);
+            var review = await _rule51.GetSavedRunAsync(runId, user?.Email);
             if (review == null) { TempData["Error"] = "Saved validation run was not found."; return null; }
             if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role)) { TempData["Error"] = "You do not have access."; return null; }
             if (!CanViewSavedRun(review, role)) { TempData["Error"] = "Only analyst-signed results are available."; return null; }
@@ -410,16 +403,16 @@ namespace HemisAudit.Controllers
             var user = await _users.GetUserAsync(User);
             if (summary.SavedRunId is int savedRunId && savedRunId > 0)
             {
-                var review = await _rule51.GetSavedRunAsync(savedRunId, user?.Email, includeFullResults: true);
-                if (review?.Summary != null) return review.Summary;
+                var stored = await _rule51.GetStoredSummaryAsync(savedRunId);
+                if (stored != null) return stored;
             }
             if (summary.ClientId > 0)
             {
-                var workspace = await _rule51.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email, includeSummary: false);
+                var workspace = await _rule51.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email);
                 if (workspace?.RunId is int workspaceRunId && workspaceRunId > 0)
                 {
-                    var review = await _rule51.GetSavedRunAsync(workspaceRunId, user?.Email, includeFullResults: true);
-                    if (review?.Summary != null) return review.Summary;
+                    var stored = await _rule51.GetStoredSummaryAsync(workspaceRunId);
+                    if (stored != null) return stored;
                 }
             }
             return summary;

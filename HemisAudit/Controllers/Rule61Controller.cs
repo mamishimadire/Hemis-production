@@ -128,35 +128,20 @@ namespace HemisAudit.Controllers
                 (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
 
-            review.GeneratedSql = _rule61.GenerateSql(new Rule61ValidationRequest
-            {
-                ClientId = review.ClientId,
-                Database = review.Summary.Database,
-                StudTable = review.Summary.StudTable,
-                QualTable = review.Summary.QualTable,
-                PqmTable = review.Summary.PqmTable,
-                PgTypesText = review.Summary.PgTypesText,
-                ColumnMapping = review.Summary.ColumnMapping
-            });
-
             return View(review);
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule61.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule61.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule61.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule61GetColumnsRequest request) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule61.GetColumnsAsync(request.Server, request.Database, request.Driver, request.TableName)));
+            Json(await RequireDataAnalystAsync(async () => await _rule61.GetColumnsAsync(request.ClientId, request.TableName, request.TableRole)));
 
         [HttpPost]
-        public async Task<IActionResult> VerifyTables([FromBody] Rule61VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule61.VerifyTablesAsync(request)));
+        public async Task<IActionResult> VerifyTables([FromBody] Rule61ValidationRequest request) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule61.VerifyDataAsync(request)));
 
         [HttpPost]
         public async Task<IActionResult> RunValidation([FromBody] Rule61ValidationRequest request)
@@ -216,11 +201,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GenerateSql([FromBody] Rule61ValidationRequest request) =>
-            Json(new Rule61SqlResult { Success = true, Sql = _rule61.GenerateSql(request) });
+        public Task<IActionResult> GenerateSql([FromBody] Rule61ValidationRequest request) =>
+            Task.FromResult<IActionResult>(Json(new Rule61SqlResult { Success = true, Sql = _rule61.GenerateSql(request) }));
+
         [HttpPost]
-        public async Task<IActionResult> GenerateRScript([FromBody] Rule61ValidationRequest request) =>
-            Json(new Rule61SqlResult { Success = true, Sql = Rule61RScriptGenerator.Generate(request) + RScriptScaffold.BuildAutoExportFooter("Rule61") });
+        public Task<IActionResult> GenerateRScript([FromBody] Rule61ValidationRequest request) =>
+            Task.FromResult<IActionResult>(Json(new Rule61SqlResult { Success = true, Sql = Rule61RScriptGenerator.Generate(request) + RScriptScaffold.BuildAutoExportFooter("Rule61") }));
 
         [HttpPost]
         public async Task<IActionResult> SignOffWorkspace([FromBody] Rule61WorkspaceSignoffInputModel model)
@@ -305,7 +291,44 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule61_Research_Time_{Ts()}.sql");
         }
 
-        // â”€â”€ Private helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedExcel(int runId)
+        {
+            var stored = await _rule61.GetStoredSummaryAsync(runId);
+            var exportSummary = await ResolveDownloadSummaryAsync(stored ?? new Rule61ValidationSummary { SavedRunId = runId });
+            var bytes = BuildExcelExport(exportSummary);
+            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule61_Research_Time_Run_{runId}.xlsx");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedCsv(int runId)
+        {
+            var stored = await _rule61.GetStoredSummaryAsync(runId);
+            var exportSummary = await ResolveDownloadSummaryAsync(stored ?? new Rule61ValidationSummary { SavedRunId = runId });
+            var bytes = BuildCsvExport(exportSummary);
+            return File(bytes, "text/csv", $"Rule61_Research_Time_Run_{runId}.csv");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedSql(int runId)
+        {
+            var stored = await _rule61.GetStoredSummaryAsync(runId);
+            if (stored == null) return NotFound();
+            var sql = _rule61.GenerateSql(new Rule61ValidationRequest
+            {
+                ClientId = stored.ClientId,
+                StudTable = stored.StudTable,
+                QualTable = stored.QualTable,
+                PqmTable = stored.PqmTable,
+                StudStatusValue = stored.StudStatusValue,
+                PgTypesText = stored.PgTypesText,
+                ColumnMapping = stored.ColumnMapping
+            });
+            var bytes = System.Text.Encoding.UTF8.GetBytes(sql);
+            return File(bytes, "application/sql", $"Rule61_Research_Time_Run_{runId}.sql");
+        }
+
+        // ─── Private helpers ─────────────────────────────────────────────────
 
         private static string Ts() => DateTime.Now.ToString("yyyyMMdd_HHmmss");
 
@@ -323,7 +346,6 @@ namespace HemisAudit.Controllers
 
             var summaryRows = new (string Label, string Value)[]
             {
-                ("Database", summary.Database),
                 ("Timestamp", summary.Timestamp),
                 ("STUD Table", summary.StudTable),
                 ("QUAL Table", summary.QualTable),
@@ -368,7 +390,6 @@ namespace HemisAudit.Controllers
             var passRows = summary.PassRows ?? new List<Rule61ReviewRow>();
             var failRows = summary.FailRows ?? new List<Rule61ReviewRow>();
             sw.WriteLine("\"HEMIS RULE 61 - Research Time Validation\"");
-            sw.WriteLine($"\"Database\",\"{summary.Database}\"");
             sw.WriteLine($"\"Timestamp\",\"{summary.Timestamp}\"");
             sw.WriteLine($"\"Status\",\"{summary.Status}\"");
             sw.WriteLine($"\"STUD Status Column\",\"{summary.ColumnMapping.StudStatusCol}\"");
@@ -514,7 +535,7 @@ namespace HemisAudit.Controllers
             var role = await GetCurrentSystemRoleAsync(user);
             if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
                 return new { success = false, error = "Only the assigned data analyst can configure Rule 61." };
-            return await action();
+            return await action() ?? (object)new { success = false, error = "Action returned no result." };
         }
     }
 }

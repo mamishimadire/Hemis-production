@@ -167,7 +167,6 @@
         <div class="card" style="padding:20px">
             <h3 class="section-title" style="margin-top:0">Run Configuration</h3>
             <div class="form-grid">
-                <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Database</div><div>@Model.Summary.Database</div></div>
                 <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Status</div><div><strong style="color:@(Model.Summary.Status=="PASS"?"#008000":"#b91c1c")">@Model.Summary.Status</strong></div></div>
                 <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">STUD Table</div><div>@Model.Summary.StudTable (filter: @Model.Summary.StudFirstTimeColumn = '@Model.Summary.StudFirstTimeValue')</div></div>
                 <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">QUAL Table</div><div>@Model.Summary.QualTable</div></div>

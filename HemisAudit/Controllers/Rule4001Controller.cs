@@ -90,25 +90,18 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model)
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model)
         {
-            var result = await RequireDataAnalystAsync(async () => await _rule4001.GetDatabasesAsync(model.Server, model.Driver));
+            var result = await RequireDataAnalystAsync(async () => await _rule4001.GetTablesAsync(model.ClientId));
             return Json(result);
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model)
-        {
-            var result = await RequireDataAnalystAsync(async () => await _rule4001.GetTablesAsync(model.Server, model.Database, model.Driver));
-            return Json(result);
-        }
-
-        [HttpPost]
-        public async Task<IActionResult> GetTableColumns([FromBody] Rule40GetColumnsRequest request)
+        public async Task<IActionResult> GetTableColumns([FromBody] Rule16ColumnsRequest request)
         {
             var result = await RequireDataAnalystAsync(async () =>
             {
-                var columns = await _rule4001.GetTableColumnsAsync(request.Server, request.Database, request.Driver, request.TableName);
+                var columns = await _rule4001.GetTableColumnsAsync(request.ClientId, request.TableName);
                 return new { success = true, columns } as object;
             });
             return Json(result);
@@ -272,7 +265,7 @@ namespace HemisAudit.Controllers
             var summary = await _rule4001.GetFullSummaryByRunIdAsync(runId);
             if (summary == null || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
                 return NotFound();
-            var req   = new Rule4001ValidationRequest { ValpacTable = summary.ValpacTable, SfteTable = summary.SfteTable, Database = summary.Database, Server = summary.Server };
+            var req   = new Rule4001ValidationRequest { ValpacTable = summary.ValpacTable, SfteTable = summary.SfteTable, ValpacKeyCol = summary.ValpacKeyCol, SfteKeyCol = summary.SfteKeyCol };
             var bytes = System.Text.Encoding.UTF8.GetBytes(_rule4001.GenerateSql(req));
             return File(bytes, "application/sql", $"Rule40_1_StaffPresence_Run_{runId}.sql");
         }
@@ -291,8 +284,7 @@ namespace HemisAudit.Controllers
             r++;
             ws.Cell(r, 1).Value = "VALPAC Table";  ws.Cell(r, 2).Value = summary.ValpacTable;
             ws.Cell(r, 3).Value = "SFTE Table";    ws.Cell(r, 4).Value = summary.SfteTable;   r++;
-            ws.Cell(r, 1).Value = "Database";      ws.Cell(r, 2).Value = summary.Database;
-            ws.Cell(r, 3).Value = "Timestamp";     ws.Cell(r, 4).Value = summary.Timestamp;   r++;
+            ws.Cell(r, 1).Value = "Timestamp";     ws.Cell(r, 2).Value = summary.Timestamp;   r++;
             ws.Cell(r, 1).Value = "Total";         ws.Cell(r, 2).Value = summary.TotalCount;
             ws.Cell(r, 3).Value = "Agree";         ws.Cell(r, 4).Value = summary.AgreeCount;  r++;
             ws.Cell(r, 1).Value = "Missing in H16SFTE";  ws.Cell(r, 2).Value = summary.MissingInSfteCount;
@@ -335,7 +327,7 @@ namespace HemisAudit.Controllers
 
             sw.WriteLine("HEMIS RULE 40.1 - Staff VALPAC vs H16SFTE Staff Presence Check");
             sw.WriteLine($"\"VALPAC Table\",\"{summary.ValpacTable}\",\"SFTE Table\",\"{summary.SfteTable}\"");
-            sw.WriteLine($"\"Database\",\"{summary.Database}\",\"Timestamp\",\"{summary.Timestamp}\"");
+            sw.WriteLine($"\"Timestamp\",\"{summary.Timestamp}\"");
             sw.WriteLine($"\"Total\",{summary.TotalCount},\"Agree\",{summary.AgreeCount},\"Missing in H16SFTE\",{summary.MissingInSfteCount},\"Missing in VALPAC\",{summary.MissingInValpacCount},\"Exception Rate\",\"{summary.ExceptionRate:0.00}%\",\"Status\",\"{summary.Status}\"");
             sw.WriteLine();
             sw.WriteLine("\"Staff Number (_037)\",\"Result\"");

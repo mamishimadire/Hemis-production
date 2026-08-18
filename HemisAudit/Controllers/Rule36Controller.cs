@@ -160,10 +160,9 @@ namespace HemisAudit.Controllers
                 (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
 
-            review.GeneratedSql = _rule36.GenerateSql(new ValidationRequest
+            review.GeneratedSql = _rule36.GenerateSql(new Rule36ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 DeceasedTable = review.Summary.DeceasedTable,
                 StudColumn = review.Summary.StudColumn,
@@ -173,30 +172,26 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule36.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule36.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule36.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetColumns([FromBody] Rule36GetColumnsRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule36.GetColumnsAsync(model.ClientId, model.TableName, model.IsStudTable)));
 
         [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] GetColumnsRequest model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule36.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName, model.IsStudTable)));
-
-        [HttpPost]
-        public async Task<IActionResult> VerifyTables([FromBody] VerifyRequest request) =>
+        public async Task<IActionResult> VerifyTables([FromBody] Rule36VerifyRequest request) =>
             Json(await RequireDataAnalystAsync(async () => await _rule36.VerifyDataAsync(request)));
 
         [HttpPost]
-        public async Task<IActionResult> RunValidation([FromBody] ValidationRequest request)
+        public async Task<IActionResult> RunValidation([FromBody] Rule36ValidationRequest request)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
 
             if (request.ClientId <= 0)
             {
-                return Json(new ValidationSummary
+                return Json(new Rule36ValidationSummary
                 {
                     Success = false,
                     Error = "Select an approved engagement before running validation."
@@ -205,7 +200,7 @@ namespace HemisAudit.Controllers
 
             if (!await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
             {
-                return Json(new ValidationSummary
+                return Json(new Rule36ValidationSummary
                 {
                     Success = false,
                     Error = "You cannot access this engagement."
@@ -216,14 +211,14 @@ namespace HemisAudit.Controllers
             if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(engagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
             {
-                return Json(new ValidationSummary
+                return Json(new Rule36ValidationSummary
                 {
                     Success = false,
                     Error = "Only the assigned data analyst can run Rule 36."
                 });
             }
 
-            async Task<ValidationSummary> ExecuteValidationAsync(IRule36Service ruleService, IAuditLogService auditService)
+            async Task<Rule36ValidationSummary> ExecuteValidationAsync(IRule36Service ruleService, IAuditLogService auditService)
             {
                 var result = await ruleService.RunValidationAsync(request, user?.Email, user?.FullName ?? user?.Email);
                 if (result.Success)
@@ -255,14 +250,14 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> BeginWorkspaceEdit([FromBody] ValidationRequest request)
+        public async Task<IActionResult> BeginWorkspaceEdit([FromBody] Rule36ValidationRequest request)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
 
             if (!await CanEditWorkspaceAsync(request.ClientId, user, role))
             {
-                return Json(new WorkspaceSaveResult
+                return Json(new Rule36WorkspaceSaveResult
                 {
                     Success = false,
                     Error = "Only the assigned data analyst can edit a saved workspace."
@@ -271,7 +266,7 @@ namespace HemisAudit.Controllers
 
             if (!request.RunId.HasValue || request.RunId.Value <= 0)
             {
-                return Json(new WorkspaceSaveResult
+                return Json(new Rule36WorkspaceSaveResult
                 {
                     Success = false,
                     Error = "Select a saved run before editing the workspace."
@@ -292,14 +287,14 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> SaveWorkspace([FromBody] ValidationRequest request)
+        public async Task<IActionResult> SaveWorkspace([FromBody] Rule36ValidationRequest request)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
 
             if (!await CanEditWorkspaceAsync(request.ClientId, user, role))
             {
-                return Json(new WorkspaceSaveResult
+                return Json(new Rule36WorkspaceSaveResult
                 {
                     Success = false,
                     Error = "Only the assigned data analyst can save a workspace."
@@ -508,7 +503,7 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GenerateSql([FromBody] ValidationRequest request)
+        public async Task<IActionResult> GenerateSql([FromBody] Rule36ValidationRequest request)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
@@ -525,7 +520,7 @@ namespace HemisAudit.Controllers
             return Json(RequireDataAnalystResult(() => new SqlResult { Success = true, Sql = _rule36.GenerateSql(request) }));
         }
         [HttpPost]
-        public async Task<IActionResult> GenerateRScript([FromBody] ValidationRequest request)
+        public async Task<IActionResult> GenerateRScript([FromBody] Rule36ValidationRequest request)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
@@ -691,10 +686,9 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var request = new ValidationRequest
+            var request = new Rule36ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 DeceasedTable = review.Summary.DeceasedTable,
                 StudColumn = review.Summary.StudColumn,
@@ -705,7 +699,7 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> DownloadExcel([FromBody] ValidationSummary summary)
+        public async Task<IActionResult> DownloadExcel([FromBody] Rule36ValidationSummary summary)
         {
             summary = await ResolveExportSummaryAsync(summary);
             var bytes = _export.ExportRule36Excel(summary);
@@ -715,7 +709,7 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> DownloadCsv([FromBody] ValidationSummary summary)
+        public async Task<IActionResult> DownloadCsv([FromBody] Rule36ValidationSummary summary)
         {
             summary = await ResolveExportSummaryAsync(summary);
             var fileName = $"Rule36_Validation_Results_{Ts()}.csv";
@@ -724,7 +718,7 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> DownloadExceptionsCsv([FromBody] ValidationSummary summary)
+        public async Task<IActionResult> DownloadExceptionsCsv([FromBody] Rule36ValidationSummary summary)
         {
             summary = await ResolveExportSummaryAsync(summary);
             var fileName = $"Rule36_Deceased_Exceptions_{Ts()}.csv";
@@ -733,7 +727,7 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> DownloadSql([FromBody] ValidationRequest request)
+        public async Task<IActionResult> DownloadSql([FromBody] Rule36ValidationRequest request)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
@@ -853,7 +847,7 @@ namespace HemisAudit.Controllers
             return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
         }
 
-        private async Task<ValidationSummary> ResolveExportSummaryAsync(ValidationSummary summary)
+        private async Task<Rule36ValidationSummary> ResolveExportSummaryAsync(Rule36ValidationSummary summary)
         {
             var user = await _users.GetUserAsync(User);
 
@@ -912,16 +906,6 @@ namespace HemisAudit.Controllers
 
         private static string Ts() => DateTime.Now.ToString("yyyyMMdd_HHmmss");
 
-    }
-
-    public class GetColumnsRequest
-    {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
-        public string TableName { get; set; } = "";
-        public bool IsStudTable { get; set; }
-        public string TableRole { get; set; } = "";
     }
 }
 

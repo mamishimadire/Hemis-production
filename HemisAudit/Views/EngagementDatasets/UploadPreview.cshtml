@@ -1,0 +1,99 @@
+@model HemisAudit.Services.DatasetStagingInfo
+@{
+    ViewData["Title"] = "Preview & columns";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    int clientId = ViewBag.ClientId;
+    var dataTypes = new[]
+    {
+        "bit", "tinyint", "smallint", "int", "bigint",
+        "decimal(18,2)", "numeric(18,2)", "money", "smallmoney",
+        "float", "real",
+        "date", "datetime", "datetime2", "datetimeoffset", "smalldatetime", "timestamp", "time",
+        "char(10)", "nchar(10)", "varchar(50)", "nvarchar(50)", "varchar(max)", "nvarchar(max)",
+        "text", "ntext", "uniqueidentifier", "xml",
+        "binary(50)", "varbinary(50)", "varbinary(max)", "geography", "geometry", "hierarchyid", "sql_variant"
+    };
+}
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">❌ @TempData["Error"]</div>
+}
+
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+    <div>
+        <h1>Preview Data</h1>
+        <p><strong>@Model.OriginalFileName</strong> — step 2 of 3: verify the imported data and column schema.</p>
+    </div>
+    <form asp-action="UploadCancel" asp-route-clientId="@clientId" method="post" style="display:inline-flex;align-items:center;">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="token" value="@Model.Token" />
+        <button type="submit" class="btn btn-secondary">Cancel upload</button>
+    </form>
+</div>
+
+<div class="wizard-page-content" style="display:grid;grid-template-columns:260px minmax(0,1fr);gap:24px;align-items:start;">
+    <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:20px;">
+        <div style="font-weight:700;margin-bottom:16px;color:var(--brand)">Import steps</div>
+        <ol style="padding-left:18px;margin:0;list-style:decimal;">
+            <li style="margin-bottom:12px;font-weight:700;color:var(--text)">Specify input file</li>
+            <li style="margin-bottom:12px;font-weight:700;color:var(--text)">Preview data</li>
+            <li style="margin-bottom:0;color:var(--text-muted)">Modify columns</li>
+        </ol>
+    </div>
+
+    <div style="min-width:0;">
+        <div class="card" style="margin-bottom:20px;padding:24px;">
+            <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+                <div>
+                    <h2 style="margin:0 0 8px">Preview data</h2>
+                    @if (Model.TotalRowCountIsExact)
+                    {
+                        <p style="color:var(--text-muted);margin:0">Showing the first @Model.PreviewRows.Count of @Model.TotalRowCount row(s). Columns: <strong>@Model.Columns.Count</strong>.</p>
+                    }
+                    else
+                    {
+                        <p style="color:var(--text-muted);margin:0">Showing the first @Model.PreviewRows.Count row(s) — this file has more than @Model.TotalRowCount rows, so the exact count will be shown once it's imported. Columns: <strong>@Model.Columns.Count</strong>.</p>
+                    }
+                </div>
+                <div style="font-size:13px;color:var(--text-muted);">Schema: <strong>dbo</strong></div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-bottom:20px;padding:0;">
+            <p style="color:var(--text-muted);font-size:12px;margin:12px 16px 0">↔ Scroll this table horizontally to see all @Model.Columns.Count column(s). The Row column stays in place.</p>
+            <div class="table-wrapper" style="max-height:420px;">
+                <table class="data-table data-table--wide">
+                    <thead>
+                        <tr>
+                            <th style="width:56px">Row</th>
+                            @foreach (var col in Model.Columns)
+                            {
+                                <th>@col.OriginalHeader</th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{ var rowNo = 0; }
+                        @foreach (var row in Model.PreviewRows)
+                        {
+                            rowNo++;
+                            <tr>
+                                <td>@rowNo</td>
+                                @foreach (var col in Model.Columns)
+                                {
+                                    <td>@(row.TryGetValue(col.OriginalHeader, out var v) && v != null ? v : "")</td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card wizard-nav-bar">
+            <a asp-action="UploadStart" asp-route-clientId="@clientId" class="btn btn-secondary">← Previous</a>
+            <a asp-action="UploadModifyColumns" asp-route-clientId="@clientId" asp-route-token="@Model.Token" class="btn btn-success">Next: Modify columns →</a>
+        </div>
+    </div>
+</div>

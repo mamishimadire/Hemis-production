@@ -4,28 +4,18 @@ namespace HemisAudit.Services
 {
     public interface IBiokinieticService
     {
-        // Database discovery
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<BiokinieticTableDiscoveryResult> GetTablesAsync(string server, string database, string driver);
-        Task<ColumnListResult> GetColumnsAsync(string server, string database, string driver, string tableName);
-
-        // Verification
+        Task<BiokinieticTableDiscoveryResult> GetTablesAsync(int clientId);
+        Task<BiokinieticColumnDiscoveryResult> GetColumnsAsync(int clientId, string tableName, string tableRole);
         Task<BiokinieticVerifyResult> VerifyTablesAsync(BiokinieticVerifyRequest request);
-
-        // Validation
         Task<BiokinieticValidationSummary> RunValidationAsync(BiokinieticValidationRequest request, string? userEmail = null, string? userName = null);
-        Task<string> GenerateSqlAsync(BiokinieticValidationRequest request);
-        Task<string> GenerateRScriptAsync(BiokinieticValidationRequest request);
-
-        // Workspace state
-        Task<BiokinieticWorkspaceState?> GetCurrentWorkspaceStateAsync(int clientId, string? userEmail = null);
-        Task<bool> SaveWorkspaceStateAsync(int clientId, BiokinieticValidationRequest config, string? userEmail = null);
-
-        // Signoff
-        Task AddOrUpdateSignoffAsync(int runId, string email, string comment);
-        Task RemoveSignoffAsync(int runId, string email);
-
-        // Full export
-        Task<BiokinieticValidationSummary?> GetFullSummaryByRunIdAsync(int runId);
+        string GenerateSql(BiokinieticValidationRequest request);
+        Task<int?> GetClientIdForRunAsync(int runId);
+        Task<BiokinieticValidationSummary?> GetStoredSummaryAsync(int runId);
+        Task<BiokinieticWorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null);
+        Task<BiokinieticRunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null);
+        Task<BiokinieticWorkspaceSaveResult> SaveWorkspaceAsync(BiokinieticValidationRequest request, string reviewerEmail, string? reviewerName = null);
+        Task<BiokinieticWorkspaceSaveResult> BeginWorkspaceEditAsync(int runId, string reviewerEmail, string? reviewerName = null);
+        Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment);
+        Task RemoveSignoffAsync(int runId, string reviewerEmail);
     }
 }

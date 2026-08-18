@@ -746,7 +746,7 @@ if (nrow(exceptions) > 0) print(exceptions[, c(dc, 'Status'), with = FALSE])
 
     // ── Rule 36: STUD vs Deceased ─────────────────────────────────────────────
 
-    public static string GenerateRule36Script(ValidationRequest req)
+    public static string GenerateRule36Script(HemisAudit.ViewModels.Rule36ValidationRequest req)
     {
         return RHeader + $@"
 # ── Rule 36: STUD vs Deceased Student Validation ──────────────────────────────
@@ -986,14 +986,14 @@ if (nrow(exceptions) > 0) print(exceptions[, c('KEY', 'Status', disagree_cols), 
     public static string GenerateRule41Script(Rule41ValidationRequest req)
     {
         var stud  = req.StudTable;
-        var audit = req.AuditTable;
+        var audit = req.H16Table;
         var sk    = req.StudKey;
-        var ak    = req.AuditKey;
-        var pairs = req.Pairs ?? new() { new() { StudCol = "_007", AuditCol = "IAGSTNO", Label = "Student No" },
-                                         new() { StudCol = "_008", AuditCol = "IADIDNO", Label = "Birth Date" },
-                                         new() { StudCol = "_001", AuditCol = "IAGQUAL", Label = "Qualification" } };
+        var ak    = req.H16Key;
+        var pairs = req.Pairs ?? new() { new() { StudCol = "_007", H16Col = "IAGSTNO", Label = "Student No" },
+                                         new() { StudCol = "_008", H16Col = "IADIDNO", Label = "Birth Date" },
+                                         new() { StudCol = "_001", H16Col = "IAGQUAL", Label = "Qualification" } };
         var pairsR = string.Join(",\n  ",
-            pairs.Select(p => $"list(stud='{p.StudCol}', audit='{p.AuditCol}', label='{p.Label}')"));
+            pairs.Select(p => $"list(stud='{p.StudCol}', audit='{p.H16Col}', label='{p.Label}')"));
         return RHeader + $@"
 # ── Rule 41: STUD vs MT-Audit Agreement ───────────────────────────────────────
 # Full outer join of STUD against MT-Audit, comparing student fields.
@@ -1120,7 +1120,7 @@ if (nrow(exceptions) == 0) cat('No exceptions found.\n') else print(exceptions)
             m.StudIdCol, m.StudResearchTimeCol, m.QualQualCodeCol);
     }
 
-    // ── Rule 45: STU vs H16STU ────────────────────────────────────────────────
+    // Shared agreement-script generator (used by Rules 47, 48, 60)
 
     public static string GenerateAgreementScript(int ruleNumber, string ruleTitle,
         string table1, string table2, string key1, string key2,
@@ -1183,26 +1183,21 @@ if (nrow(exceptions) > 0) print(exceptions[, c('KEY', 'Status', diff_cols), with
 ";
     }
 
-    // Rules 45, 47, 48, 60 all share Rule41ValidationRequest
-    public static string GenerateRule45Script(Rule41ValidationRequest req) =>
-        GenerateAgreementScript(45, "STU vs H16STU Agreement",
-            req.StudTable, req.AuditTable, req.StudKey, req.AuditKey,
-            (req.Pairs ?? new()).Select(p => (p.StudCol, p.AuditCol, p.Label)));
-
+    // Rules 47, 48, 60 all share Rule41ValidationRequest
     public static string GenerateRule47Script(Rule41ValidationRequest req) =>
         GenerateAgreementScript(47, "QUAL vs H16QUAL Agreement",
-            req.StudTable, req.AuditTable, req.StudKey, req.AuditKey,
-            (req.Pairs ?? new()).Select(p => (p.StudCol, p.AuditCol, p.Label)));
+            req.StudTable, req.H16Table, req.StudKey, req.H16Key,
+            (req.Pairs ?? new()).Select(p => (p.StudCol, p.H16Col, p.Label)));
 
     public static string GenerateRule48Script(Rule41ValidationRequest req) =>
         GenerateAgreementScript(48, "CRED vs H16CRED Agreement",
-            req.StudTable, req.AuditTable, req.StudKey, req.AuditKey,
-            (req.Pairs ?? new()).Select(p => (p.StudCol, p.AuditCol, p.Label)));
+            req.StudTable, req.H16Table, req.StudKey, req.H16Key,
+            (req.Pairs ?? new()).Select(p => (p.StudCol, p.H16Col, p.Label)));
 
     public static string GenerateRule60Script(Rule41ValidationRequest req) =>
         GenerateAgreementScript(60, "CRSE vs H16CRSE Agreement",
-            req.StudTable, req.AuditTable, req.StudKey, req.AuditKey,
-            (req.Pairs ?? new()).Select(p => (p.StudCol, p.AuditCol, p.Label)));
+            req.StudTable, req.H16Table, req.StudKey, req.H16Key,
+            (req.Pairs ?? new()).Select(p => (p.StudCol, p.H16Col, p.Label)));
 
     // ── Rule 46: Foundation student qualification validation ──────────────────
 
@@ -1452,105 +1447,5 @@ if (nrow(exceptions) > 0) print(exceptions)
 ";
     }
 
-    // ── Rule 62: STUD postal code / entrance category ────────────────────────
 
-    public static string GenerateRule62Script(Rule62ValidationRequest req)
-    {
-        var m = req.ColumnMapping ?? new Rule62ColumnMapping();
-        return RHeader + $@"
-# ── Rule 62: STUD Postal Code / Entrance Category Validation ──────────────────
-# Validates postal codes and entrance category fields in the STUD table.
-
-stud_table        <- '{req.StudTable}'
-stud_no_col       <- '{m.StudStudentNoCol}'
-postal_code_col   <- '{m.StudPostalCodeCol}'
-home_postcode_col <- '{m.StudHomePostcodeCol}'
-entrance_cat_col  <- '{m.StudEntranceCategoryCol}'
-
-stud <- copy(ds[[stud_table]]); safe_names(stud)
-
-sc  <- gsub('^_', 'X', stud_no_col)
-pcc <- gsub('^_', 'X', postal_code_col)
-hpc <- gsub('^_', 'X', home_postcode_col)
-ecc <- gsub('^_', 'X', entrance_cat_col)
-
-force_char_trim(stud, sc, pcc, hpc, ecc)
-
-stud[, POSTAL   := col_val(.SD, pcc)]
-stud[, H_POSTAL := col_val(.SD, hpc)]
-stud[, ENT_CAT  := col_val(.SD, ecc)]
-
-blank_postal <- stud[is.na(POSTAL) | POSTAL == '' | !grepl('^[0-9]{{4}}', POSTAL),
-                     .(StudentNo = col_val(.SD, sc), PostalCode = POSTAL,
-                       Status = 'FAIL – Invalid or blank postal code')]
-
-blank_ent <- stud[is.na(ENT_CAT) | ENT_CAT == '',
-                  .(StudentNo = col_val(.SD, sc), EntranceCat = ENT_CAT,
-                    Status = 'FAIL – Blank entrance category')]
-
-exceptions <- rbindlist(list(blank_postal, blank_ent), use.names = TRUE, fill = TRUE)
-print_summary(exceptions, 'Rule 62: Postal Code / Entrance Category')
-if (nrow(exceptions) == 0) cat('No exceptions found.\n') else print(exceptions)
-";
-    }
-
-    // ── Rule 63: STUD / CREG / QUAL qualification validation ─────────────────
-
-    public static string GenerateRule63Script(Rule63ValidationRequest req)
-    {
-        var m = req.ColumnMapping ?? new Rule63ColumnMapping();
-        return RHeader + $@"
-# ── Rule 63: STUD / CREG / QUAL Qualification Validation ──────────────────────
-# Validates that STUD qualification codes exist in QUAL and match CREG records.
-
-stud_table      <- '{req.StudTable}'
-creg_table      <- '{req.CregTable}'
-qual_table      <- '{req.QualTable}'
-stud_no_col     <- '{m.StudStudentNoCol}'
-stud_qual_col   <- '{m.StudQualCodeCol}'
-creg_no_col     <- '{m.CregStudentNoCol}'
-creg_qual_col   <- '{m.CregQualCodeCol}'
-qual_code_col   <- '{m.QualQualCodeCol}'
-
-stud <- copy(ds[[stud_table]]); safe_names(stud)
-creg <- copy(ds[[creg_table]]); safe_names(creg)
-qual <- copy(ds[[qual_table]]); safe_names(qual)
-
-sc  <- gsub('^_', 'X', stud_no_col)
-sqc <- gsub('^_', 'X', stud_qual_col)
-cnc <- gsub('^_', 'X', creg_no_col)
-cqc <- gsub('^_', 'X', creg_qual_col)
-qqc <- gsub('^_', 'X', qual_code_col)
-
-force_char_trim(stud, sc, sqc)
-force_char_trim(creg, cnc, cqc)
-force_char_trim(qual, qqc)
-
-valid_quals <- qual[!is.na(col_val(.SD, qqc)) & col_val(.SD, qqc) != '',
-                    .(QualKey = norm(col_val(.SD, qqc)))]
-setkey(valid_quals, QualKey)
-
-stud[, STUD_KEY  := norm(col_val(.SD, sc))]
-stud[, STUD_QUAL := norm(col_val(.SD, sqc))]
-creg[, CREG_KEY  := norm(col_val(.SD, cnc))]
-creg[, CREG_QUAL := norm(col_val(.SD, cqc))]
-
-missing_qual_in_stud <- stud[!STUD_QUAL %in% valid_quals$QualKey,
-                              .(StudentNo = STUD_KEY, QualCode = STUD_QUAL,
-                                Reason = 'STUD qual code not in QUAL table')]
-
-result <- merge(stud[, .(STUD_KEY, STUD_QUAL)],
-                creg[, .(CREG_KEY, CREG_QUAL)],
-                by.x = 'STUD_KEY', by.y = 'CREG_KEY', all.x = TRUE)
-qual_mismatch <- result[!is.na(CREG_QUAL) & norm(STUD_QUAL) != norm(CREG_QUAL),
-                         .(StudentNo = STUD_KEY, QualCode = STUD_QUAL,
-                           Reason = 'STUD and CREG qual codes differ')]
-
-exceptions <- rbindlist(list(missing_qual_in_stud, qual_mismatch), use.names = TRUE, fill = TRUE)
-exceptions[, Status := 'FAIL']
-
-print_summary(exceptions, 'Rule 63: STUD/CREG/QUAL Qualification Validation')
-if (nrow(exceptions) == 0) cat('No exceptions found.\n') else print(exceptions)
-";
-    }
 }

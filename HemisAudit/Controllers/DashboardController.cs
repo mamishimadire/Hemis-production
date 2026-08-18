@@ -27,13 +27,34 @@ namespace HemisAudit.Controllers
         public async Task<IActionResult> Index(string scope = "active", string? q = null)
         {
             var user = await _users.GetUserAsync(User);
+
+            // Service Provider staff manage leased firms, not engagements — their home is /Firms.
+            // Checked by direct role membership (not the resolved "primary" role below) since a
+            // Service Provider account may also hold Admin — it should still land on /Firms.
+            if (user != null && (await _users.GetRolesAsync(user)).Contains("ServiceProvider"))
+                return RedirectToAction("Index", "Firms");
+
             var role = await GetCurrentSystemRoleAsync(user);
+
             await _systemDb.NormalizeCompletedRunStatusesAsync();
             var isAdmin = role == "Admin";
+            var isDirector = role == "Director";
             var isDataAnalyst = role == "DataAnalyst";
             var normalizedScope = NormalizeScope(scope);
+
+            // One fetch of the full (unfiltered) client list, then scope/search/count are all
+            // derived from it in memory. Each of these used to be its own round trip to the same
+            // heavy, multi-subquery SQL query (GetClientsCoreAsync) — six executions of it per
+            // Dashboard load. Every field needed for filtering is already on the row.
             var allAccessibleClients = await _systemDb.GetClientsAsync(user, role, scope: "all");
-            var portfolioClients = await _systemDb.GetClientsAsync(user, role, search: q, scope: normalizedScope);
+            var portfolioClients = allAccessibleClients
+                .Where(c => MatchesScope(c, normalizedScope) && MatchesSearch(c, q))
+                .ToList();
+            var activeClientsCount = allAccessibleClients.Count(c => c.IsApproved);
+            var archivedClientsCount = allAccessibleClients.Count(c => c.IsArchived);
+            var favoriteClientsCount = allAccessibleClients.Count(c => c.IsFavorite);
+            var totalClientsCount = allAccessibleClients.Count;
+
             var recentRuns = await _systemDb.GetRecentRunsAsync(user, role, 12);
             var currentRuns = await _systemDb.GetCurrentRunsAsync(user, role);
 
@@ -57,10 +78,6 @@ namespace HemisAudit.Controllers
                     .ThenByDescending(run => run.Id)
                     .First())
                 .ToList();
-            var activeClientsCount = await _systemDb.GetClientCountAsync(user, role, "active");
-            var archivedClientsCount = await _systemDb.GetClientCountAsync(user, role, "archived");
-            var favoriteClientsCount = await _systemDb.GetClientCountAsync(user, role, "favorites");
-            var totalClientsCount = await _systemDb.GetClientCountAsync(user, role, "all");
             var pendingApprovalCount = allAccessibleClients.Count(c =>
                 string.Equals(c.Status, "Pending", StringComparison.OrdinalIgnoreCase));
             var pendingApprovals = allAccessibleClients
@@ -129,7 +146,7 @@ namespace HemisAudit.Controllers
             var vm = new DashboardViewModel
             {
                 TotalClients = totalClientsCount,
-                PendingApprovalClients = isAdmin ? pendingApprovalCount : 0,
+                PendingApprovalClients = (isAdmin || isDirector) ? pendingApprovalCount : 0,
                 FavoriteClients = favoriteClientsCount,
                 TotalUsers = isAdmin ? await _users.Users.CountAsync() : 0,
                 TotalValidationRuns = await _systemDb.GetValidationRunCountAsync(user, role),
@@ -196,6 +213,34 @@ namespace HemisAudit.Controllers
             var roles = user != null ? await _users.GetRolesAsync(user) : new List<string>();
             return roles.FirstOrDefault() ?? "";
         }
+
+        // Mirrors the scope/search filtering GetClientsCoreAsync applies in SQL — kept in sync
+        // with that query so in-memory filtering here produces the same result set.
+        private static bool MatchesScope(ClientListViewModel c, string scope) => scope switch
+        {
+            "active" => c.IsApproved,
+            "archived" => c.IsArchived,
+            "favorites" => c.IsFavorite,
+            _ => true
+        };
+
+        private static bool MatchesSearch(ClientListViewModel c, string? search)
+        {
+            if (string.IsNullOrWhiteSpace(search))
+                return true;
+
+            var term = search.Trim();
+            return Contains(c.EngagementName, term)
+                || Contains(c.MaconomyNumber, term)
+                || Contains(c.Industry, term)
+                || Contains(c.Status, term)
+                || Contains(c.DirectorName, term)
+                || Contains(c.ManagerName, term)
+                || Contains(c.CreatedByName, term);
+        }
+
+        private static bool Contains(string? haystack, string needle) =>
+            !string.IsNullOrEmpty(haystack) && haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
 
         private static string NormalizeScope(string? scope)
         {

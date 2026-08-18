@@ -6,18 +6,11 @@ namespace HemisAudit.ViewModels
     {
         public bool Success { get; set; }
         public List<string> Tables { get; set; } = new();
+        public string? AutoStudTable { get; set; }
         public string? AutoQualTable { get; set; }
         public string? AutoAuditTable { get; set; }
         public string? AutoH16Table { get; set; }
         public string? Error { get; set; }
-    }
-
-    public class Rule24AuditColumnRequest
-    {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
-        public string AuditTable { get; set; } = "";
     }
 
     public class Rule24AuditColumnResult
@@ -30,9 +23,8 @@ namespace HemisAudit.ViewModels
 
     public class Rule24VerifyRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
+        public string StudTable { get; set; } = "";
         public string QualTable { get; set; } = "";
         public string AuditTable { get; set; } = "";
         public string H16Table { get; set; } = "";
@@ -57,9 +49,7 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
+        public string StudTable { get; set; } = "";
         public string QualTable { get; set; } = "";
         public string AuditTable { get; set; } = "";
         public string H16Table { get; set; } = "";
@@ -102,7 +92,7 @@ namespace HemisAudit.ViewModels
         public decimal MatchRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
+        public string StudTable { get; set; } = "";
         public string QualTable { get; set; } = "";
         public string AuditTable { get; set; } = "";
         public string H16Table { get; set; } = "";
@@ -119,6 +109,8 @@ namespace HemisAudit.ViewModels
         public int? SavedRunId { get; set; }
         public int PassSampleCount { get; set; }
         public bool PassSampleTruncated { get; set; }
+        public int SavedFailRowCount { get; set; }
+        public bool FailRowsTruncated { get; set; }
         public List<Rule24IssueBreakdownItemViewModel> IssueCounts { get; set; } = new();
         public List<Rule24ReconciliationRowViewModel> PassSampleRows { get; set; } = new();
         public List<Rule24ReconciliationRowViewModel> FailRows { get; set; } = new();
@@ -133,7 +125,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule24ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -151,9 +142,7 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
+        public string StudTable { get; set; } = "";
         public string QualTable { get; set; } = "";
         public string AuditTable { get; set; } = "";
         public string H16Table { get; set; } = "";

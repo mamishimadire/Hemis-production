@@ -10,6 +10,7 @@
 <div class="card" style="max-width:560px">
     <form asp-action="EditUser" method="post">
         @Html.AntiForgeryToken()
+        <div asp-validation-summary="ModelOnly" class="alert alert--error" style="margin-bottom:16px"></div>
         <input type="hidden" asp-for="Id" />
 
         <div class="profile-photo-card profile-photo-card--compact">

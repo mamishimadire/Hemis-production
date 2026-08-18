@@ -151,7 +151,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = await _rule23.GenerateSqlAsync(new Rule23ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 AuditTable = review.Summary.AuditTable,
                 H16Table = review.Summary.H16Table,
@@ -170,16 +169,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule23.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule23.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule23.GetTablesAsync(model.Server, model.Database, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetAuditColumns([FromBody] Rule23AuditColumnRequest model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule23.GetAuditColumnsAsync(model.Server, model.Database, model.Driver, model.AuditTable)));
+        public async Task<IActionResult> GetAuditColumns([FromBody] Rule16ColumnsRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule23.GetAuditColumnsAsync(model.ClientId, model.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule23VerifyRequest request) =>
@@ -600,7 +595,6 @@ namespace HemisAudit.Controllers
             var request = new Rule23ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 AuditTable = review.Summary.AuditTable,
                 H16Table = review.Summary.H16Table,

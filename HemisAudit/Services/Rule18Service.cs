@@ -1,72 +1,113 @@
-using System.Data;
 using System.Globalization;
-using System.Security.Cryptography;
-using System.Text;
-using ClosedXML.Excel;
-using MiniExcelLibs;
+using HemisAudit.Helpers;
+using HemisAudit.Models;
 using HemisAudit.ViewModels;
-using Microsoft.Data.SqlClient;
+using Microsoft.AspNetCore.Identity;
 using Newtonsoft.Json;
-using IConfiguration = Microsoft.Extensions.Configuration.IConfiguration;
+using Npgsql;
 
 namespace HemisAudit.Services
 {
+    // Rule 18: NSFAS student validation — validates against the engagement's own uploaded
+    // Supabase data instead of a live SQL Server connection. Ported from the Rule12/14/15
+    // pattern. 3-table rule (STUD, CREG "bridge", CRSE); this is a 100% population extraction
+    // rule (three overlapping "control" slices of the same joined population), not a
+    // pass/fail existence test, so every extracted row is PASS by construction — matching the
+    // original design exactly.
+    //
+    // The original SQL-Server implementation also bulk-copied results into a separate
+    // dbo.Rule18Results cache table so downloads didn't have to re-query the live institution
+    // server. That optimization doesn't apply here: engagement data and system tables already
+    // live in the same Postgres database, so a full re-scan (the same ExpandAndPersistSavedSummaryIfNeededAsync
+    // pattern used by every other migrated rule) is already fast and reliable — the cache
+    // table subsystem is dropped rather than ported.
     public class Rule18Service : IRule18Service
     {
         private const int BrowserPreviewRowLimit = 10;
         private readonly IConfiguration _configuration;
+        private readonly IEngagementDatasetService _datasets;
+        private readonly ISystemDatabaseService _systemDb;
+        private readonly UserManager<ApplicationUser> _userManager;
         private readonly IPendingValidationCacheService _pendingValidationCache;
 
-        public Rule18Service(IConfiguration configuration, IPendingValidationCacheService pendingValidationCache)
+        public Rule18Service(
+            IConfiguration configuration,
+            IEngagementDatasetService datasets,
+            ISystemDatabaseService systemDb,
+            UserManager<ApplicationUser> userManager,
+            IPendingValidationCacheService pendingValidationCache)
         {
             _configuration = configuration;
+            _datasets = datasets;
+            _systemDb = systemDb;
+            _userManager = userManager;
             _pendingValidationCache = pendingValidationCache;
         }
 
-        public async Task<DatabaseListResult> GetDatabasesAsync(string server, string driver)
+        // ── Engagement data source (uploaded tables, not a live SQL Server) ────────────────
+
+        public async Task<Rule18TableDiscoveryResult> GetTablesAsync(int clientId)
         {
             try
             {
-                var connStr = BuildConnectionString(server, "master", driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
+                var tables = await _datasets.ListTableNamesAsync(clientId);
+                if (tables.Count == 0)
+                {
+                    return new Rule18TableDiscoveryResult
+                    {
+                        Success = false,
+                        Error = "No tables have been uploaded for this engagement yet. Upload data under Datasets first."
+                    };
+                }
 
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT name FROM sys.databases WHERE name NOT IN ('master','tempdb','model','msdb') ORDER BY name;";
-                await using var reader = await cmd.ExecuteReaderAsync();
-
-                var items = new List<string>();
-                while (await reader.ReadAsync())
-                    items.Add(reader.GetString(0));
-
-                return new DatabaseListResult { Success = true, Databases = items };
+                return new Rule18TableDiscoveryResult
+                {
+                    Success = true,
+                    Tables = tables,
+                    AutoStudTable = FindFirst(tables, ["dbo_STUD", "dbo_stud", "STUD", "stud"], ["stud"]),
+                    AutoBridgeTable = FindFirst(tables, ["dbo_CREG", "dbo_creg", "CREG", "creg", "dbo_CRED", "dbo_cred", "CRED", "cred"], ["creg", "cred"]),
+                    AutoCrseTable = FindFirst(tables, ["dbo_CRSE", "dbo_crse", "CRSE", "crse"], ["crse"])
+                };
             }
             catch (Exception ex)
             {
-                return new DatabaseListResult { Success = false, Error = ex.Message };
+                return new Rule18TableDiscoveryResult { Success = false, Error = ex.Message };
             }
         }
 
-        public async Task<ColumnValuesResult> GetColumnValuesAsync(string server, string database, string driver, string tableName, string columnName)
+        public async Task<ColumnListResult> GetColumnsAsync(int clientId, string tableName)
         {
             try
             {
-                ValidateObjectName(tableName);
-                ValidateObjectName(columnName);
-                var connStr = BuildConnectionString(server, database, driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
+                var columns = await _datasets.GetValidatedColumnsAsync(clientId, tableName);
+                return new ColumnListResult { Success = true, Columns = columns, AutoSelected = columns.FirstOrDefault() };
+            }
+            catch (Exception ex)
+            {
+                return new ColumnListResult { Success = false, Error = ex.Message };
+            }
+        }
 
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = $@"
-SELECT DISTINCT CAST([{Sanitise(columnName)}] AS nvarchar(255))
-FROM [{Sanitise(tableName)}]
-WHERE [{Sanitise(columnName)}] IS NOT NULL
-ORDER BY CAST([{Sanitise(columnName)}] AS nvarchar(255));";
+        public async Task<ColumnValuesResult> GetColumnValuesAsync(int clientId, string tableName, string columnName)
+        {
+            try
+            {
+                var validColumns = await _datasets.GetValidatedColumnsAsync(clientId, tableName);
+                if (!validColumns.Contains(columnName, StringComparer.Ordinal))
+                    return new ColumnValuesResult { Success = false, Error = $"Column '{columnName}' was not found in table '{tableName}'." };
 
-                await using var reader = await cmd.ExecuteReaderAsync();
+                var (conn, schema) = await OpenEngagementConnectionAsync(clientId);
+                await using var connection = conn;
+                await using var command = connection.CreateCommand();
+                command.CommandText = $@"
+SELECT DISTINCT CAST(""{columnName}"" AS text)
+FROM ""{schema}"".""{tableName}""
+WHERE ""{columnName}"" IS NOT NULL
+ORDER BY 1
+LIMIT 200;";
+                await using var reader = await command.ExecuteReaderAsync();
                 var values = new List<string>();
-                while (await reader.ReadAsync() && values.Count < 200)
+                while (await reader.ReadAsync())
                 {
                     if (!reader.IsDBNull(0))
                         values.Add(reader.GetString(0));
@@ -80,145 +121,50 @@ ORDER BY CAST([{Sanitise(columnName)}] AS nvarchar(255));";
             }
         }
 
-        public async Task<ColumnValuesResult> GetTableColumnsListAsync(string server, string database, string driver, string tableName)
-        {
-            try
-            {
-                ValidateObjectName(tableName);
-                var connStr = BuildConnectionString(server, database, driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
-
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = @"
-SELECT COLUMN_NAME
-FROM INFORMATION_SCHEMA.COLUMNS
-WHERE TABLE_NAME = @TableName
-ORDER BY ORDINAL_POSITION;";
-                cmd.Parameters.AddWithValue("@TableName", Sanitise(tableName));
-
-                await using var reader = await cmd.ExecuteReaderAsync();
-                var columns = new List<string>();
-                while (await reader.ReadAsync() && columns.Count < 500)
-                {
-                    if (!reader.IsDBNull(0))
-                        columns.Add(reader.GetString(0));
-                }
-
-                return new ColumnValuesResult { Success = true, Values = columns };
-            }
-            catch (Exception ex)
-            {
-                return new ColumnValuesResult { Success = false, Error = ex.Message };
-            }
-        }
-
-        public async Task<Rule18TableDiscoveryResult> GetTablesAsync(string server, string database, string driver)
-        {
-            try
-            {
-                var connStr = BuildConnectionString(server, database, driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
-
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME;";
-                await using var reader = await cmd.ExecuteReaderAsync();
-
-                var tables = new List<string>();
-                while (await reader.ReadAsync())
-                    tables.Add(reader.GetString(0));
-
-                return new Rule18TableDiscoveryResult
-                {
-                    Success = true,
-                    Tables = tables,
-                    AutoStudTable = FindFirst(tables, ["dbo_STUD", "STUD"], ["stud"]),
-                    AutoBridgeTable = FindFirst(tables, ["dbo_CREG", "CREG", "dbo_CRED", "CRED"], ["creg", "cred"]),
-                    AutoCrseTable = FindFirst(tables, ["dbo_CRSE", "CRSE"], ["crse"])
-                };
-            }
-            catch (Exception ex)
-            {
-                return new Rule18TableDiscoveryResult
-                {
-                    Success = false,
-                    Error = ex.Message
-                };
-            }
-        }
-
         public async Task<Rule18VerifyResult> VerifyTablesAsync(Rule18VerifyRequest request)
         {
             try
             {
-                ValidateRequest(request);
-                var nsfasCol = Sanitise(string.IsNullOrWhiteSpace(request.NsfasFilterCol) ? "_019" : request.NsfasFilterCol);
-                var nsfasVal = string.IsNullOrWhiteSpace(request.NsfasFilterValue) ? "NS" : request.NsfasFilterValue;
-                var distCol = Sanitise(string.IsNullOrWhiteSpace(request.DistanceFilterCol) ? "_024" : request.DistanceFilterCol);
-                var distVal = string.IsNullOrWhiteSpace(request.DistanceFilterValue) ? "D" : request.DistanceFilterValue;
-                var foundCol = Sanitise(string.IsNullOrWhiteSpace(request.FoundationFilterCol) ? "_091" : request.FoundationFilterCol);
-                var foundVal = string.IsNullOrWhiteSpace(request.FoundationFilterValue) ? "Y" : request.FoundationFilterValue;
-                var credJoinCol = Sanitise(string.IsNullOrWhiteSpace(request.CredJoinCol) ? "_001" : request.CredJoinCol);
-                var credCourseCol = Sanitise(string.IsNullOrWhiteSpace(request.CredCourseCol) ? "_030" : request.CredCourseCol);
-                var crseCourseCol = Sanitise(string.IsNullOrWhiteSpace(request.CrseCourseCol) ? "_030" : request.CrseCourseCol);
-                var crseNameCol = Sanitise(string.IsNullOrWhiteSpace(request.CrseNameCol) ? "_058" : request.CrseNameCol);
-                await EnsureColumnsExistAsync(request.Server, request.Database, request.Driver, request.StudTable, request.BridgeTable, request.CrseTable,
-                    nsfasCol, distCol, foundCol, credJoinCol, credCourseCol, crseCourseCol, crseNameCol);
+                ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
 
-                var connStr = BuildConnectionString(request.Server, request.Database, request.Driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
+                var cfg = await ResolveColumnConfigAsync(request.ClientId, request.StudTable, request.BridgeTable, request.CrseTable,
+                    request.NsfasFilterCol, request.NsfasFilterValue, request.FoundationFilterCol, request.FoundationFilterValue,
+                    request.DistanceFilterCol, request.DistanceFilterValue, request.CredJoinCol, request.CredCourseCol,
+                    request.CrseCourseCol, request.CrseNameCol);
 
-                var studTable = Sanitise(request.StudTable);
-                var bridgeTable = Sanitise(request.BridgeTable);
-                var crseTable = Sanitise(request.CrseTable);
+                await EnsureRule18IndexesAsync(request.ClientId, request.StudTable, request.BridgeTable, request.CrseTable, cfg);
 
-                var studCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{studTable}];");
-                var bridgeCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{bridgeTable}];");
-                var crseCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{crseTable}];");
+                var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+                await using var connection = conn;
 
-                await using (var prepCmd = conn.CreateConfiguredCommand())
+                var studCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.StudTable}\";");
+                var bridgeCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.BridgeTable}\";");
+                var crseCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.CrseTable}\";");
+
+                await using (var prepCommand = connection.CreateCommand())
                 {
-                    prepCmd.CommandText = BuildRule18PrepSql(studTable, bridgeTable, crseTable,
-                        nsfasCol, nsfasVal.Replace("'", "''"),
-                        foundCol, foundVal.Replace("'", "''"),
-                        distCol, distVal.Replace("'", "''"),
-                        credJoinCol, credCourseCol, crseCourseCol, crseNameCol);
-                    prepCmd.CommandTimeout = 120;
-                    await prepCmd.ExecuteNonQueryAsync();
+                    prepCommand.CommandText = BuildRule18PrepSql(schema, request.StudTable, request.BridgeTable, request.CrseTable, cfg);
+                    await prepCommand.ExecuteNonQueryAsync();
                 }
 
-                await using var command = conn.CreateConfiguredCommand();
-                command.CommandText = BuildRule18CountSql(nsfasVal.Replace("'", "''"));
-                await using var reader = await command.ExecuteReaderAsync();
+                var (nsfasCount, c1, c2, c3) = await GetCountsAsync(connection, cfg.NsfasFilterValue);
 
-                var result = new Rule18VerifyResult
+                return new Rule18VerifyResult
                 {
                     Success = true,
                     StudRecordCount = studCount,
                     BridgeRecordCount = bridgeCount,
-                    CrseRecordCount = crseCount
+                    CrseRecordCount = crseCount,
+                    NsfasPopulationCount = nsfasCount,
+                    Control1PopulationCount = c1,
+                    Control2PopulationCount = c2,
+                    Control3PopulationCount = c3,
+                    Control4PopulationCount = 0
                 };
-
-                if (await reader.ReadAsync())
-                {
-                    result.NsfasPopulationCount = GetInt(reader, 0);
-                    result.Control1PopulationCount = GetInt(reader, 1);
-                    result.Control2PopulationCount = GetInt(reader, 2);
-                    result.Control3PopulationCount = GetInt(reader, 3);
-                    result.Control4PopulationCount = 0;
-                }
-
-                return result;
             }
             catch (Exception ex)
             {
-                return new Rule18VerifyResult
-                {
-                    Success = false,
-                    Error = ex.Message
-                };
+                return new Rule18VerifyResult { Success = false, Error = ex.Message };
             }
         }
 
@@ -226,34 +172,22 @@ ORDER BY ORDINAL_POSITION;";
         {
             try
             {
-                ValidateRequest(request);
-                await EnsureColumnsExistAsync(request.Server, request.Database, request.Driver, request.StudTable, request.BridgeTable, request.CrseTable,
-                    Sanitise(string.IsNullOrWhiteSpace(request.NsfasFilterCol) ? "_019" : request.NsfasFilterCol),
-                    Sanitise(string.IsNullOrWhiteSpace(request.DistanceFilterCol) ? "_024" : request.DistanceFilterCol),
-                    Sanitise(string.IsNullOrWhiteSpace(request.FoundationFilterCol) ? "_091" : request.FoundationFilterCol),
-                    Sanitise(string.IsNullOrWhiteSpace(request.CredJoinCol) ? "_001" : request.CredJoinCol),
-                    Sanitise(string.IsNullOrWhiteSpace(request.CredCourseCol) ? "_030" : request.CredCourseCol),
-                    Sanitise(string.IsNullOrWhiteSpace(request.CrseCourseCol) ? "_030" : request.CrseCourseCol),
-                    Sanitise(string.IsNullOrWhiteSpace(request.CrseNameCol) ? "_058" : request.CrseNameCol));
+                ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
 
-                var summary = await AnalyseAsync(request, includeAllReviewRows: false);
+                // Save the full population immediately (matching Rule16's approach) rather than
+                // saving a 10-row preview and lazily expanding it later. The lazy-expand path
+                // (ExpandAndPersistSavedSummaryIfNeededAsync) used to fire the FIRST time the
+                // workspace page loaded after a run, silently re-running the full analysis in
+                // what looked like a routine page load — that's what made loading/saving feel
+                // slow. Saving complete data up front avoids that hidden re-analysis entirely.
+                var summary = await AnalyseAsync(request, includeAllReviewRows: true);
                 if (summary.Success && request.ClientId > 0)
                 {
                     try
                     {
                         var summaryToPersist = CloneSummary(summary);
                         summaryToPersist.SavedRunId = null;
-                        summary.SavedRunId = await SaveValidationRunAsync(request, summaryToPersist, userEmail, userName, markWorkspaceSaved: false);
-                        if (summary.SavedRunId.HasValue)
-                        {
-                            var savedId = summary.SavedRunId.Value;
-                            var capturedRequest = request;
-                            _ = Task.Run(async () =>
-                            {
-                                try { await BulkCopyToRule18ResultsAsync(capturedRequest, savedId); }
-                                catch { /* background copy failed; download will fall back to HEMIS re-query */ }
-                            });
-                        }
+                        summary.SavedRunId = await SaveValidationRunAsync(request, summaryToPersist, userEmail, userName);
 
                         if (!string.IsNullOrWhiteSpace(userEmail))
                             _pendingValidationCache.ClearPending(18, request.ClientId, userEmail!);
@@ -283,21 +217,13 @@ ORDER BY ORDINAL_POSITION;";
             }
             catch (Exception ex)
             {
-                return new Rule18ValidationSummary
-                {
-                    Success = false,
-                    Error = ex.Message
-                };
+                return new Rule18ValidationSummary { Success = false, Error = ex.Message };
             }
         }
 
         public async Task<Rule18ValidationSummary> GetExportSummaryAsync(Rule18ValidationRequest request)
         {
-            ValidateRequest(request);
-            await EnsureColumnsExistAsync(request.Server, request.Database, request.Driver, request.StudTable, request.BridgeTable, request.CrseTable,
-                Sanitise(string.IsNullOrWhiteSpace(request.NsfasFilterCol) ? "_019" : request.NsfasFilterCol),
-                Sanitise(string.IsNullOrWhiteSpace(request.DistanceFilterCol) ? "_024" : request.DistanceFilterCol),
-                Sanitise(string.IsNullOrWhiteSpace(request.FoundationFilterCol) ? "_091" : request.FoundationFilterCol));
+            ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
             return await AnalyseAsync(request, includeAllReviewRows: true);
         }
 
@@ -317,59 +243,31 @@ ORDER BY ORDINAL_POSITION;";
         public Task<bool> HasPendingValidationAsync(int clientId, string reviewerEmail)
             => Task.FromResult(_pendingValidationCache.HasPending(18, clientId, reviewerEmail));
 
-        public async Task<int?> GetClientIdForRunAsync(int runId)
-        {
-            await using var connection = await OpenSystemConnectionAsync();
-            return await GetClientIdForRunAsync(connection, runId);
-        }
+        public async Task<int?> GetClientIdForRunAsync(int runId) => await _systemDb.GetClientIdForRunAsync(runId);
 
         public async Task<Rule18WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null, bool includeSummary = true)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var currentUserId = await GetSystemUserIdByEmailAsync(connection, currentUserEmail);
+            var row = await _systemDb.GetCurrentRuleRunAsync(clientId, 18);
+            if (row == null) return null;
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT TOP 1
-    vr.RunID,
-    vr.ClientID,
-    ISNULL(vr.HemisServer, '') AS HemisServer,
-    ISNULL(vr.AuditDatabase, '') AS AuditDatabase,
-    ISNULL(vr.StudTable, '') AS StudTable,
-    ISNULL(vr.DeceasedTable, '') AS BridgeTable,
-    ISNULL(vr.StudColumn, '') AS CrseTable,
-    ISNULL(vr.Status, '') AS Status,
-    vr.LastEditedByUserName,
-    vr.LastEditedAt,
-    vr.ResultsJSON
-FROM dbo.ValidationRuns vr
-WHERE vr.ClientID = @ClientID
-  AND vr.RuleNumber = 18
-  AND vr.IsCurrent = 1
-ORDER BY vr.RunTimestamp DESC, vr.RunID DESC;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-                return null;
-
-            var deserializedSummary = DeserializeSummary(reader.IsDBNull(10) ? null : reader.GetString(10));
+            var deserializedSummary = DeserializeSummary(row.ResultsJSON);
             if (deserializedSummary != null && includeSummary)
+            {
+                deserializedSummary = await ExpandAndPersistSavedSummaryIfNeededAsync(row.RunId, deserializedSummary, clientId);
                 ApplyBrowserPreview(deserializedSummary);
+            }
             var summary = includeSummary ? deserializedSummary : null;
 
             var workspace = new Rule18WorkspaceStateViewModel
             {
-                ClientId = reader.GetInt32(1),
-                RunId = reader.GetInt32(0),
-                Server = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                Database = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                StudTable = reader.IsDBNull(4) ? "dbo_STUD" : reader.GetString(4),
-                BridgeTable = reader.IsDBNull(5) ? "dbo_CREG" : reader.GetString(5),
-                CrseTable = reader.IsDBNull(6) ? "dbo_CRSE" : reader.GetString(6),
-                CurrentStatus = reader.IsDBNull(7) ? "" : reader.GetString(7),
-                LastEditedByUserName = reader.IsDBNull(8) ? null : reader.GetString(8),
-                LastEditedAt = reader.IsDBNull(9) ? null : reader.GetDateTime(9),
+                ClientId = row.ClientId,
+                RunId = row.RunId,
+                StudTable = string.IsNullOrWhiteSpace(row.StudTable) ? "dbo_STUD" : row.StudTable,
+                BridgeTable = deserializedSummary?.BridgeTable ?? (string.IsNullOrWhiteSpace(row.DeceasedTable) ? "dbo_CREG" : row.DeceasedTable),
+                CrseTable = deserializedSummary?.CrseTable ?? (string.IsNullOrWhiteSpace(row.StudColumn) ? "dbo_CRSE" : row.StudColumn),
+                CurrentStatus = row.Status,
+                LastEditedByUserName = row.LastEditedByUserName,
+                LastEditedAt = row.LastEditedAt,
                 Summary = summary,
                 Control1FilterCol = deserializedSummary?.Control1FilterCol ?? "_019",
                 Control1FilterValue = deserializedSummary?.Control1FilterValue ?? "NS",
@@ -382,26 +280,24 @@ ORDER BY vr.RunTimestamp DESC, vr.RunID DESC;";
                 CredJoinCol = string.IsNullOrWhiteSpace(deserializedSummary?.CredJoinCol) ? "_001" : deserializedSummary!.CredJoinCol,
                 CredCourseCol = string.IsNullOrWhiteSpace(deserializedSummary?.CredCourseCol) ? "_030" : deserializedSummary!.CredCourseCol,
                 CrseCourseCol = string.IsNullOrWhiteSpace(deserializedSummary?.CrseCourseCol) ? "_030" : deserializedSummary!.CrseCourseCol,
-                CrseNameCol = string.IsNullOrWhiteSpace(deserializedSummary?.CrseNameCol) ? "_058" : deserializedSummary!.CrseNameCol,
+                CrseNameCol = string.IsNullOrWhiteSpace(deserializedSummary?.CrseNameCol) ? "_058" : deserializedSummary!.CrseNameCol
             };
 
             if (summary != null)
                 workspace.CurrentStatus = summary.Status;
 
-            await reader.CloseAsync();
-
-            workspace.Driver = "ODBC Driver 17 for SQL Server";
-            workspace.CurrentUserEngagementRole = currentUserId.HasValue
-                ? await GetEngagementRoleAsync(connection, clientId, currentUserId.Value) ?? ""
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            workspace.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(clientId, currentUser.Id) ?? ""
                 : "";
 
-            var signoffs = await GetRunSignoffsAsync(connection, workspace.RunId!.Value, currentUserId);
+            var signoffs = await _systemDb.GetRuleRunSignoffsAsync(workspace.RunId!.Value, currentUser?.Id);
             workspace.HasDataAnalystSignoff = signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
             var currentRoleSignoff = signoffs.FirstOrDefault(s =>
-                HemisAudit.Helpers.ValidationRunAccessPolicy.IsSignoffOwnedByEngagementRole(s.SignoffRole, workspace.CurrentUserEngagementRole));
+                ValidationRunAccessPolicy.IsSignoffOwnedByEngagementRole(s.SignoffRole, workspace.CurrentUserEngagementRole));
             workspace.CurrentUserHasSignedOff = currentRoleSignoff != null;
             workspace.CurrentUserSignoffComment = currentRoleSignoff?.Comment ?? "";
-            workspace.IsWorkspaceSaved = await IsWorkspaceSavedAsync(connection, workspace.RunId!.Value);
+            workspace.IsWorkspaceSaved = await _systemDb.IsWorkspaceSavedAsync(workspace.RunId!.Value);
 
             if (workspace.Summary != null)
                 workspace.Summary.SavedRunId = workspace.RunId;
@@ -411,35 +307,20 @@ ORDER BY vr.RunTimestamp DESC, vr.RunID DESC;";
 
         public async Task<Rule18RunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null, bool includeFullResults = false)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var currentUserId = await GetSystemUserIdByEmailAsync(connection, currentUserEmail);
+            var row = await _systemDb.GetRuleRunByIdAsync(runId, 18);
+            if (row == null) return null;
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT vr.RunID, vr.ClientID, vr.IsCurrent, c.EngagementName, c.MaconomyNumber, vr.HemisServer, vr.ResultsJSON
-FROM dbo.ValidationRuns vr
-INNER JOIN dbo.Clients c ON c.ClientID = vr.ClientID
-WHERE vr.RunID = @RunID
-  AND vr.RuleNumber = 18;";
-            command.Parameters.AddWithValue("@RunID", runId);
+            var summary = DeserializeSummary(row.ResultsJSON);
+            if (summary == null) return null;
 
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-                return null;
-
-            var sourceServer = reader.IsDBNull(5) ? "" : reader.GetString(5);
-            var summary = DeserializeSummary(reader.IsDBNull(6) ? null : reader.GetString(6));
-            if (summary == null)
-                return null;
-
-            var clientId = reader.GetInt32(1);
-            summary.ClientId = clientId;
+            summary.ClientId = row.ClientId;
             if (summary.SavedRunId.GetValueOrDefault() <= 0)
                 summary.SavedRunId = runId;
 
+            summary = await ExpandAndPersistSavedSummaryIfNeededAsync(runId, summary, row.ClientId);
+
             if (includeFullResults)
             {
-                summary = await ExpandSavedSummaryIfNeededAsync(summary, sourceServer);
                 summary.DisplayedCount = summary.ReviewRows.Count;
                 summary.IsPreviewOnly = false;
                 summary.PreviewLimit = 0;
@@ -451,21 +332,20 @@ WHERE vr.RunID = @RunID
 
             var review = new Rule18RunReviewViewModel
             {
-                RunId = reader.GetInt32(0),
-                ClientId = clientId,
-                IsCurrentRun = !reader.IsDBNull(2) && reader.GetBoolean(2),
-                EngagementName = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                MaconomyNumber = reader.IsDBNull(4) ? "" : reader.GetString(4),
-                SourceServer = sourceServer,
+                RunId = row.RunId,
+                ClientId = row.ClientId,
+                IsCurrentRun = row.IsCurrent,
+                EngagementName = row.EngagementName,
+                MaconomyNumber = row.MaconomyNumber,
                 Summary = summary
             };
 
-            await reader.CloseAsync();
-
-            review.CurrentUserEngagementRole = currentUserId.HasValue
-                ? await GetEngagementRoleAsync(connection, clientId, currentUserId.Value) ?? ""
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            review.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(review.ClientId, currentUser.Id) ?? ""
                 : "";
-            review.Signoffs = await GetRunSignoffsAsync(connection, runId, currentUserId);
+
+            review.Signoffs = await _systemDb.GetRuleRunSignoffsAsync(runId, currentUser?.Id);
             review.HasDataAnalystSignoff = review.Signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
 
             return review;
@@ -475,48 +355,31 @@ WHERE vr.RunID = @RunID
         {
             try
             {
-                ValidateRequest(request);
+                ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
 
                 if (request.RunId.HasValue && request.RunId.Value > 0)
                 {
-                    await using var connection = await OpenSystemConnectionAsync();
-                    var clientId = await GetClientIdForRunAsync(connection, request.RunId.Value);
+                    var clientId = await _systemDb.GetClientIdForRunAsync(request.RunId.Value);
                     if (!clientId.HasValue || clientId.Value != request.ClientId)
+                        return new Rule18WorkspaceSaveResult { Success = false, Error = "The saved workspace could not be found for this engagement." };
+
+                    await _systemDb.EnsureClientNotArchivedAsync(request.ClientId);
+                    var clearedSignoffs = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(request.RunId.Value);
+
+                    await _systemDb.SaveRuleWorkspaceFieldsAsync(new SaveRuleWorkspaceFieldsRequest
                     {
-                        return new Rule18WorkspaceSaveResult
-                        {
-                            Success = false,
-                            Error = "The saved workspace could not be found for this engagement."
-                        };
-                    }
-
-                    await EnsureClientNotArchivedAsync(connection, request.ClientId);
-
-                    var clearedSignoffs = await ClearSignoffsAndFlagForReviewAsync(connection, request.RunId.Value);
-                    var previousHash = await GetValidationRecordHashAsync(connection, request.RunId.Value);
-
-                    await using var command = connection.CreateConfiguredCommand();
-                    command.CommandText = @"
-UPDATE dbo.ValidationRuns
-SET LastEditedByUserName = @LastEditedByUserName,
-    LastEditedAt = GETDATE(),
-    WorkspaceSavedAt = GETDATE(),
-    PreviousHash = @PreviousHash,
-    RecordHash = @RecordHash,
-    Status = 'Needs Review'
-WHERE RunID = @RunID
-  AND ClientID = @ClientID;";
-                    command.Parameters.AddWithValue("@RunID", request.RunId.Value);
-                    command.Parameters.AddWithValue("@ClientID", request.ClientId);
-                    command.Parameters.AddWithValue("@LastEditedByUserName", (object?)reviewerName ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@RecordHash", ComputeHash($@"WorkspaceSave|Rule18|{request.RunId.Value}|{request.ClientId}|{(reviewerName ?? reviewerEmail)}|{DateTime.UtcNow:o}|{previousHash}"));
-                    await command.ExecuteNonQueryAsync();
+                        RunId = request.RunId.Value,
+                        ClientId = request.ClientId,
+                        StudTable = request.StudTable,
+                        DeceasedTable = request.BridgeTable,
+                        StudColumn = request.CrseTable,
+                        DeceasedColumn = ""
+                    }, reviewerName ?? reviewerEmail);
 
                     if (!string.IsNullOrWhiteSpace(reviewerEmail))
                         _pendingValidationCache.ClearPending(18, request.ClientId, reviewerEmail);
 
-                    var currentWorkspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail, includeSummary: false);
+                    var currentWorkspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail);
                     return new Rule18WorkspaceSaveResult
                     {
                         Success = true,
@@ -531,31 +394,30 @@ WHERE RunID = @RunID
 
                 var pending = _pendingValidationCache.GetPending<Rule18ValidationRequest, Rule18ValidationSummary>(18, request.ClientId, reviewerEmail);
                 if (pending == null)
-                {
-                    return new Rule18WorkspaceSaveResult
-                    {
-                        Success = false,
-                        Error = "Run Rule 18 first so the current workspace is written to the system database."
-                    };
-                }
+                    return new Rule18WorkspaceSaveResult { Success = false, Error = "Run Rule 18 first so the current workspace is written to the system database." };
 
                 if (!RequestsMatchForPendingSave(request, pending.Request))
-                {
-                    return new Rule18WorkspaceSaveResult
-                    {
-                        Success = false,
-                        Error = "Workspace settings changed after validation. Run Rule 18 again before saving."
-                    };
-                }
+                    return new Rule18WorkspaceSaveResult { Success = false, Error = "Workspace settings changed after validation. Run Rule 18 again before saving." };
 
                 var summaryToSave = CloneSummary(pending.Summary);
-                summaryToSave.SavedRunId = null;
-                var savedRunId = await SaveValidationRunAsync(pending.Request, summaryToSave, reviewerEmail, reviewerName ?? pending.ReviewerName, markWorkspaceSaved: true);
-                _pendingValidationCache.ClearPending(18, request.ClientId, reviewerEmail);
-                try { await BulkCopyToRule18ResultsAsync(pending.Request, savedRunId); }
-                catch { /* non-fatal; download falls back to HEMIS re-query */ }
+                if (summaryToSave.IsPreviewOnly || summaryToSave.ReviewRows.Count < summaryToSave.TotalValidated)
+                    summaryToSave = await AnalyseAsync(pending.Request, includeAllReviewRows: true);
 
-                var workspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail, includeSummary: false);
+                summaryToSave.SavedRunId = null;
+                var savedRunId = await SaveValidationRunAsync(pending.Request, summaryToSave, reviewerEmail, reviewerName ?? pending.ReviewerName);
+                _pendingValidationCache.ClearPending(18, request.ClientId, reviewerEmail);
+
+                await _systemDb.SaveRuleWorkspaceFieldsAsync(new SaveRuleWorkspaceFieldsRequest
+                {
+                    RunId = savedRunId,
+                    ClientId = request.ClientId,
+                    StudTable = request.StudTable,
+                    DeceasedTable = request.BridgeTable,
+                    StudColumn = request.CrseTable,
+                    DeceasedColumn = ""
+                }, reviewerName ?? reviewerEmail);
+
+                var workspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail);
                 return new Rule18WorkspaceSaveResult
                 {
                     Success = true,
@@ -567,11 +429,7 @@ WHERE RunID = @RunID
             }
             catch (Exception ex)
             {
-                return new Rule18WorkspaceSaveResult
-                {
-                    Success = false,
-                    Error = ex.Message
-                };
+                return new Rule18WorkspaceSaveResult { Success = false, Error = ex.Message };
             }
         }
 
@@ -579,41 +437,18 @@ WHERE RunID = @RunID
         {
             try
             {
-                await using var connection = await OpenSystemConnectionAsync();
-                var clientId = await GetClientIdForRunAsync(connection, runId);
+                var clientId = await _systemDb.GetClientIdForRunAsync(runId);
                 if (!clientId.HasValue)
-                {
-                    return new Rule18WorkspaceSaveResult
-                    {
-                        Success = false,
-                        Error = "Saved workspace was not found."
-                    };
-                }
+                    return new Rule18WorkspaceSaveResult { Success = false, Error = "Saved workspace was not found." };
 
-                await EnsureClientNotArchivedAsync(connection, clientId.Value);
-                var clearedSignoffs = await ClearSignoffsAndFlagForReviewAsync(connection, runId);
-                var previousHash = await GetValidationRecordHashAsync(connection, runId);
-
-                await using var markEdit = connection.CreateConfiguredCommand();
-                markEdit.CommandText = @"
-UPDATE dbo.ValidationRuns
-SET LastEditedByUserName = @LastEditedByUserName,
-    LastEditedAt = GETDATE(),
-    WorkspaceSavedAt = NULL,
-    PreviousHash = @PreviousHash,
-    RecordHash = @RecordHash,
-    Status = 'Needs Review'
-WHERE RunID = @RunID;";
-                markEdit.Parameters.AddWithValue("@RunID", runId);
-                markEdit.Parameters.AddWithValue("@LastEditedByUserName", (object?)reviewerName ?? DBNull.Value);
-                markEdit.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-                markEdit.Parameters.AddWithValue("@RecordHash", ComputeHash($@"BeginWorkspaceEdit|Rule18|{runId}|{reviewerEmail}|{DateTime.UtcNow:o}|{previousHash}"));
-                await markEdit.ExecuteNonQueryAsync();
+                await _systemDb.EnsureClientNotArchivedAsync(clientId.Value);
+                var clearedSignoffs = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(runId);
+                await _systemDb.MarkRuleWorkspaceEditStartedAsync(runId, reviewerName ?? reviewerEmail);
 
                 if (!string.IsNullOrWhiteSpace(reviewerEmail))
                     _pendingValidationCache.ClearPending(18, clientId.Value, reviewerEmail);
 
-                var workspace = await GetCurrentWorkspaceStateAsync(clientId.Value, reviewerEmail, includeSummary: false);
+                var workspace = await GetCurrentWorkspaceStateAsync(clientId.Value, reviewerEmail);
                 return new Rule18WorkspaceSaveResult
                 {
                     Success = true,
@@ -627,256 +462,126 @@ WHERE RunID = @RunID;";
             }
             catch (Exception ex)
             {
-                return new Rule18WorkspaceSaveResult
-                {
-                    Success = false,
-                    Error = ex.Message
-                };
+                return new Rule18WorkspaceSaveResult { Success = false, Error = ex.Message };
             }
         }
 
         public async Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var reviewerId = await GetSystemUserIdByEmailAsync(connection, reviewerEmail);
-            if (!reviewerId.HasValue)
-                throw new InvalidOperationException("The reviewer could not be resolved in the system database.");
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
+                ?? throw new InvalidOperationException("The reviewer could not be resolved in the system database.");
 
-            var clientId = await GetClientIdForRunAsync(connection, runId);
-            if (!clientId.HasValue)
-                throw new InvalidOperationException("The selected Rule 18 run could not be found.");
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
+                ?? throw new InvalidOperationException("The selected Rule 18 run could not be found.");
 
-            await EnsureClientNotArchivedAsync(connection, clientId.Value);
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
 
-            if (!await IsWorkspaceSavedAsync(connection, runId))
+            if (!await _systemDb.RuleWorkspaceReadyForSignoffAsync(runId))
                 throw new InvalidOperationException("The data analyst must save the workspace before signoff is available.");
 
-            var signoffRole = await GetEngagementRoleAsync(connection, clientId.Value, reviewerId.Value);
+            var signoffRole = await _systemDb.GetRawEngagementRoleAsync(clientId, reviewer.Id);
             if (!CanSignOffAsRole(signoffRole))
                 throw new InvalidOperationException("Only the assigned data analyst, manager, or director can sign off a Rule 18 run.");
 
             if (!string.Equals(signoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase) &&
-                !await HasSignoffRoleAsync(connection, runId, "DataAnalyst"))
+                !await _systemDb.HasRuleSignoffRoleAsync(runId, "DataAnalyst"))
             {
                 throw new InvalidOperationException("The assigned data analyst must sign off before this review can be completed.");
             }
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-IF EXISTS (
-    SELECT 1
-    FROM dbo.ReviewSignoffs
-    WHERE RunID = @RunID
-      AND ReviewerID = @ReviewerID
-)
-BEGIN
-    UPDATE dbo.ReviewSignoffs
-    SET SignoffRole = @SignoffRole,
-        ReviewType = 'Final',
-        Comment = @Comment,
-        SignedOffAt = GETDATE()
-    WHERE RunID = @RunID
-      AND ReviewerID = @ReviewerID;
-END
-ELSE
-BEGIN
-    INSERT INTO dbo.ReviewSignoffs (ClientID, RunID, ReviewerID, SignoffRole, ReviewType, Comment, SignedOffAt)
-    VALUES (@ClientID, @RunID, @ReviewerID, @SignoffRole, 'Final', @Comment, GETDATE());
-END";
-            command.Parameters.AddWithValue("@ClientID", clientId.Value);
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@ReviewerID", reviewerId.Value);
-            command.Parameters.AddWithValue("@SignoffRole", signoffRole!);
-            command.Parameters.AddWithValue("@Comment", string.IsNullOrWhiteSpace(comment) ? DBNull.Value : comment.Trim());
-            await command.ExecuteNonQueryAsync();
-
-            await UpdateRunStatusFromSignoffsAsync(connection, runId);
+            await _systemDb.AddOrUpdateRuleSignoffAsync(runId, clientId, reviewer.Id, signoffRole!, comment);
         }
 
         public async Task RemoveSignoffAsync(int runId, string reviewerEmail)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var reviewerId = await GetSystemUserIdByEmailAsync(connection, reviewerEmail);
-            if (!reviewerId.HasValue)
-                throw new InvalidOperationException("The reviewer could not be resolved in the system database.");
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
+                ?? throw new InvalidOperationException("The reviewer could not be resolved in the system database.");
 
-            var clientId = await GetClientIdForRunAsync(connection, runId);
-            if (!clientId.HasValue)
-                throw new InvalidOperationException("The selected Rule 18 run could not be found.");
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
+                ?? throw new InvalidOperationException("The selected Rule 18 run could not be found.");
 
-            await EnsureClientNotArchivedAsync(connection, clientId.Value);
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
 
-            var engagementRole = await GetEngagementRoleAsync(connection, clientId.Value, reviewerId.Value);
-            if (!HemisAudit.Helpers.ValidationRunAccessPolicy.CanAssignedUserRemoveSignoff(engagementRole))
+            var engagementRole = await _systemDb.GetRawEngagementRoleAsync(clientId, reviewer.Id);
+            if (!ValidationRunAccessPolicy.CanAssignedUserRemoveSignoff(engagementRole))
                 throw new InvalidOperationException("Only the assigned data analyst, manager, or director can remove signoff from this run.");
 
-            var removal = await ReviewSignoffSqlHelper.RemoveRoleSignoffWithVersioningAsync(connection, runId, engagementRole!, reviewerEmail);
-            if (removal.RemovedCount <= 0)
-                return;
+            await _systemDb.RemoveRuleSignoffByReviewerAsync(runId, reviewer.Id);
         }
 
-        public Task<string> GenerateSqlAsync(Rule18ValidationRequest request)
+        public async Task<string> GenerateSqlAsync(Rule18ValidationRequest request)
         {
-            ValidateRequest(request);
+            ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
 
-            var studTable = Sanitise(request.StudTable);
-            var bridgeTable = Sanitise(request.BridgeTable);
-            var crseTable = Sanitise(request.CrseTable);
-            var nsfasCol = Sanitise(string.IsNullOrWhiteSpace(request.NsfasFilterCol) ? "_019" : request.NsfasFilterCol);
-            var nsfasVal = (string.IsNullOrWhiteSpace(request.NsfasFilterValue) ? "NS" : request.NsfasFilterValue).Replace("'", "''");
-            var foundCol = Sanitise(string.IsNullOrWhiteSpace(request.FoundationFilterCol) ? "_091" : request.FoundationFilterCol);
-            var foundVal = (string.IsNullOrWhiteSpace(request.FoundationFilterValue) ? "Y" : request.FoundationFilterValue).Replace("'", "''");
-            var distCol = Sanitise(string.IsNullOrWhiteSpace(request.DistanceFilterCol) ? "_024" : request.DistanceFilterCol);
-            var distVal = (string.IsNullOrWhiteSpace(request.DistanceFilterValue) ? "D" : request.DistanceFilterValue).Replace("'", "''");
-            var credJoinCol = Sanitise(string.IsNullOrWhiteSpace(request.CredJoinCol) ? "_001" : request.CredJoinCol);
-            var credCourseCol = Sanitise(string.IsNullOrWhiteSpace(request.CredCourseCol) ? "_030" : request.CredCourseCol);
-            var crseCourseCol = Sanitise(string.IsNullOrWhiteSpace(request.CrseCourseCol) ? "_030" : request.CrseCourseCol);
-            var crseNameCol = Sanitise(string.IsNullOrWhiteSpace(request.CrseNameCol) ? "_058" : request.CrseNameCol);
+            var cfg = await ResolveColumnConfigAsync(request.ClientId, request.StudTable, request.BridgeTable, request.CrseTable,
+                request.NsfasFilterCol, request.NsfasFilterValue, request.FoundationFilterCol, request.FoundationFilterValue,
+                request.DistanceFilterCol, request.DistanceFilterValue, request.CredJoinCol, request.CredCourseCol,
+                request.CrseCourseCol, request.CrseNameCol);
 
             var sql = $@"-- HEMIS RULE 18: NSFAS STUDENTS VALIDATION
-SET NOCOUNT ON;
-DROP TABLE IF EXISTS #Rule18_Base;
-DROP TABLE IF EXISTS #Rule18_Validation;
+-- Source: this engagement's own uploaded tables (schema engagement_{{ClientId}}), not a live SQL Server.
 
--- STEP 1: Build base population (all STUD + CREG + CRSE rows)
+{BuildRule18PrepSql("{schema}", request.StudTable, request.BridgeTable, request.CrseTable, cfg)}
+
+-- Full result set
+SELECT * FROM rule18_validation ORDER BY ""Control_Type"", ""Student_Number"", ""CREG_Course_Code"";
+
+-- Summary
 SELECT
-    CAST(S.[_007]                AS nvarchar(255)) AS Student_Number,
-    CAST(S.[_001]                AS nvarchar(255)) AS Student_Qualification_Code,
-    CAST(S.[{nsfasCol}]          AS nvarchar(255)) AS NSFAS_Status,
-    CAST(S.[{distCol}]           AS nvarchar(255)) AS Attendance_Mode,
-    CAST(S.[_025]                AS nvarchar(255)) AS Qualification_Fulfilled_Indicator,
-    CAST(BRIDGE.[{credJoinCol}]  AS nvarchar(255)) AS CREG_Qualification_Code,
-    CAST(BRIDGE.[{credCourseCol}] AS nvarchar(255)) AS CREG_Course_Code,
-    CAST(CRSE.[{crseCourseCol}]  AS nvarchar(255)) AS CRSE_Course_Code,
-    CAST(CRSE.[{foundCol}]       AS nvarchar(255)) AS Foundation_Course_Indicator,
-    CAST(CRSE.[{crseNameCol}]    AS nvarchar(255)) AS CRSE_058
-INTO #Rule18_Base
-FROM [{studTable}] S
-INNER JOIN [{bridgeTable}] BRIDGE ON S.[{credJoinCol}] = BRIDGE.[{credJoinCol}]
-INNER JOIN [{crseTable}] CRSE ON BRIDGE.[{credCourseCol}] = CRSE.[{crseCourseCol}];
+    (SELECT COUNT(DISTINCT student_number) FROM rule18_base WHERE COALESCE(nsfas_status, '') = '{EscapeSqlString(cfg.NsfasFilterValue.ToUpperInvariant())}') AS nsfas_count,
+    COUNT(CASE WHEN ""Control_Type"" = 'Control_1' THEN 1 END) AS control1_count,
+    COUNT(CASE WHEN ""Control_Type"" = 'Control_2' THEN 1 END) AS control2_count,
+    COUNT(CASE WHEN ""Control_Type"" = 'Control_3' THEN 1 END) AS control3_count
+FROM rule18_validation;";
 
--- STEP 2: Extract control populations
-SELECT *
-INTO #Rule18_Validation
-FROM (
-    -- Control 1: NSFAS students enrolled in Foundation courses
-    SELECT 'Control_1' AS Control_Type,
-           Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-           Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-           CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058,
-           'PASS' AS Validation_Result
-    FROM #Rule18_Base
-    WHERE ISNULL(NSFAS_Status, '') = '{nsfasVal}'
-      AND ISNULL(Foundation_Course_Indicator, '') = '{foundVal}'
-
-    UNION ALL
-
-    -- Control 2: NSFAS students in Foundation courses studying via Distance
-    SELECT 'Control_2' AS Control_Type,
-           Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-           Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-           CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058,
-           'PASS' AS Validation_Result
-    FROM #Rule18_Base
-    WHERE ISNULL(NSFAS_Status, '') = '{nsfasVal}'
-      AND ISNULL(Foundation_Course_Indicator, '') = '{foundVal}'
-      AND ISNULL(Attendance_Mode, '') = '{distVal}'
-
-    UNION ALL
-
-    -- Control 3: NSFAS students NOT in Foundation courses and NOT studying via Distance
-    SELECT 'Control_3' AS Control_Type,
-           Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-           Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-           CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058,
-           'PASS' AS Validation_Result
-    FROM #Rule18_Base
-    WHERE ISNULL(NSFAS_Status, '') = '{nsfasVal}'
-      AND ISNULL(Foundation_Course_Indicator, '') <> '{foundVal}'
-      AND ISNULL(Attendance_Mode, '') <> '{distVal}'
-) A;
-
--- STEP 3: Final results with Extract_Number
-SELECT
-    ROW_NUMBER() OVER (ORDER BY Control_Type, Student_Number, Student_Qualification_Code, CREG_Course_Code) AS Extract_Number,
-    Control_Type, Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-    Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-    CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058, Validation_Result
-FROM #Rule18_Validation
-ORDER BY Control_Type, Student_Number, Student_Qualification_Code, CREG_Course_Code;
-
-DROP TABLE IF EXISTS #Rule18_Base;
-DROP TABLE IF EXISTS #Rule18_Validation;";
-
-            return Task.FromResult(sql.Trim());
+            return sql.Trim();
         }
+
+        // Rule 18's population is a UNION ALL of three overlapping controls (the same
+        // registration row can appear in Control_1, Control_2, and Control_3 at once), so on a
+        // real institution's data the row count can be several times the size of the raw CREG
+        // table — large enough to exhaust process memory if ever materialized into C# objects in
+        // one shot (confirmed: a Run Validation on real data threw OutOfMemoryException once this
+        // "load everything" path became reachable from the interactive Run button). This cap
+        // applies to every "full" load, not just the browser preview, so there is no path — Run,
+        // workspace reload, or export — that can try to hold an unbounded row count in memory.
+        private const int MaxSafeReviewRows = 5000;
 
         private async Task<Rule18ValidationSummary> AnalyseAsync(Rule18ValidationRequest request, bool includeAllReviewRows)
         {
-            var connStr = BuildConnectionString(request.Server, request.Database, request.Driver);
-            await using var conn = new SqlConnection(connStr);
-            await conn.OpenAsync();
+            var cfg = await ResolveColumnConfigAsync(request.ClientId, request.StudTable, request.BridgeTable, request.CrseTable,
+                request.NsfasFilterCol, request.NsfasFilterValue, request.FoundationFilterCol, request.FoundationFilterValue,
+                request.DistanceFilterCol, request.DistanceFilterValue, request.CredJoinCol, request.CredCourseCol,
+                request.CrseCourseCol, request.CrseNameCol);
 
-            var studTable = Sanitise(request.StudTable);
-            var bridgeTable = Sanitise(request.BridgeTable);
-            var crseTable = Sanitise(request.CrseTable);
+            await EnsureRule18IndexesAsync(request.ClientId, request.StudTable, request.BridgeTable, request.CrseTable, cfg);
 
-            var studCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{studTable}];");
-            var bridgeCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{bridgeTable}];");
-            var crseCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{crseTable}];");
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
 
-            var nsfasFilterCol = Sanitise(string.IsNullOrWhiteSpace(request.NsfasFilterCol) ? "_019" : request.NsfasFilterCol);
-            var nsfasFilterValue = string.IsNullOrWhiteSpace(request.NsfasFilterValue) ? "NS" : request.NsfasFilterValue;
-            var foundationFilterCol = Sanitise(string.IsNullOrWhiteSpace(request.FoundationFilterCol) ? "_091" : request.FoundationFilterCol);
-            var foundationFilterValue = string.IsNullOrWhiteSpace(request.FoundationFilterValue) ? "Y" : request.FoundationFilterValue;
-            var distanceFilterCol = Sanitise(string.IsNullOrWhiteSpace(request.DistanceFilterCol) ? "_024" : request.DistanceFilterCol);
-            var distanceFilterValue = string.IsNullOrWhiteSpace(request.DistanceFilterValue) ? "D" : request.DistanceFilterValue;
-            var credJoinCol = Sanitise(string.IsNullOrWhiteSpace(request.CredJoinCol) ? "_001" : request.CredJoinCol);
-            var credCourseCol = Sanitise(string.IsNullOrWhiteSpace(request.CredCourseCol) ? "_030" : request.CredCourseCol);
-            var crseCourseCol = Sanitise(string.IsNullOrWhiteSpace(request.CrseCourseCol) ? "_030" : request.CrseCourseCol);
-            var crseNameCol = Sanitise(string.IsNullOrWhiteSpace(request.CrseNameCol) ? "_058" : request.CrseNameCol);
+            var studCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.StudTable}\";");
+            var bridgeCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.BridgeTable}\";");
+            var crseCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.CrseTable}\";");
 
-            await using (var prepCmd = conn.CreateConfiguredCommand())
+            await using (var prepCommand = connection.CreateCommand())
             {
-                prepCmd.CommandText = BuildRule18PrepSql(studTable, bridgeTable, crseTable,
-                    nsfasFilterCol, nsfasFilterValue.Replace("'", "''"),
-                    foundationFilterCol, foundationFilterValue.Replace("'", "''"),
-                    distanceFilterCol, distanceFilterValue.Replace("'", "''"),
-                    credJoinCol, credCourseCol, crseCourseCol, crseNameCol);
-                prepCmd.CommandTimeout = 120;
-                await prepCmd.ExecuteNonQueryAsync();
+                prepCommand.CommandText = BuildRule18PrepSql(schema, request.StudTable, request.BridgeTable, request.CrseTable, cfg);
+                await prepCommand.ExecuteNonQueryAsync();
             }
 
-            await using var countCommand = conn.CreateConfiguredCommand();
-            countCommand.CommandText = BuildRule18CountSql(nsfasFilterValue.Replace("'", "''"));
-            await using var countReader = await countCommand.ExecuteReaderAsync();
+            var (nsfasCount, c1, c2, c3) = await GetCountsAsync(connection, cfg.NsfasFilterValue);
 
-            var nsfasPopulationCount = 0;
-            var control1PopulationCount = 0;
-            var control2PassPopulation = 0;
-            var control3PassPopulation = 0;
-            if (await countReader.ReadAsync())
-            {
-                nsfasPopulationCount = GetInt(countReader, 0);
-                control1PopulationCount = GetInt(countReader, 1);
-                control2PassPopulation = GetInt(countReader, 2);
-                control3PassPopulation = GetInt(countReader, 3);
-            }
-
-            await countReader.CloseAsync();
-
-            var reviewRows = await LoadControlRowsAsync(conn, includeAllReviewRows ? null : BrowserPreviewRowLimit);
+            var reviewRowCap = includeAllReviewRows ? MaxSafeReviewRows : BrowserPreviewRowLimit;
+            var reviewRows = await LoadControlRowsAsync(connection, reviewRowCap);
             reviewRows = NormalizeReviewRows(reviewRows);
 
-            var controlSummaries = BuildControlSummaries(
-                control1PopulationCount, control2PassPopulation, control3PassPopulation,
-                nsfasFilterCol, nsfasFilterValue,
-                foundationFilterCol, foundationFilterValue,
-                distanceFilterCol, distanceFilterValue);
+            var controlSummaries = BuildControlSummaries(c1, c2, c3,
+                cfg.NsfasFilterCol, cfg.NsfasFilterValue, cfg.FoundationFilterCol, cfg.FoundationFilterValue,
+                cfg.DistanceFilterCol, cfg.DistanceFilterValue);
             var totalValidated = controlSummaries.Sum(x => x.TotalCount);
             var passCount = controlSummaries.Sum(x => x.PassCount);
             var failCount = controlSummaries.Sum(x => x.FailCount);
-            var isPreviewOnly = !includeAllReviewRows && totalValidated > reviewRows.Count;
+            var isPreviewOnly = totalValidated > reviewRows.Count;
 
             return new Rule18ValidationSummary
             {
@@ -884,213 +589,260 @@ DROP TABLE IF EXISTS #Rule18_Validation;";
                 StudRecordCount = studCount,
                 BridgeRecordCount = bridgeCount,
                 CrseRecordCount = crseCount,
-                NsfasPopulationCount = nsfasPopulationCount,
+                NsfasPopulationCount = nsfasCount,
                 TotalRequested = totalValidated,
                 TotalValidated = totalValidated,
                 DisplayedCount = reviewRows.Count,
                 IsPreviewOnly = isPreviewOnly,
-                PreviewLimit = isPreviewOnly ? BrowserPreviewRowLimit : 0,
+                PreviewLimit = isPreviewOnly ? reviewRowCap : 0,
                 PassCount = passCount,
                 FailCount = failCount,
                 ExceptionRate = totalValidated == 0 ? 0m : Math.Round(failCount * 100m / totalValidated, 2),
                 Status = failCount == 0 ? "PASS" : "FAIL",
                 Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                Server = request.Server,
-                Database = request.Database,
                 StudTable = request.StudTable,
                 BridgeTable = request.BridgeTable,
                 CrseTable = request.CrseTable,
-                Control1FilterCol = nsfasFilterCol,
-                Control1FilterValue = nsfasFilterValue,
-                NsfasFilterCol = nsfasFilterCol,
-                NsfasFilterValue = nsfasFilterValue,
-                FoundationFilterCol = foundationFilterCol,
-                FoundationFilterValue = foundationFilterValue,
-                DistanceFilterCol = distanceFilterCol,
-                DistanceFilterValue = distanceFilterValue,
-                CredJoinCol = credJoinCol,
-                CredCourseCol = credCourseCol,
-                CrseCourseCol = crseCourseCol,
-                CrseNameCol = crseNameCol,
-                TableLinkageText = $"{request.StudTable}.{credJoinCol} → {request.BridgeTable}.{credJoinCol} | {request.BridgeTable}.{credCourseCol} → {request.CrseTable}.{crseCourseCol}",
+                Control1FilterCol = cfg.NsfasFilterCol,
+                Control1FilterValue = cfg.NsfasFilterValue,
+                NsfasFilterCol = cfg.NsfasFilterCol,
+                NsfasFilterValue = cfg.NsfasFilterValue,
+                FoundationFilterCol = cfg.FoundationFilterCol,
+                FoundationFilterValue = cfg.FoundationFilterValue,
+                DistanceFilterCol = cfg.DistanceFilterCol,
+                DistanceFilterValue = cfg.DistanceFilterValue,
+                CredJoinCol = cfg.CredJoinCol,
+                CredCourseCol = cfg.CredCourseCol,
+                CrseCourseCol = cfg.CrseCourseCol,
+                CrseNameCol = cfg.HasCrseName ? cfg.CrseNameCol : "",
+                TableLinkageText = $"{request.StudTable}.{cfg.CredJoinCol} -> {request.BridgeTable}.{cfg.CredJoinCol} | {request.BridgeTable}.{cfg.CredCourseCol} -> {request.CrseTable}.{cfg.CrseCourseCol}",
                 RuleModeText = "100% population testing of all matching control rows",
-                ProcedureSteps = BuildProcedureSteps(request.StudTable, request.BridgeTable, request.CrseTable, credJoinCol, credCourseCol, crseCourseCol, crseNameCol),
+                ProcedureSteps = BuildProcedureSteps(request.StudTable, request.BridgeTable, request.CrseTable, cfg.CredJoinCol, cfg.CredCourseCol, cfg.CrseCourseCol, cfg.CrseNameCol),
                 ClientId = request.ClientId,
                 ControlSummaries = controlSummaries,
                 ReviewRows = reviewRows,
-                Warning = includeAllReviewRows
+                Warning = !isPreviewOnly
                     ? "Rule 18 completed with the full matching control result set."
-                    : "Counts reflect the full matching control result set. Browser review rows are limited for performance."
+                    : includeAllReviewRows
+                        ? $"Counts reflect the full matching control result set. The saved result rows are capped at {MaxSafeReviewRows:N0} to keep the app stable on very large populations; totals and pass/fail counts above are still exact."
+                        : "Counts reflect the full matching control result set. Browser review rows are limited for performance."
             };
         }
 
-        private async Task<int> SaveValidationRunAsync(Rule18ValidationRequest request, Rule18ValidationSummary summary, string? userEmail, string? userName, bool markWorkspaceSaved)
+        private async Task<int> SaveValidationRunAsync(Rule18ValidationRequest request, Rule18ValidationSummary summary, string? userEmail, string? userName)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            await EnsureClientNotArchivedAsync(connection, request.ClientId);
-            await MarkPreviousRunsHistoricalAsync(connection, request.ClientId, 18);
+            await _systemDb.MarkPreviousRuleRunsHistoricalAsync(request.ClientId, 18);
 
-            var systemUserId = await GetSystemUserIdByEmailAsync(connection, userEmail);
-            if (!systemUserId.HasValue)
-                throw new InvalidOperationException("The current analyst could not be resolved in the system database.");
-
-            var previousHash = await GetLatestValidationHashAsync(connection, request.ClientId, 18);
             var failRows = summary.ReviewRows.Where(row => string.Equals(row.ValidationResult, "FAIL", StringComparison.OrdinalIgnoreCase)).ToList();
-
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-INSERT INTO dbo.ValidationRuns
-(
-    ClientID, UserID, RuleNumber, RuleName, Status, TotalRecords, PassCount, FailCount, ExceptionRate, RunTimestamp,
-    HemisServer, AuditDatabase, StudTable, DeceasedTable, StudColumn, DeceasedColumn,
-    ExceptionsJSON, ResultsJSON, RunByUserName, LastEditedByUserName, LastEditedAt, PreviousHash, RecordHash, WorkspaceSavedAt, IsCurrent
-)
-VALUES
-(
-    @ClientID, @UserID, 18, @RuleName, @Status, @TotalRecords, @PassCount, @FailCount, @ExceptionRate, GETDATE(),
-    @HemisServer, @AuditDatabase, @StudTable, @BridgeTable, @CrseTable, NULL,
-    @ExceptionsJSON, @ResultsJSON, @RunByUserName, NULL, NULL, @PreviousHash, NULL, @WorkspaceSavedAt, 1
-);
-SELECT CAST(SCOPE_IDENTITY() AS int);";
-            command.Parameters.AddWithValue("@ClientID", request.ClientId);
-            command.Parameters.AddWithValue("@UserID", systemUserId.Value);
-            command.Parameters.AddWithValue("@RuleName", "NSFAS Student Validation");
-            command.Parameters.AddWithValue("@Status", summary.Status);
-            command.Parameters.AddWithValue("@TotalRecords", summary.TotalValidated);
-            command.Parameters.AddWithValue("@PassCount", summary.PassCount);
-            command.Parameters.AddWithValue("@FailCount", summary.FailCount);
-            command.Parameters.AddWithValue("@ExceptionRate", summary.ExceptionRate);
-            command.Parameters.AddWithValue("@HemisServer", request.Server);
-            command.Parameters.AddWithValue("@AuditDatabase", request.Database);
-            command.Parameters.AddWithValue("@StudTable", request.StudTable);
-            command.Parameters.AddWithValue("@BridgeTable", request.BridgeTable);
-            command.Parameters.AddWithValue("@CrseTable", request.CrseTable);
             var persistedSummary = CloneSummary(summary);
             persistedSummary.SavedRunId = summary.SavedRunId;
-            command.Parameters.AddWithValue("@ExceptionsJSON", ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(failRows)));
-            command.Parameters.AddWithValue("@ResultsJSON", ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(persistedSummary)));
-            command.Parameters.AddWithValue("@RunByUserName", (object?)userName ?? (object?)userEmail ?? DBNull.Value);
-            command.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-            command.Parameters.AddWithValue("@WorkspaceSavedAt", markWorkspaceSaved ? DateTime.UtcNow : (object)DBNull.Value);
 
-            var runId = Convert.ToInt32(await command.ExecuteScalarAsync());
+            var runId = await _systemDb.SaveValidationRunAsync(new SaveValidationRunRequest
+            {
+                ClientId = request.ClientId,
+                RuleNumber = 18,
+                RuleName = "NSFAS Student Validation",
+                Status = summary.Status,
+                TotalRecords = summary.TotalValidated,
+                PassCount = summary.PassCount,
+                FailCount = summary.FailCount,
+                ExceptionRate = summary.ExceptionRate,
+                StudTable = request.StudTable,
+                DeceasedTable = request.BridgeTable,
+                StudColumn = request.CrseTable,
+                DeceasedColumn = "",
+                ExceptionsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(failRows)),
+                ResultsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(persistedSummary))
+            }, userEmail, userName);
+
             summary.SavedRunId = runId;
-
-            await using var hashCommand = connection.CreateConfiguredCommand();
-            hashCommand.CommandText = @"
-UPDATE dbo.ValidationRuns
-SET RecordHash = @RecordHash
-WHERE RunID = @RunID;";
-            hashCommand.Parameters.AddWithValue("@RunID", runId);
-            hashCommand.Parameters.AddWithValue("@RecordHash", ComputeHash($@"ValidationRun|Rule18|{runId}|{request.ClientId}|{systemUserId.Value}|{summary.Status}|{summary.TotalValidated}|{summary.FailCount}|{summary.ExceptionRate}|{summary.Timestamp}|{previousHash}"));
-            await hashCommand.ExecuteNonQueryAsync();
-
             return runId;
         }
 
-        private static string BuildRule18PrepSql(
-            string studTable, string bridgeTable, string crseTable,
-            string nsfasCol, string nsfasVal,
-            string foundCol, string foundVal,
-            string distCol, string distVal,
-            string credJoinCol, string credCourseCol,
-            string crseCourseCol, string crseNameCol) => $@"
-SET NOCOUNT ON;
-DROP TABLE IF EXISTS #Rule18_Base;
-DROP TABLE IF EXISTS #Rule18_Validation;
+        // ── Column configuration resolution (degrades optional display columns to NULL) ────
 
-SELECT
-    CAST(S.[_007]                AS nvarchar(255)) AS Student_Number,
-    CAST(S.[_001]                AS nvarchar(255)) AS Student_Qualification_Code,
-    CAST(S.[{nsfasCol}]          AS nvarchar(255)) AS NSFAS_Status,
-    CAST(S.[{distCol}]           AS nvarchar(255)) AS Attendance_Mode,
-    CAST(S.[_025]                AS nvarchar(255)) AS Qualification_Fulfilled_Indicator,
-    CAST(BRIDGE.[{credJoinCol}]  AS nvarchar(255)) AS CREG_Qualification_Code,
-    CAST(BRIDGE.[{credCourseCol}] AS nvarchar(255)) AS CREG_Course_Code,
-    CAST(CRSE.[{crseCourseCol}]  AS nvarchar(255)) AS CRSE_Course_Code,
-    CAST(CRSE.[{foundCol}]       AS nvarchar(255)) AS Foundation_Course_Indicator,
-    CAST(CRSE.[{crseNameCol}]    AS nvarchar(255)) AS CRSE_058
-INTO #Rule18_Base
-FROM [{studTable}] S
-INNER JOIN [{bridgeTable}] BRIDGE ON S.[{credJoinCol}] = BRIDGE.[{credJoinCol}]
-INNER JOIN [{crseTable}] CRSE ON BRIDGE.[{credCourseCol}] = CRSE.[{crseCourseCol}];
-
-SELECT *
-INTO #Rule18_Validation
-FROM (
-    SELECT 'Control_1' AS Control_Type,
-           Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-           Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-           CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058,
-           'PASS' AS Validation_Result
-    FROM #Rule18_Base
-    WHERE ISNULL(NSFAS_Status, '') = '{nsfasVal}'
-      AND ISNULL(Foundation_Course_Indicator, '') = '{foundVal}'
-
-    UNION ALL
-
-    SELECT 'Control_2' AS Control_Type,
-           Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-           Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-           CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058,
-           'PASS' AS Validation_Result
-    FROM #Rule18_Base
-    WHERE ISNULL(NSFAS_Status, '') = '{nsfasVal}'
-      AND ISNULL(Foundation_Course_Indicator, '') = '{foundVal}'
-      AND ISNULL(Attendance_Mode, '') = '{distVal}'
-
-    UNION ALL
-
-    SELECT 'Control_3' AS Control_Type,
-           Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-           Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-           CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058,
-           'PASS' AS Validation_Result
-    FROM #Rule18_Base
-    WHERE ISNULL(NSFAS_Status, '') = '{nsfasVal}'
-      AND ISNULL(Foundation_Course_Indicator, '') <> '{foundVal}'
-      AND ISNULL(Attendance_Mode, '') <> '{distVal}'
-) A;";
-
-        private static string BuildRule18CountSql(string nsfasVal) => $@"
-SELECT
-    (SELECT COUNT(DISTINCT Student_Number) FROM #Rule18_Base WHERE ISNULL(NSFAS_Status, '') = '{nsfasVal}') AS NsfasCount,
-    COUNT(CASE WHEN Control_Type = 'Control_1' THEN 1 END) AS Control1Count,
-    COUNT(CASE WHEN Control_Type = 'Control_2' THEN 1 END) AS Control2Count,
-    COUNT(CASE WHEN Control_Type = 'Control_3' THEN 1 END) AS Control3Count
-FROM #Rule18_Validation;";
-
-        private async Task<List<Rule18ValidationRowRecord>> LoadControlRowsAsync(
-            SqlConnection connection, int? maxRows)
+        private sealed class Rule18ColumnConfig
         {
-            var perControlLimit = maxRows.HasValue && maxRows.Value > 0
-                ? Math.Max(maxRows.Value / 3, 1)
-                : 0;
+            public string NsfasFilterCol = "_019";
+            public string NsfasFilterValue = "NS";
+            public string FoundationFilterCol = "_091";
+            public string FoundationFilterValue = "Y";
+            public string DistanceFilterCol = "_024";
+            public string DistanceFilterValue = "D";
+            public string CredJoinCol = "_001";
+            public string CredCourseCol = "_030";
+            public string CrseCourseCol = "_030";
+            public string CrseNameCol = "_058";
+            public bool HasCrseName;
+            public bool HasQualFulfilled;
+        }
+
+        private async Task<Rule18ColumnConfig> ResolveColumnConfigAsync(
+            int clientId, string studTable, string bridgeTable, string crseTable,
+            string? nsfasFilterCol, string? nsfasFilterValue,
+            string? foundationFilterCol, string? foundationFilterValue,
+            string? distanceFilterCol, string? distanceFilterValue,
+            string? credJoinCol, string? credCourseCol, string? crseCourseCol, string? crseNameCol)
+        {
+            var cfg = new Rule18ColumnConfig
+            {
+                NsfasFilterCol = string.IsNullOrWhiteSpace(nsfasFilterCol) ? "_019" : nsfasFilterCol,
+                NsfasFilterValue = string.IsNullOrWhiteSpace(nsfasFilterValue) ? "NS" : nsfasFilterValue,
+                FoundationFilterCol = string.IsNullOrWhiteSpace(foundationFilterCol) ? "_091" : foundationFilterCol,
+                FoundationFilterValue = string.IsNullOrWhiteSpace(foundationFilterValue) ? "Y" : foundationFilterValue,
+                DistanceFilterCol = string.IsNullOrWhiteSpace(distanceFilterCol) ? "_024" : distanceFilterCol,
+                DistanceFilterValue = string.IsNullOrWhiteSpace(distanceFilterValue) ? "D" : distanceFilterValue,
+                CredJoinCol = string.IsNullOrWhiteSpace(credJoinCol) ? "_001" : credJoinCol,
+                CredCourseCol = string.IsNullOrWhiteSpace(credCourseCol) ? "_030" : credCourseCol,
+                CrseCourseCol = string.IsNullOrWhiteSpace(crseCourseCol) ? "_030" : crseCourseCol,
+                CrseNameCol = string.IsNullOrWhiteSpace(crseNameCol) ? "_058" : crseNameCol
+            };
+
+            var studColumns = new HashSet<string>(await _datasets.GetValidatedColumnsAsync(clientId, studTable), StringComparer.OrdinalIgnoreCase);
+            var bridgeColumns = await _datasets.GetValidatedColumnsAsync(clientId, bridgeTable);
+            var crseColumns = new HashSet<string>(await _datasets.GetValidatedColumnsAsync(clientId, crseTable), StringComparer.OrdinalIgnoreCase);
+
+            EnsureHasColumns(studTable, studColumns.ToList(), "_001", "_007", cfg.NsfasFilterCol, cfg.DistanceFilterCol);
+            EnsureHasColumns(bridgeTable, bridgeColumns, cfg.CredJoinCol, cfg.CredCourseCol);
+            EnsureHasColumns(crseTable, crseColumns.ToList(), cfg.CrseCourseCol, cfg.FoundationFilterCol);
+
+            cfg.HasCrseName = crseColumns.Contains(cfg.CrseNameCol);
+            cfg.HasQualFulfilled = studColumns.Contains("_025");
+
+            return cfg;
+        }
+
+        private static void EnsureHasColumns(string tableName, IReadOnlyCollection<string> availableColumns, params string[] requiredColumns)
+        {
+            var missing = requiredColumns.Where(required => !availableColumns.Contains(required, StringComparer.OrdinalIgnoreCase)).ToList();
+            if (missing.Count > 0)
+                throw new InvalidOperationException($"Table {tableName} is missing required column(s): {string.Join(", ", missing)}.");
+        }
+
+        // Uploaded engagement tables have no indexes beyond their primary key. rule18_base joins
+        // directly against the base STUD/BRIDGE/CRSE tables (real engagements have seen 450k+
+        // row CREG-equivalent tables) — building the expression indexes once, up front, makes
+        // every run after the first fast. Now load-bearing for every "Run Validation" click since
+        // RunValidationAsync always analyses the full population (no more deferred preview save).
+        private async Task EnsureRule18IndexesAsync(int clientId, string studTable, string bridgeTable, string crseTable, Rule18ColumnConfig cfg)
+        {
+            await _datasets.EnsureJoinIndexAsync(clientId, studTable, cfg.CredJoinCol);
+            await _datasets.EnsureJoinIndexAsync(clientId, bridgeTable, cfg.CredJoinCol);
+            await _datasets.EnsureJoinIndexAsync(clientId, bridgeTable, cfg.CredCourseCol);
+            await _datasets.EnsureJoinIndexAsync(clientId, crseTable, cfg.CrseCourseCol);
+        }
+
+        // ── SQL builders (Postgres) ─────────────────────────────────────────────────────
+
+        private static string BuildRule18PrepSql(string schema, string studTable, string bridgeTable, string crseTable, Rule18ColumnConfig cfg)
+        {
+            var nsfasVal = EscapeSqlString(cfg.NsfasFilterValue.ToUpperInvariant());
+            var foundVal = EscapeSqlString(cfg.FoundationFilterValue.ToUpperInvariant());
+            var distVal = EscapeSqlString(cfg.DistanceFilterValue.ToUpperInvariant());
+            var crseNameSql = cfg.HasCrseName ? $@"CAST(crse.""{cfg.CrseNameCol}"" AS text)" : "NULL::text";
+            var qualFulfilledSql = cfg.HasQualFulfilled ? @"CAST(s.""_025"" AS text)" : "NULL::text";
+
+            return $@"
+DROP TABLE IF EXISTS rule18_base;
+DROP TABLE IF EXISTS rule18_validation;
+
+CREATE TEMP TABLE rule18_base AS
+SELECT
+    CAST(s.""_007"" AS text) AS student_number,
+    CAST(s.""_001"" AS text) AS student_qualification_code,
+    UPPER(TRIM(CAST(s.""{cfg.NsfasFilterCol}"" AS text))) AS nsfas_status,
+    UPPER(TRIM(CAST(s.""{cfg.DistanceFilterCol}"" AS text))) AS attendance_mode,
+    {qualFulfilledSql} AS qualification_fulfilled_indicator,
+    CAST(bridge.""{cfg.CredJoinCol}"" AS text) AS creg_qualification_code,
+    CAST(bridge.""{cfg.CredCourseCol}"" AS text) AS creg_course_code,
+    CAST(crse.""{cfg.CrseCourseCol}"" AS text) AS crse_course_code,
+    UPPER(TRIM(CAST(crse.""{cfg.FoundationFilterCol}"" AS text))) AS foundation_course_indicator,
+    {crseNameSql} AS crse_058
+FROM ""{schema}"".""{studTable}"" s
+INNER JOIN ""{schema}"".""{bridgeTable}"" bridge
+    ON UPPER(TRIM(CAST(s.""{cfg.CredJoinCol}"" AS text))) = UPPER(TRIM(CAST(bridge.""{cfg.CredJoinCol}"" AS text)))
+INNER JOIN ""{schema}"".""{crseTable}"" crse
+    ON UPPER(TRIM(CAST(bridge.""{cfg.CredCourseCol}"" AS text))) = UPPER(TRIM(CAST(crse.""{cfg.CrseCourseCol}"" AS text)));
+
+ANALYZE rule18_base;
+
+CREATE TEMP TABLE rule18_validation AS
+SELECT
+    ROW_NUMBER() OVER (ORDER BY x.control_sort, x.student_number, x.creg_course_code) AS ""Extract_Number"",
+    x.control_type AS ""Control_Type"",
+    x.student_number AS ""Student_Number"",
+    x.student_qualification_code AS ""Student_Qualification_Code"",
+    x.nsfas_status AS ""NSFAS_Status"",
+    x.attendance_mode AS ""Attendance_Mode"",
+    x.qualification_fulfilled_indicator AS ""Qualification_Fulfilled_Indicator"",
+    x.creg_qualification_code AS ""CREG_Qualification_Code"",
+    x.creg_course_code AS ""CREG_Course_Code"",
+    x.crse_course_code AS ""CRSE_Course_Code"",
+    x.foundation_course_indicator AS ""Foundation_Course_Indicator"",
+    x.crse_058 AS ""CRSE_058"",
+    'PASS' AS ""Validation_Result""
+FROM (
+    SELECT 1 AS control_sort, 'Control_1' AS control_type, student_number, student_qualification_code, nsfas_status, attendance_mode,
+           qualification_fulfilled_indicator, creg_qualification_code, creg_course_code, crse_course_code, foundation_course_indicator, crse_058
+    FROM rule18_base
+    WHERE COALESCE(nsfas_status, '') = '{nsfasVal}' AND COALESCE(foundation_course_indicator, '') = '{foundVal}'
+
+    UNION ALL
+
+    SELECT 2, 'Control_2', student_number, student_qualification_code, nsfas_status, attendance_mode,
+           qualification_fulfilled_indicator, creg_qualification_code, creg_course_code, crse_course_code, foundation_course_indicator, crse_058
+    FROM rule18_base
+    WHERE COALESCE(nsfas_status, '') = '{nsfasVal}' AND COALESCE(foundation_course_indicator, '') = '{foundVal}' AND COALESCE(attendance_mode, '') = '{distVal}'
+
+    UNION ALL
+
+    SELECT 3, 'Control_3', student_number, student_qualification_code, nsfas_status, attendance_mode,
+           qualification_fulfilled_indicator, creg_qualification_code, creg_course_code, crse_course_code, foundation_course_indicator, crse_058
+    FROM rule18_base
+    WHERE COALESCE(nsfas_status, '') = '{nsfasVal}' AND COALESCE(foundation_course_indicator, '') <> '{foundVal}' AND COALESCE(attendance_mode, '') <> '{distVal}'
+) x;";
+        }
+
+        private static async Task<(int NsfasCount, int C1, int C2, int C3)> GetCountsAsync(NpgsqlConnection connection, string nsfasFilterValue)
+        {
+            var nsfasVal = EscapeSqlString(nsfasFilterValue.ToUpperInvariant());
+            await using var command = connection.CreateCommand();
+            command.CommandText = $@"
+SELECT
+    (SELECT COUNT(DISTINCT student_number) FROM rule18_base WHERE COALESCE(nsfas_status, '') = '{nsfasVal}') AS nsfas_count,
+    COUNT(CASE WHEN ""Control_Type"" = 'Control_1' THEN 1 END) AS control1_count,
+    COUNT(CASE WHEN ""Control_Type"" = 'Control_2' THEN 1 END) AS control2_count,
+    COUNT(CASE WHEN ""Control_Type"" = 'Control_3' THEN 1 END) AS control3_count
+FROM rule18_validation;";
+            await using var reader = await command.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+                return (GetInt(reader, 0), GetInt(reader, 1), GetInt(reader, 2), GetInt(reader, 3));
+            return (0, 0, 0, 0);
+        }
+
+        private async Task<List<Rule18ValidationRowRecord>> LoadControlRowsAsync(NpgsqlConnection connection, int? maxRows)
+        {
+            var perControlLimit = maxRows.HasValue && maxRows.Value > 0 ? Math.Max(maxRows.Value / 3, 1) : 0;
 
             var sql = perControlLimit > 0
                 ? $@"
-SELECT
-    ROW_NUMBER() OVER (ORDER BY Control_Type, Student_Number, CREG_Course_Code) AS Extract_Number,
-    Control_Type, Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-    Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-    CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058, Validation_Result
+SELECT ""Control_Type"", ""Student_Number"", ""Student_Qualification_Code"", ""NSFAS_Status"", ""Attendance_Mode"",
+       ""Qualification_Fulfilled_Indicator"", ""CREG_Qualification_Code"", ""CREG_Course_Code"", ""CRSE_Course_Code"",
+       ""Foundation_Course_Indicator"", ""CRSE_058"", ""Validation_Result""
 FROM (
-    SELECT *,
-        ROW_NUMBER() OVER (PARTITION BY Control_Type ORDER BY Student_Number, CREG_Course_Code) AS Preview_Row_Num
-    FROM #Rule18_Validation
-) X
-WHERE Preview_Row_Num <= {perControlLimit}
-ORDER BY Control_Type, Student_Number, CREG_Course_Code;"
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY ""Control_Type"" ORDER BY ""Student_Number"", ""CREG_Course_Code"") AS preview_row_num
+    FROM rule18_validation
+) x
+WHERE preview_row_num <= {perControlLimit}
+ORDER BY ""Control_Type"", ""Student_Number"", ""CREG_Course_Code"";"
                 : @"
-SELECT
-    ROW_NUMBER() OVER (ORDER BY Control_Type, Student_Number, CREG_Course_Code) AS Extract_Number,
-    Control_Type, Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-    Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-    CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058, Validation_Result
-FROM #Rule18_Validation
-ORDER BY Control_Type, Student_Number, CREG_Course_Code;";
+SELECT ""Control_Type"", ""Student_Number"", ""Student_Qualification_Code"", ""NSFAS_Status"", ""Attendance_Mode"",
+       ""Qualification_Fulfilled_Indicator"", ""CREG_Qualification_Code"", ""CREG_Course_Code"", ""CRSE_Course_Code"",
+       ""Foundation_Course_Indicator"", ""CRSE_058"", ""Validation_Result""
+FROM rule18_validation
+ORDER BY ""Control_Type"", ""Student_Number"", ""CREG_Course_Code"";";
 
-            await using var command = connection.CreateConfiguredCommand();
+            await using var command = connection.CreateCommand();
             command.CommandText = sql;
 
             await using var reader = await command.ExecuteReaderAsync();
@@ -1119,116 +871,85 @@ ORDER BY Control_Type, Student_Number, CREG_Course_Code;";
             return rows;
         }
 
-
         private static List<Rule18ControlSummaryItemViewModel> BuildControlSummaries(
-            int c1Count,
-            int c2Count,
-            int c3Count,
-            string nsfasFilterCol = "_019",
-            string nsfasFilterValue = "NS",
-            string foundationFilterCol = "_091",
-            string foundationFilterValue = "Y",
-            string distanceFilterCol = "_024",
-            string distanceFilterValue = "D")
+            int c1Count, int c2Count, int c3Count,
+            string nsfasFilterCol, string nsfasFilterValue,
+            string foundationFilterCol, string foundationFilterValue,
+            string distanceFilterCol, string distanceFilterValue)
         {
             return new List<Rule18ControlSummaryItemViewModel>
             {
                 BuildControlSummary("Control_1", "Control 1",
-                    $"NSFAS_Status='{nsfasFilterValue}' AND Foundation_Course_Indicator='{foundationFilterValue}'",
-                    c1Count),
+                    $"NSFAS_Status='{nsfasFilterValue}' AND Foundation_Course_Indicator='{foundationFilterValue}'", c1Count),
                 BuildControlSummary("Control_2", "Control 2",
-                    $"NSFAS_Status='{nsfasFilterValue}' AND Foundation_Course_Indicator='{foundationFilterValue}' AND Attendance_Mode='{distanceFilterValue}'",
-                    c2Count),
+                    $"NSFAS_Status='{nsfasFilterValue}' AND Foundation_Course_Indicator='{foundationFilterValue}' AND Attendance_Mode='{distanceFilterValue}'", c2Count),
                 BuildControlSummary("Control_3", "Control 3",
-                    $"NSFAS_Status='{nsfasFilterValue}' AND Foundation_Course_Indicator<>'{foundationFilterValue}' AND Attendance_Mode<>'{distanceFilterValue}'",
-                    c3Count)
+                    $"NSFAS_Status='{nsfasFilterValue}' AND Foundation_Course_Indicator<>'{foundationFilterValue}' AND Attendance_Mode<>'{distanceFilterValue}'", c3Count)
             };
         }
 
-        private static Rule18ControlSummaryItemViewModel BuildControlSummary(
-            string controlType,
-            string controlLabel,
-            string criteriaText,
-            int passCount)
+        private static Rule18ControlSummaryItemViewModel BuildControlSummary(string controlType, string controlLabel, string criteriaText, int passCount) => new()
         {
-            return new Rule18ControlSummaryItemViewModel
-            {
-                ControlType = controlType,
-                ControlLabel = controlLabel,
-                CriteriaText = criteriaText,
-                RequestedCount = passCount,
-                AvailableCount = passCount,
-                AchievedCount = passCount,
-                TotalCount = passCount,
-                PassCount = passCount,
-                FailCount = 0,
-                Status = passCount > 0 ? "PASS" : "NO DATA"
-            };
-        }
+            ControlType = controlType,
+            ControlLabel = controlLabel,
+            CriteriaText = criteriaText,
+            RequestedCount = passCount,
+            AvailableCount = passCount,
+            AchievedCount = passCount,
+            TotalCount = passCount,
+            PassCount = passCount,
+            FailCount = 0,
+            Status = passCount > 0 ? "PASS" : "NO DATA"
+        };
 
-        private static List<Rule18ValidationRowRecord> NormalizeReviewRows(IEnumerable<Rule18ValidationRowRecord>? rows)
-        {
-            var normalized = (rows ?? Enumerable.Empty<Rule18ValidationRowRecord>())
-                .Select((row, index) =>
-                {
-                    row.ValidationNumber = index + 1;
-                    return row;
-                })
+        private static List<Rule18ValidationRowRecord> NormalizeReviewRows(IEnumerable<Rule18ValidationRowRecord>? rows) =>
+            (rows ?? Enumerable.Empty<Rule18ValidationRowRecord>())
+                .Select((row, index) => { row.ValidationNumber = index + 1; return row; })
                 .ToList();
 
-            return normalized;
-        }
-
-        private async Task<Rule18ValidationSummary> ExpandSavedSummaryIfNeededAsync(Rule18ValidationSummary summary, string? server)
+        private async Task<Rule18ValidationSummary> ExpandAndPersistSavedSummaryIfNeededAsync(int runId, Rule18ValidationSummary summary, int clientId)
         {
+            // A saved run is "as complete as it will ever get" once ReviewRows already holds
+            // min(TotalValidated, MaxSafeReviewRows) rows — re-running AnalyseAsync would just
+            // recompute the identical capped result. Without this, any run whose true population
+            // exceeds the cap (IsPreviewOnly permanently true, by design) would silently re-run
+            // the full analysis on every single workspace load — the exact "hidden re-analysis on
+            // routine page load" bug this method was already fixed for once, just re-triggered by
+            // the safety cap that stops it from OOMing on very large populations.
             var looksLikeStoredPreviewSample =
                 summary.ReviewRows.Count > 0 &&
                 summary.ReviewRows.Count <= BrowserPreviewRowLimit &&
-                summary.TotalValidated > 0;
+                summary.TotalValidated > BrowserPreviewRowLimit;
 
-            if (!summary.IsPreviewOnly &&
-                summary.ReviewRows.Count >= summary.TotalValidated &&
-                !looksLikeStoredPreviewSample)
-            {
+            var completenessTarget = Math.Min(summary.TotalValidated, MaxSafeReviewRows);
+            if (summary.ReviewRows.Count >= completenessTarget && !looksLikeStoredPreviewSample)
                 return summary;
-            }
 
-            if (string.IsNullOrWhiteSpace(server) ||
-                string.IsNullOrWhiteSpace(summary.Database) ||
-                string.IsNullOrWhiteSpace(summary.StudTable) ||
-                string.IsNullOrWhiteSpace(summary.BridgeTable) ||
-                string.IsNullOrWhiteSpace(summary.CrseTable))
-            {
+            if (string.IsNullOrWhiteSpace(summary.StudTable) || string.IsNullOrWhiteSpace(summary.BridgeTable) || string.IsNullOrWhiteSpace(summary.CrseTable))
                 return summary;
-            }
 
             try
             {
-                var expanded = await AnalyseAsync(
-                    new Rule18ValidationRequest
-                    {
-                        ClientId = summary.ClientId,
-                        RunId = summary.SavedRunId,
-                        Server = server,
-                        Database = summary.Database,
-                        Driver = "ODBC Driver 17 for SQL Server",
-                        StudTable = summary.StudTable,
-                        BridgeTable = summary.BridgeTable,
-                        CrseTable = summary.CrseTable,
-                        Control1FilterCol = string.IsNullOrWhiteSpace(summary.Control1FilterCol) ? "_019" : summary.Control1FilterCol,
-                        Control1FilterValue = string.IsNullOrWhiteSpace(summary.Control1FilterValue) ? "NS" : summary.Control1FilterValue,
-                        NsfasFilterCol = string.IsNullOrWhiteSpace(summary.NsfasFilterCol) ? "_019" : summary.NsfasFilterCol,
-                        NsfasFilterValue = string.IsNullOrWhiteSpace(summary.NsfasFilterValue) ? "NS" : summary.NsfasFilterValue,
-                        FoundationFilterCol = string.IsNullOrWhiteSpace(summary.FoundationFilterCol) ? "_091" : summary.FoundationFilterCol,
-                        FoundationFilterValue = string.IsNullOrWhiteSpace(summary.FoundationFilterValue) ? "Y" : summary.FoundationFilterValue,
-                        DistanceFilterCol = string.IsNullOrWhiteSpace(summary.DistanceFilterCol) ? "_024" : summary.DistanceFilterCol,
-                        DistanceFilterValue = string.IsNullOrWhiteSpace(summary.DistanceFilterValue) ? "D" : summary.DistanceFilterValue,
-                        CredJoinCol = string.IsNullOrWhiteSpace(summary.CredJoinCol) ? "_001" : summary.CredJoinCol,
-                        CredCourseCol = string.IsNullOrWhiteSpace(summary.CredCourseCol) ? "_030" : summary.CredCourseCol,
-                        CrseCourseCol = string.IsNullOrWhiteSpace(summary.CrseCourseCol) ? "_030" : summary.CrseCourseCol,
-                        CrseNameCol = string.IsNullOrWhiteSpace(summary.CrseNameCol) ? "_058" : summary.CrseNameCol
-                    },
-                    includeAllReviewRows: true);
+                var expanded = await AnalyseAsync(new Rule18ValidationRequest
+                {
+                    ClientId = clientId,
+                    RunId = summary.SavedRunId,
+                    StudTable = summary.StudTable,
+                    BridgeTable = summary.BridgeTable,
+                    CrseTable = summary.CrseTable,
+                    Control1FilterCol = summary.Control1FilterCol,
+                    Control1FilterValue = summary.Control1FilterValue,
+                    NsfasFilterCol = summary.NsfasFilterCol,
+                    NsfasFilterValue = summary.NsfasFilterValue,
+                    FoundationFilterCol = summary.FoundationFilterCol,
+                    FoundationFilterValue = summary.FoundationFilterValue,
+                    DistanceFilterCol = summary.DistanceFilterCol,
+                    DistanceFilterValue = summary.DistanceFilterValue,
+                    CredJoinCol = summary.CredJoinCol,
+                    CredCourseCol = summary.CredCourseCol,
+                    CrseCourseCol = summary.CrseCourseCol,
+                    CrseNameCol = summary.CrseNameCol
+                }, includeAllReviewRows: true);
 
                 expanded.Timestamp = string.IsNullOrWhiteSpace(summary.Timestamp) ? expanded.Timestamp : summary.Timestamp;
                 expanded.ClientId = summary.ClientId;
@@ -1236,6 +957,12 @@ ORDER BY Control_Type, Student_Number, CREG_Course_Code;";
                 expanded.Warning = string.IsNullOrWhiteSpace(summary.Warning)
                     ? "Saved Rule 18 results were expanded from the stored browser preview to the full result set."
                     : $"{summary.Warning} Full saved results were reloaded from the saved Rule 18 configuration.";
+
+                if (!ReferenceEquals(expanded, summary))
+                {
+                    expanded.SavedRunId = runId;
+                    await UpdateStoredSummaryAsync(runId, expanded);
+                }
 
                 return expanded;
             }
@@ -1245,82 +972,93 @@ ORDER BY Control_Type, Student_Number, CREG_Course_Code;";
             }
         }
 
-        private static Rule18ValidationSummary CloneSummary(Rule18ValidationSummary summary)
+        private async Task UpdateStoredSummaryAsync(int runId, Rule18ValidationSummary summary)
         {
-            return new Rule18ValidationSummary
+            var failRows = summary.ReviewRows.Where(r => string.Equals(r.ValidationResult, "FAIL", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            await _systemDb.SaveValidationRunAsync(new SaveValidationRunRequest
             {
-                Success = summary.Success,
-                StudRecordCount = summary.StudRecordCount,
-                BridgeRecordCount = summary.BridgeRecordCount,
-                CrseRecordCount = summary.CrseRecordCount,
-                NsfasPopulationCount = summary.NsfasPopulationCount,
-                TotalRequested = summary.TotalRequested,
-                TotalValidated = summary.TotalValidated,
-                DisplayedCount = summary.DisplayedCount,
-                IsPreviewOnly = summary.IsPreviewOnly,
-                PreviewLimit = summary.PreviewLimit,
+                ClientId = summary.ClientId,
+                RuleNumber = 18,
+                RuleName = "NSFAS Student Validation",
+                Status = summary.Status,
+                TotalRecords = summary.TotalValidated,
                 PassCount = summary.PassCount,
                 FailCount = summary.FailCount,
                 ExceptionRate = summary.ExceptionRate,
-                Status = summary.Status,
-                Timestamp = summary.Timestamp,
-                Server = summary.Server,
-                Database = summary.Database,
                 StudTable = summary.StudTable,
-                BridgeTable = summary.BridgeTable,
-                CrseTable = summary.CrseTable,
-                Control1FilterCol = summary.Control1FilterCol,
-                Control1FilterValue = summary.Control1FilterValue,
-                NsfasFilterCol = summary.NsfasFilterCol,
-                NsfasFilterValue = summary.NsfasFilterValue,
-                FoundationFilterCol = summary.FoundationFilterCol,
-                FoundationFilterValue = summary.FoundationFilterValue,
-                DistanceFilterCol = summary.DistanceFilterCol,
-                DistanceFilterValue = summary.DistanceFilterValue,
-                CredJoinCol = summary.CredJoinCol,
-                CredCourseCol = summary.CredCourseCol,
-                CrseCourseCol = summary.CrseCourseCol,
-                CrseNameCol = summary.CrseNameCol,
-                TableLinkageText = summary.TableLinkageText,
-                RuleModeText = summary.RuleModeText,
-                ProcedureSteps = summary.ProcedureSteps.ToList(),
-                ClientId = summary.ClientId,
-                SavedRunId = summary.SavedRunId,
-                ControlSummaries = summary.ControlSummaries
-                    .Select(item => new Rule18ControlSummaryItemViewModel
-                    {
-                        ControlType = item.ControlType,
-                        ControlLabel = item.ControlLabel,
-                        CriteriaText = item.CriteriaText,
-                        RequestedCount = item.RequestedCount,
-                        AvailableCount = item.AvailableCount,
-                        AchievedCount = item.AchievedCount,
-                        TotalCount = item.TotalCount,
-                        PassCount = item.PassCount,
-                        FailCount = item.FailCount,
-                        Status = item.Status
-                    })
-                    .ToList(),
-                ReviewRows = summary.ReviewRows
-                    .Select(CloneReviewRow)
-                    .ToList(),
-                Warning = summary.Warning,
-                Error = summary.Error
-            };
+                DeceasedTable = summary.BridgeTable,
+                StudColumn = summary.CrseTable,
+                DeceasedColumn = "",
+                ExceptionsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(failRows)),
+                ResultsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary))
+            }, null, null);
         }
 
-        private static Rule18ValidationRowRecord CloneReviewRow(Rule18ValidationRowRecord row)
+        private static Rule18ValidationSummary CloneSummary(Rule18ValidationSummary summary) => new()
         {
-            return new Rule18ValidationRowRecord
+            Success = summary.Success,
+            StudRecordCount = summary.StudRecordCount,
+            BridgeRecordCount = summary.BridgeRecordCount,
+            CrseRecordCount = summary.CrseRecordCount,
+            NsfasPopulationCount = summary.NsfasPopulationCount,
+            TotalRequested = summary.TotalRequested,
+            TotalValidated = summary.TotalValidated,
+            DisplayedCount = summary.DisplayedCount,
+            IsPreviewOnly = summary.IsPreviewOnly,
+            PreviewLimit = summary.PreviewLimit,
+            PassCount = summary.PassCount,
+            FailCount = summary.FailCount,
+            ExceptionRate = summary.ExceptionRate,
+            Status = summary.Status,
+            Timestamp = summary.Timestamp,
+            StudTable = summary.StudTable,
+            BridgeTable = summary.BridgeTable,
+            CrseTable = summary.CrseTable,
+            Control1FilterCol = summary.Control1FilterCol,
+            Control1FilterValue = summary.Control1FilterValue,
+            NsfasFilterCol = summary.NsfasFilterCol,
+            NsfasFilterValue = summary.NsfasFilterValue,
+            FoundationFilterCol = summary.FoundationFilterCol,
+            FoundationFilterValue = summary.FoundationFilterValue,
+            DistanceFilterCol = summary.DistanceFilterCol,
+            DistanceFilterValue = summary.DistanceFilterValue,
+            CredJoinCol = summary.CredJoinCol,
+            CredCourseCol = summary.CredCourseCol,
+            CrseCourseCol = summary.CrseCourseCol,
+            CrseNameCol = summary.CrseNameCol,
+            TableLinkageText = summary.TableLinkageText,
+            RuleModeText = summary.RuleModeText,
+            ProcedureSteps = summary.ProcedureSteps.ToList(),
+            ClientId = summary.ClientId,
+            SavedRunId = summary.SavedRunId,
+            ControlSummaries = summary.ControlSummaries.Select(item => new Rule18ControlSummaryItemViewModel
             {
-                ValidationNumber = row.ValidationNumber,
-                ControlType = row.ControlType,
-                ControlLabel = row.ControlLabel,
-                ValidationResult = row.ValidationResult,
-                ValidationExplanation = row.ValidationExplanation,
-                DisplayValues = new Dictionary<string, string?>(row.DisplayValues, StringComparer.OrdinalIgnoreCase)
-            };
-        }
+                ControlType = item.ControlType,
+                ControlLabel = item.ControlLabel,
+                CriteriaText = item.CriteriaText,
+                RequestedCount = item.RequestedCount,
+                AvailableCount = item.AvailableCount,
+                AchievedCount = item.AchievedCount,
+                TotalCount = item.TotalCount,
+                PassCount = item.PassCount,
+                FailCount = item.FailCount,
+                Status = item.Status
+            }).ToList(),
+            ReviewRows = summary.ReviewRows.Select(CloneReviewRow).ToList(),
+            Warning = summary.Warning,
+            Error = summary.Error
+        };
+
+        private static Rule18ValidationRowRecord CloneReviewRow(Rule18ValidationRowRecord row) => new()
+        {
+            ValidationNumber = row.ValidationNumber,
+            ControlType = row.ControlType,
+            ControlLabel = row.ControlLabel,
+            ValidationResult = row.ValidationResult,
+            ValidationExplanation = row.ValidationExplanation,
+            DisplayValues = new Dictionary<string, string?>(row.DisplayValues, StringComparer.OrdinalIgnoreCase)
+        };
 
         private static Rule18ValidationSummary CreateBrowserPreview(Rule18ValidationSummary summary)
         {
@@ -1332,64 +1070,12 @@ ORDER BY Control_Type, Student_Number, CREG_Course_Code;";
                 .Take(BrowserPreviewRowLimit)
                 .ToList();
 
-            return new Rule18ValidationSummary
-            {
-                Success = summary.Success,
-                StudRecordCount = summary.StudRecordCount,
-                BridgeRecordCount = summary.BridgeRecordCount,
-                CrseRecordCount = summary.CrseRecordCount,
-                NsfasPopulationCount = summary.NsfasPopulationCount,
-                TotalRequested = summary.TotalRequested,
-                TotalValidated = summary.TotalValidated,
-                DisplayedCount = previewRows.Count,
-                IsPreviewOnly = summary.TotalValidated > previewRows.Count,
-                PreviewLimit = summary.TotalValidated > previewRows.Count ? previewRows.Count : 0,
-                PassCount = summary.PassCount,
-                FailCount = summary.FailCount,
-                ExceptionRate = summary.ExceptionRate,
-                Status = summary.Status,
-                Timestamp = summary.Timestamp,
-                Server = summary.Server,
-                Database = summary.Database,
-                StudTable = summary.StudTable,
-                BridgeTable = summary.BridgeTable,
-                CrseTable = summary.CrseTable,
-                Control1FilterCol = summary.Control1FilterCol,
-                Control1FilterValue = summary.Control1FilterValue,
-                NsfasFilterCol = summary.NsfasFilterCol,
-                NsfasFilterValue = summary.NsfasFilterValue,
-                FoundationFilterCol = summary.FoundationFilterCol,
-                FoundationFilterValue = summary.FoundationFilterValue,
-                DistanceFilterCol = summary.DistanceFilterCol,
-                DistanceFilterValue = summary.DistanceFilterValue,
-                CredJoinCol = summary.CredJoinCol,
-                CredCourseCol = summary.CredCourseCol,
-                CrseCourseCol = summary.CrseCourseCol,
-                CrseNameCol = summary.CrseNameCol,
-                TableLinkageText = summary.TableLinkageText,
-                RuleModeText = summary.RuleModeText,
-                ProcedureSteps = summary.ProcedureSteps.ToList(),
-                ClientId = summary.ClientId,
-                SavedRunId = summary.SavedRunId,
-                ControlSummaries = summary.ControlSummaries
-                    .Select(item => new Rule18ControlSummaryItemViewModel
-                    {
-                        ControlType = item.ControlType,
-                        ControlLabel = item.ControlLabel,
-                        CriteriaText = item.CriteriaText,
-                        RequestedCount = item.RequestedCount,
-                        AvailableCount = item.AvailableCount,
-                        AchievedCount = item.AchievedCount,
-                        TotalCount = item.TotalCount,
-                        PassCount = item.PassCount,
-                        FailCount = item.FailCount,
-                        Status = item.Status
-                    })
-                    .ToList(),
-                ReviewRows = previewRows,
-                Warning = summary.Warning,
-                Error = summary.Error
-            };
+            var clone = CloneSummary(summary);
+            clone.DisplayedCount = previewRows.Count;
+            clone.IsPreviewOnly = summary.TotalValidated > previewRows.Count;
+            clone.PreviewLimit = summary.TotalValidated > previewRows.Count ? previewRows.Count : 0;
+            clone.ReviewRows = previewRows;
+            return clone;
         }
 
         private static void ApplyBrowserPreview(Rule18ValidationSummary summary)
@@ -1410,133 +1096,55 @@ ORDER BY Control_Type, Student_Number, CREG_Course_Code;";
         };
 
         private static List<string> BuildProcedureSteps(string studTable, string bridgeTable, string crseTable,
-            string credJoinCol, string credCourseCol, string crseCourseCol, string crseNameCol) =>
-            new()
-            {
-                $"Join {studTable}.[{credJoinCol}] to {bridgeTable}.[{credJoinCol}] (Student Qualification Code).",
-                $"Join {bridgeTable}.[{credCourseCol}] to {crseTable}.[{crseCourseCol}] (Course Code link).",
-                $"Select course name/type from {crseTable}.[{crseNameCol}].",
-                "Evaluate the joined STUD, CRED, and CRSE rows using the three control populations.",
-                "Return the full matching control result set for Control 1, Control 2, and Control 3."
-            };
-
-        private async Task EnsureColumnsExistAsync(
-            string server, string database, string driver,
-            string studTable, string bridgeTable, string crseTable,
-            string? nsfasFilterCol = null,
-            string? distanceFilterCol = null,
-            string? foundationFilterCol = null,
-            string? credJoinCol = null,
-            string? credCourseCol = null,
-            string? crseCourseCol = null,
-            string? crseNameCol = null)
+            string credJoinCol, string credCourseCol, string crseCourseCol, string crseNameCol) => new()
         {
-            var studColumns = await GetTableColumnsAsync(server, database, driver, studTable);
-            var bridgeColumns = await GetTableColumnsAsync(server, database, driver, bridgeTable);
-            var crseColumns = await GetTableColumnsAsync(server, database, driver, crseTable);
+            $"Join {studTable}.[{credJoinCol}] to {bridgeTable}.[{credJoinCol}] (Student Qualification Code).",
+            $"Join {bridgeTable}.[{credCourseCol}] to {crseTable}.[{crseCourseCol}] (Course Code link).",
+            $"Select course name/type from {crseTable}.[{crseNameCol}].",
+            "Evaluate the joined STUD, CRED, and CRSE rows using the three control populations.",
+            "Return the full matching control result set for Control 1, Control 2, and Control 3."
+        };
 
-            var requiredStudCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "_001", "_007" };
-            foreach (var col in new[] { nsfasFilterCol, distanceFilterCol, credJoinCol }.Where(c => !string.IsNullOrWhiteSpace(c)))
-                requiredStudCols.Add(col!);
+        private static bool RequestsMatchForPendingSave(Rule18ValidationRequest current, Rule18ValidationRequest pending) =>
+            current.ClientId == pending.ClientId &&
+            string.Equals(current.StudTable?.Trim(), pending.StudTable?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(current.BridgeTable?.Trim(), pending.BridgeTable?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(current.CrseTable?.Trim(), pending.CrseTable?.Trim(), StringComparison.OrdinalIgnoreCase);
 
-            var effectiveCredJoinCol = string.IsNullOrWhiteSpace(credJoinCol) ? "_001" : credJoinCol;
-            var effectiveCredCourseCol = string.IsNullOrWhiteSpace(credCourseCol) ? "_030" : credCourseCol;
-            var requiredBridgeCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { effectiveCredJoinCol, effectiveCredCourseCol };
-
-            var effectiveCrseCourseCol = string.IsNullOrWhiteSpace(crseCourseCol) ? "_030" : crseCourseCol;
-            var effectiveCrseNameCol = string.IsNullOrWhiteSpace(crseNameCol) ? "_058" : crseNameCol;
-            var requiredCrseCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { effectiveCrseCourseCol, effectiveCrseNameCol };
-            if (!string.IsNullOrWhiteSpace(foundationFilterCol))
-                requiredCrseCols.Add(foundationFilterCol!);
-
-            EnsureHasColumns(studTable, studColumns, requiredStudCols.ToArray());
-            EnsureHasColumns(bridgeTable, bridgeColumns, requiredBridgeCols.ToArray());
-            EnsureHasColumns(crseTable, crseColumns, requiredCrseCols.ToArray());
-        }
-
-        private async Task<List<string>> GetTableColumnsAsync(string server, string database, string driver, string tableName)
+        private async Task<(NpgsqlConnection Connection, string Schema)> OpenEngagementConnectionAsync(int clientId)
         {
-            ValidateObjectName(tableName);
+            var database = await _datasets.GetDatabaseAsync(clientId)
+                ?? throw new InvalidOperationException("Create a database for this engagement before running this rule.");
 
-            var connStr = BuildConnectionString(server, database, driver);
-            await using var conn = new SqlConnection(connStr);
-            await conn.OpenAsync();
+            // Unlimited command timeout: validation queries build temp tables and run multi-way
+            // joins over the engagement's full dataset, which can legitimately take longer than
+            // the app's normal 60s query timeout on large uploads.
+            var connectionString = HemisAudit.Data.PostgresConnectionStringHelper.WithResiliencyDefaults(
+                _configuration.GetConnectionString("Postgres")
+                    ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured."),
+                commandTimeoutSeconds: 0);
 
-            await using var cmd = conn.CreateConfiguredCommand();
-            cmd.CommandText = @"
-SELECT COLUMN_NAME
-FROM INFORMATION_SCHEMA.COLUMNS
-WHERE TABLE_NAME = @TableName
-ORDER BY ORDINAL_POSITION;";
-            cmd.Parameters.AddWithValue("@TableName", Sanitise(tableName));
-
-            await using var reader = await cmd.ExecuteReaderAsync();
-            var columns = new List<string>();
-            while (await reader.ReadAsync())
+            var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync();
+            await using (var setTimeout = connection.CreateCommand())
             {
-                if (!reader.IsDBNull(0))
-                    columns.Add(reader.GetString(0));
+                // Belt-and-braces: also clear any server/role-level statement_timeout default
+                // for this session, in case one is set independently of Npgsql's own timeout.
+                setTimeout.CommandText = "SET statement_timeout = 0;";
+                await setTimeout.ExecuteNonQueryAsync();
             }
-
-            return columns;
+            var schema = string.IsNullOrWhiteSpace(database.SchemaName) ? $"engagement_{clientId}" : database.SchemaName;
+            return (connection, schema);
         }
 
-        private static void EnsureHasColumns(string tableName, IReadOnlyCollection<string> availableColumns, params string[] requiredColumns)
+        private static void ValidateRequest(string studTable, string bridgeTable, string crseTable)
         {
-            var missing = requiredColumns
-                .Where(required => !availableColumns.Contains(required, StringComparer.OrdinalIgnoreCase))
-                .ToList();
-
-            if (missing.Count > 0)
-                throw new InvalidOperationException($"Table {tableName} is missing required column(s): {string.Join(", ", missing)}.");
-        }
-
-        private static void ValidateRequest(Rule18ValidationRequest request)
-        {
-            if (string.IsNullOrWhiteSpace(request.Server))
-                throw new InvalidOperationException("Server name is required.");
-            if (string.IsNullOrWhiteSpace(request.Database))
-                throw new InvalidOperationException("Database is required.");
-            if (string.IsNullOrWhiteSpace(request.StudTable))
+            if (string.IsNullOrWhiteSpace(studTable))
                 throw new InvalidOperationException("STUD table is required.");
-            if (string.IsNullOrWhiteSpace(request.BridgeTable))
+            if (string.IsNullOrWhiteSpace(bridgeTable))
                 throw new InvalidOperationException("Bridge table is required.");
-            if (string.IsNullOrWhiteSpace(request.CrseTable))
+            if (string.IsNullOrWhiteSpace(crseTable))
                 throw new InvalidOperationException("CRSE table is required.");
-
-            ValidateObjectName(request.StudTable);
-            ValidateObjectName(request.BridgeTable);
-            ValidateObjectName(request.CrseTable);
-        }
-
-        private static void ValidateRequest(Rule18VerifyRequest request)
-        {
-            if (string.IsNullOrWhiteSpace(request.Server))
-                throw new InvalidOperationException("Server name is required.");
-            if (string.IsNullOrWhiteSpace(request.Database))
-                throw new InvalidOperationException("Database is required.");
-            if (string.IsNullOrWhiteSpace(request.StudTable))
-                throw new InvalidOperationException("STUD table is required.");
-            if (string.IsNullOrWhiteSpace(request.BridgeTable))
-                throw new InvalidOperationException("Bridge table is required.");
-            if (string.IsNullOrWhiteSpace(request.CrseTable))
-                throw new InvalidOperationException("CRSE table is required.");
-
-            ValidateObjectName(request.StudTable);
-            ValidateObjectName(request.BridgeTable);
-            ValidateObjectName(request.CrseTable);
-        }
-
-        private static void ValidateObjectName(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-                throw new InvalidOperationException("Table or column name is required.");
-
-            foreach (var bad in new[] { ";", "'", "\"", "--", "/*", "*/" })
-            {
-                if (value.Contains(bad, StringComparison.Ordinal))
-                    throw new InvalidOperationException("Unsafe table or column name was provided.");
-            }
         }
 
         private static string? FindFirst(IEnumerable<string> values, string[] exactMatches, string[] containsMatches)
@@ -1544,305 +1152,14 @@ ORDER BY ORDINAL_POSITION;";
             foreach (var exact in exactMatches)
             {
                 var match = values.FirstOrDefault(c => c.Equals(exact, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrWhiteSpace(match))
-                    return match;
+                if (!string.IsNullOrWhiteSpace(match)) return match;
             }
-
             foreach (var fragment in containsMatches)
             {
                 var match = values.FirstOrDefault(c => c.Contains(fragment, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrWhiteSpace(match))
-                    return match;
+                if (!string.IsNullOrWhiteSpace(match)) return match;
             }
-
             return values.FirstOrDefault();
-        }
-
-        private async Task<int> ClearSignoffsAndFlagForReviewAsync(SqlConnection connection, int runId)
-        {
-            await using var countCommand = connection.CreateConfiguredCommand();
-            countCommand.CommandText = "SELECT COUNT(1) FROM dbo.ReviewSignoffs WHERE RunID = @RunID;";
-            countCommand.Parameters.AddWithValue("@RunID", runId);
-            var existingCount = Convert.ToInt32(await countCommand.ExecuteScalarAsync());
-
-            await using var deleteCommand = connection.CreateConfiguredCommand();
-            deleteCommand.CommandText = "DELETE FROM dbo.ReviewSignoffs WHERE RunID = @RunID;";
-            deleteCommand.Parameters.AddWithValue("@RunID", runId);
-            await deleteCommand.ExecuteNonQueryAsync();
-
-            await using var updateCommand = connection.CreateConfiguredCommand();
-            updateCommand.CommandText = "UPDATE dbo.ValidationRuns SET Status = 'Needs Review' WHERE RunID = @RunID;";
-            updateCommand.Parameters.AddWithValue("@RunID", runId);
-            await updateCommand.ExecuteNonQueryAsync();
-
-            return existingCount;
-        }
-
-        private async Task UpdateRunStatusFromSignoffsAsync(SqlConnection connection, int runId)
-        {
-            var hasAllSignoffs = await HasAllRequiredSignoffsAsync(connection, runId);
-            await SetRunStatusAsync(connection, runId, hasAllSignoffs ? "Reviewed and Completed" : "Needs Review");
-        }
-
-        private async Task<bool> HasAllRequiredSignoffsAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT
-    CASE WHEN EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND SignoffRole = 'DataAnalyst') THEN 1 ELSE 0 END,
-    CASE WHEN EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND SignoffRole = 'Manager') THEN 1 ELSE 0 END,
-    CASE WHEN EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND SignoffRole = 'Director') THEN 1 ELSE 0 END;";
-            command.Parameters.AddWithValue("@RunID", runId);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-                return false;
-
-            return reader.GetInt32(0) == 1 && reader.GetInt32(1) == 1 && reader.GetInt32(2) == 1;
-        }
-
-        private async Task SetRunStatusAsync(SqlConnection connection, int runId, string status)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "UPDATE dbo.ValidationRuns SET Status = @Status WHERE RunID = @RunID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@Status", status);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private async Task MarkPreviousRunsHistoricalAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-UPDATE dbo.ValidationRuns
-SET IsCurrent = 0
-WHERE ClientID = @ClientID
-  AND RuleNumber = @RuleNumber
-  AND IsCurrent = 1;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private async Task<List<RunSignoffViewModel>> GetRunSignoffsAsync(SqlConnection connection, int runId, int? currentUserId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT rs.SignoffID,
-       ISNULL(rs.SignoffRole, '') AS SignoffRole,
-       LTRIM(RTRIM(ISNULL(u.FirstName, '') + ' ' + ISNULL(u.LastName, ''))) AS ReviewerName,
-       ISNULL(u.Email, '') AS ReviewerEmail,
-       ISNULL(rs.Comment, '') AS Comment,
-       rs.SignedOffAt,
-       CASE WHEN @CurrentUserID IS NOT NULL AND rs.ReviewerID = @CurrentUserID THEN CAST(1 AS BIT) ELSE CAST(0 AS BIT) END AS IsCurrentUser
-FROM dbo.ReviewSignoffs rs
-INNER JOIN dbo.Users u ON u.UserID = rs.ReviewerID
-WHERE rs.RunID = @RunID
-ORDER BY CASE ISNULL(rs.SignoffRole, '')
-            WHEN 'DataAnalyst' THEN 1
-            WHEN 'Manager' THEN 2
-            WHEN 'Director' THEN 3
-            ELSE 4
-         END,
-         rs.SignedOffAt DESC;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@CurrentUserID", currentUserId.HasValue ? currentUserId.Value : DBNull.Value);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            var signoffs = new List<RunSignoffViewModel>();
-            while (await reader.ReadAsync())
-            {
-                signoffs.Add(new RunSignoffViewModel
-                {
-                    Id = reader.GetInt32(0),
-                    SignoffRole = reader.IsDBNull(1) ? "" : reader.GetString(1),
-                    ReviewerName = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                    ReviewerEmail = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                    Comment = reader.IsDBNull(4) ? "" : reader.GetString(4),
-                    SignedOffAt = reader.IsDBNull(5) ? DateTime.UtcNow : reader.GetDateTime(5),
-                    IsCurrentUser = !reader.IsDBNull(6) && reader.GetBoolean(6)
-                });
-            }
-
-            return signoffs;
-        }
-
-        private async Task<int?> GetSystemUserIdByEmailAsync(SqlConnection connection, string? email)
-        {
-            if (string.IsNullOrWhiteSpace(email))
-                return null;
-
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 UserID FROM dbo.Users WHERE Email = @Email;";
-            command.Parameters.AddWithValue("@Email", email);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToInt32(value);
-        }
-
-        private async Task<string?> GetEngagementRoleAsync(SqlConnection connection, int clientId, int userId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT TOP 1 EngagementRole
-FROM dbo.UserClientAssignments
-WHERE ClientID = @ClientID
-  AND UserID = @UserID;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@UserID", userId);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToString(value);
-        }
-        private static async Task<bool> IsWorkspaceSavedAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT CASE
-    WHEN EXISTS (
-        SELECT 1
-        FROM dbo.ValidationRuns
-        WHERE RunID = @RunID
-          AND (
-                WorkspaceSavedAt IS NOT NULL
-                OR EXISTS (
-                    SELECT 1
-                    FROM dbo.ReviewSignoffs rs
-                    WHERE rs.RunID = ValidationRuns.RunID
-                      AND rs.SignoffRole = 'DataAnalyst'
-                )
-          )
-    ) THEN 1
-    ELSE 0
-END;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            return Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
-        }
-        private async Task<bool> HasSignoffRoleAsync(SqlConnection connection, int runId, string signoffRole)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT CASE WHEN EXISTS (
-    SELECT 1
-    FROM dbo.ReviewSignoffs
-    WHERE RunID = @RunID
-      AND SignoffRole = @SignoffRole
-) THEN 1 ELSE 0 END;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@SignoffRole", signoffRole);
-            return Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
-        }
-
-        private async Task<string?> GetValidationRecordHashAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 RecordHash FROM dbo.ValidationRuns WHERE RunID = @RunID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToString(value);
-        }
-
-        private async Task<string?> GetLatestValidationHashAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT TOP 1 RecordHash
-FROM dbo.ValidationRuns
-WHERE ClientID = @ClientID
-  AND RuleNumber = @RuleNumber
-  AND RecordHash IS NOT NULL
-ORDER BY RunTimestamp DESC, RunID DESC;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToString(value);
-        }
-
-        private async Task EnsureClientNotArchivedAsync(SqlConnection connection, int clientId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 Status FROM dbo.Clients WHERE ClientID = @ClientID;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            var status = Convert.ToString(await command.ExecuteScalarAsync());
-            if (string.Equals(status, "Archived", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Archived engagements are read-only.");
-        }
-
-        private async Task<SqlConnection> OpenSystemConnectionAsync()
-        {
-            var server = _configuration["SystemDatabase:Server"] ?? @"(localdb)\MSSQLLocalDB";
-            var database = _configuration["SystemDatabase:Name"] ?? "HEMISBaseSystem";
-            var trust = _configuration.GetValue("SystemDatabase:TrustServerCertificate", true);
-
-            var builder = new SqlConnectionStringBuilder
-            {
-                DataSource = server,
-                InitialCatalog = database,
-                IntegratedSecurity = true,
-                TrustServerCertificate = trust,
-                Encrypt = false,
-                ConnectTimeout = 180
-            };
-
-            var connection = new SqlConnection(builder.ConnectionString);
-            await connection.OpenAsync();
-            return connection;
-        }
-
-        private string GetSystemConnectionString()
-        {
-            var server   = _configuration["SystemDatabase:Server"] ?? @"(localdb)\MSSQLLocalDB";
-            var database = _configuration["SystemDatabase:Name"]   ?? "HEMISBaseSystem";
-            var trust    = _configuration.GetValue("SystemDatabase:TrustServerCertificate", true);
-            return new SqlConnectionStringBuilder
-            {
-                DataSource = server, InitialCatalog = database,
-                IntegratedSecurity = true, TrustServerCertificate = trust,
-                Encrypt = false, ConnectTimeout = 180
-            }.ConnectionString;
-        }
-
-        private static string BuildConnectionString(string server, string database, string driver) =>
-            $"Server={server};Database={database};Trusted_Connection=True;TrustServerCertificate=True;Encrypt=False;Connection Timeout=180;";
-
-        private static string Sanitise(string name) =>
-            name.Replace("]", "").Replace("[", "").Replace("'", "").Replace(";", "").Trim();
-
-        private static async Task<int> CountAsync(SqlConnection connection, string sql)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = sql;
-            return Convert.ToInt32(await command.ExecuteScalarAsync());
-        }
-
-        private static string ComputeHash(string input)
-        {
-            using var sha = SHA256.Create();
-            var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(input));
-            return Convert.ToHexString(bytes);
-        }
-
-        private static Rule18ValidationSummary? DeserializeSummary(string? json)
-        {
-            if (string.IsNullOrWhiteSpace(json))
-                return null;
-
-            try
-            {
-                var decoded = ValidationPayloadCodec.Decode(json);
-                return JsonConvert.DeserializeObject<Rule18ValidationSummary>(decoded);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static async Task<int?> GetClientIdForRunAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 ClientID FROM dbo.ValidationRuns WHERE RunID = @RunID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToInt32(value);
         }
 
         private static bool CanSignOffAsRole(string? role) =>
@@ -1891,483 +1208,31 @@ ORDER BY RunTimestamp DESC, RunID DESC;";
         private static string FormatRule18ColumnValue(string? value) =>
             string.IsNullOrWhiteSpace(value) ? "[blank]" : value.Trim();
 
-        private static bool RequestsMatchForPendingSave(Rule18ValidationRequest current, Rule18ValidationRequest pending)
+        private static async Task<int> CountAsync(NpgsqlConnection connection, string sql)
         {
-            return current.ClientId == pending.ClientId &&
-                   string.Equals(current.Server?.Trim(), pending.Server?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.Database?.Trim(), pending.Database?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.Driver?.Trim(), pending.Driver?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.StudTable?.Trim(), pending.StudTable?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.BridgeTable?.Trim(), pending.BridgeTable?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.CrseTable?.Trim(), pending.CrseTable?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.Control1FilterCol?.Trim(), pending.Control1FilterCol?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.Control1FilterValue?.Trim(), pending.Control1FilterValue?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.NsfasFilterCol?.Trim(), pending.NsfasFilterCol?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.NsfasFilterValue?.Trim(), pending.NsfasFilterValue?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.FoundationFilterCol?.Trim(), pending.FoundationFilterCol?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.FoundationFilterValue?.Trim(), pending.FoundationFilterValue?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.DistanceFilterCol?.Trim(), pending.DistanceFilterCol?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.DistanceFilterValue?.Trim(), pending.DistanceFilterValue?.Trim(), StringComparison.OrdinalIgnoreCase);
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            return Convert.ToInt32(await command.ExecuteScalarAsync());
         }
 
-        private static int GetInt(SqlDataReader reader, int ordinal) =>
+        private static int GetInt(System.Data.Common.DbDataReader reader, int ordinal) =>
             reader.IsDBNull(ordinal) ? 0 : Convert.ToInt32(reader.GetValue(ordinal));
 
         private static string ReadValue(IReadOnlyDictionary<string, string?> values, string key) =>
             values.TryGetValue(key, out var value) ? value ?? "" : "";
 
-        // ─── Rule18Results table (system DB) ──────────────────────────────────
+        private static string EscapeSqlString(string? value) => (value ?? "").Replace("'", "''");
 
-        private async Task EnsureRule18ResultsTableAsync(SqlConnection systemConn)
+        private static Rule18ValidationSummary? DeserializeSummary(string? json)
         {
-            await using var cmd = systemConn.CreateConfiguredCommand();
-            cmd.CommandText = @"
-IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-               WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='Rule18Results')
-BEGIN
-    CREATE TABLE dbo.Rule18Results (
-        ResultID            BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-        RunID               INT           NOT NULL,
-        Extract_Number      INT           NOT NULL,
-        Control_Type        NVARCHAR(20)  NOT NULL,
-        Student_Number      NVARCHAR(255) NULL,
-        Student_Qualification_Code    NVARCHAR(255) NULL,
-        NSFAS_Status        NVARCHAR(255) NULL,
-        Attendance_Mode     NVARCHAR(255) NULL,
-        Qualification_Fulfilled_Indicator NVARCHAR(255) NULL,
-        CREG_Qualification_Code NVARCHAR(255) NULL,
-        CREG_Course_Code    NVARCHAR(255) NULL,
-        CRSE_Course_Code    NVARCHAR(255) NULL,
-        Foundation_Course_Indicator NVARCHAR(255) NULL,
-        CRSE_058            NVARCHAR(255) NULL,
-        Validation_Result   NVARCHAR(50)  NULL
-    );
-    CREATE NONCLUSTERED INDEX IX_Rule18Results_RunID
-        ON dbo.Rule18Results(RunID, Control_Type);
-END";
-            cmd.CommandTimeout = 60;
-            await cmd.ExecuteNonQueryAsync();
-        }
-
-        private async Task<bool> HasRule18ResultsAsync(int runId)
-        {
-            if (runId <= 0) return false;
+            if (string.IsNullOrWhiteSpace(json)) return null;
             try
             {
-                await using var conn = await OpenSystemConnectionAsync();
-                await EnsureRule18ResultsTableAsync(conn);
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT COUNT(1) FROM dbo.Rule18Results WHERE RunID = @RunID";
-                cmd.Parameters.AddWithValue("@RunID", runId);
-                var count = Convert.ToInt32(await cmd.ExecuteScalarAsync());
-                return count > 0;
+                var decoded = ValidationPayloadCodec.Decode(json);
+                if (string.IsNullOrWhiteSpace(decoded)) return null;
+                return JsonConvert.DeserializeObject<Rule18ValidationSummary>(decoded);
             }
-            catch { return false; }
-        }
-
-        private async Task BulkCopyToRule18ResultsAsync(Rule18ValidationRequest request, int runId)
-        {
-            var hemisConnStr = BuildConnectionString(request.Server, request.Database,
-                request.Driver ?? "ODBC Driver 17 for SQL Server");
-            await using var hemisConn = new SqlConnection(hemisConnStr);
-            await hemisConn.OpenAsync();
-
-            await using (var prepCmd = hemisConn.CreateConfiguredCommand())
-            {
-                prepCmd.CommandText = BuildRule18PrepSql(
-                    Sanitise(request.StudTable), Sanitise(request.BridgeTable), Sanitise(request.CrseTable),
-                    Sanitise(string.IsNullOrWhiteSpace(request.NsfasFilterCol)       ? "_019" : request.NsfasFilterCol),
-                    (string.IsNullOrWhiteSpace(request.NsfasFilterValue)       ? "NS" : request.NsfasFilterValue).Replace("'","''"),
-                    Sanitise(string.IsNullOrWhiteSpace(request.FoundationFilterCol)  ? "_091" : request.FoundationFilterCol),
-                    (string.IsNullOrWhiteSpace(request.FoundationFilterValue)  ? "Y"  : request.FoundationFilterValue).Replace("'","''"),
-                    Sanitise(string.IsNullOrWhiteSpace(request.DistanceFilterCol)    ? "_024" : request.DistanceFilterCol),
-                    (string.IsNullOrWhiteSpace(request.DistanceFilterValue)    ? "D"  : request.DistanceFilterValue).Replace("'","''"),
-                    Sanitise(string.IsNullOrWhiteSpace(request.CredJoinCol)          ? "_001" : request.CredJoinCol),
-                    Sanitise(string.IsNullOrWhiteSpace(request.CredCourseCol)        ? "_030" : request.CredCourseCol),
-                    Sanitise(string.IsNullOrWhiteSpace(request.CrseCourseCol)        ? "_030" : request.CrseCourseCol),
-                    Sanitise(string.IsNullOrWhiteSpace(request.CrseNameCol)          ? "_058" : request.CrseNameCol));
-                prepCmd.CommandTimeout = 600;
-                await prepCmd.ExecuteNonQueryAsync();
-            }
-
-            await using var selectCmd = hemisConn.CreateConfiguredCommand();
-            selectCmd.CommandText = $@"
-SELECT
-    {runId} AS RunID,
-    ROW_NUMBER() OVER (ORDER BY Control_Type, Student_Number, Student_Qualification_Code, CREG_Course_Code) AS Extract_Number,
-    Control_Type, Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-    Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-    CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058, Validation_Result
-FROM #Rule18_Validation
-ORDER BY Control_Type, Student_Number, Student_Qualification_Code, CREG_Course_Code;";
-            selectCmd.CommandTimeout = 600;
-            await using var reader = await selectCmd.ExecuteReaderAsync();
-
-            await using var systemConn = await OpenSystemConnectionAsync();
-            await EnsureRule18ResultsTableAsync(systemConn);
-
-            await using (var delCmd = systemConn.CreateConfiguredCommand())
-            {
-                delCmd.CommandText = "DELETE FROM dbo.Rule18Results WHERE RunID = @RunID";
-                delCmd.Parameters.AddWithValue("@RunID", runId);
-                delCmd.CommandTimeout = 60;
-                await delCmd.ExecuteNonQueryAsync();
-            }
-
-            using var bulk = new SqlBulkCopy(systemConn)
-            {
-                DestinationTableName = "dbo.Rule18Results",
-                BatchSize = 5000,
-                BulkCopyTimeout = 600
-            };
-            await bulk.WriteToServerAsync(reader);
-        }
-
-        // ─── Streaming full-population exports ────────────────────────────────
-
-        public async Task<byte[]> ExportFullExcelAsync(Rule18ValidationSummary summary, string? overrideServer = null)
-        {
-            var runId = summary.SavedRunId ?? 0;
-            if (runId > 0 && await HasRule18ResultsAsync(runId))
-                return await ExportExcelFromResultsTableAsync(summary, runId);
-
-            // Fallback: re-query HEMIS directly (old runs or background copy still in progress)
-            var server = string.IsNullOrWhiteSpace(overrideServer) ? summary.Server : overrideServer;
-            if (string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(summary.Database))
-                throw new InvalidOperationException("Cannot export: server or database is missing from the saved run.");
-
-            var connStr = BuildConnectionString(server, summary.Database, "ODBC Driver 17 for SQL Server");
-            await using var conn = new SqlConnection(connStr);
-            await conn.OpenAsync();
-            await Rule18RunPrepSqlAsync(conn, summary);
-
-            var headers = Rule18ExportHeaders();
-            using var wb = new XLWorkbook();
-            Rule18WriteSummarySheet(wb, summary);
-            var controls = new[]
-            {
-                ("Control_1", "Control 1 - NSFAS Foundation",  "RULE 18 CONTROL 1: NSFAS + FOUNDATION"),
-                ("Control_2", "Control 2 - Distance",           "RULE 18 CONTROL 2: NSFAS + FOUNDATION + DISTANCE"),
-                ("Control_3", "Control 3 - Non-Foundation",     "RULE 18 CONTROL 3: NSFAS + NOT FOUNDATION + NOT DISTANCE"),
-            };
-            foreach (var (controlType, sheetName, title) in controls)
-                await Rule18WriteControlSheetAsync(wb, conn, sheetName, title, controlType, headers);
-            await using var ms = new MemoryStream();
-            wb.SaveAs(ms);
-            return ms.ToArray();
-        }
-
-        private async Task<byte[]> ExportExcelFromResultsTableAsync(Rule18ValidationSummary summary, int runId)
-        {
-            var systemConnStr = GetSystemConnectionString();
-            var sheets = new Dictionary<string, object>
-            {
-                ["Summary"] = BuildRule18SummaryRows(summary),
-                ["Control 1 - NSFAS Foundation"]  = Rule18ReadResultsSync(systemConnStr, runId, "Control_1"),
-                ["Control 2 - Distance"]           = Rule18ReadResultsSync(systemConnStr, runId, "Control_2"),
-                ["Control 3 - Non-Foundation"]     = Rule18ReadResultsSync(systemConnStr, runId, "Control_3"),
-            };
-            await using var ms = new MemoryStream();
-            await ms.SaveAsAsync(sheets);
-            return ms.ToArray();
-        }
-
-        private static IEnumerable<IDictionary<string, object>> BuildRule18SummaryRows(Rule18ValidationSummary summary) =>
-            new List<IDictionary<string, object>>
-            {
-                new Dictionary<string, object> { ["Field"] = "Database",         ["Value"] = summary.Database },
-                new Dictionary<string, object> { ["Field"] = "STUD Table",       ["Value"] = summary.StudTable },
-                new Dictionary<string, object> { ["Field"] = "Bridge Table",     ["Value"] = summary.BridgeTable },
-                new Dictionary<string, object> { ["Field"] = "CRSE Table",       ["Value"] = summary.CrseTable },
-                new Dictionary<string, object> { ["Field"] = "Validation Date",  ["Value"] = summary.Timestamp },
-                new Dictionary<string, object> { ["Field"] = "Join Path",        ["Value"] = summary.TableLinkageText },
-                new Dictionary<string, object> { ["Field"] = "NSFAS Population", ["Value"] = summary.NsfasPopulationCount },
-                new Dictionary<string, object> { ["Field"] = "Control Result Rows", ["Value"] = summary.TotalValidated },
-                new Dictionary<string, object> { ["Field"] = "Matching Rows",    ["Value"] = summary.PassCount },
-                new Dictionary<string, object> { ["Field"] = "Non-Matching Rows",["Value"] = summary.FailCount },
-                new Dictionary<string, object> { ["Field"] = "Exception Rate",   ["Value"] = $"{summary.ExceptionRate:F2}%" },
-                new Dictionary<string, object> { ["Field"] = "Status",           ["Value"] = summary.Status },
-            };
-
-        private static IEnumerable<IDictionary<string, object>> Rule18ReadResultsSync(
-            string systemConnStr, int runId, string controlType)
-        {
-            using var conn = new SqlConnection(systemConnStr);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"
-SELECT Extract_Number, Control_Type, Student_Number, Student_Qualification_Code,
-       NSFAS_Status, Attendance_Mode, Qualification_Fulfilled_Indicator,
-       CREG_Qualification_Code, CREG_Course_Code, CRSE_Course_Code,
-       Foundation_Course_Indicator, CRSE_058, Validation_Result
-FROM dbo.Rule18Results
-WHERE RunID = @RunID AND Control_Type = @ControlType
-ORDER BY Extract_Number;";
-            cmd.Parameters.AddWithValue("@RunID", runId);
-            cmd.Parameters.AddWithValue("@ControlType", controlType);
-            cmd.CommandTimeout = 300;
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                var row = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-                for (var i = 0; i < reader.FieldCount; i++)
-                    row[reader.GetName(i)] = reader.IsDBNull(i) ? "" : (reader.GetValue(i) ?? "");
-                yield return row;
-            }
-        }
-
-        public async Task<byte[]> ExportFullCsvAsync(Rule18ValidationSummary summary, string? overrideServer = null)
-        {
-            var runId = summary.SavedRunId ?? 0;
-            if (runId > 0 && await HasRule18ResultsAsync(runId))
-            {
-                // Fast path: read from local Rule18Results table
-                var systemConnStr = GetSystemConnectionString();
-                await using var ms2 = new MemoryStream();
-                await using var writer2 = new StreamWriter(ms2, new UTF8Encoding(false), bufferSize: 65536, leaveOpen: true);
-                await writer2.WriteLineAsync("Extract_Number,Control_Type,Student_Number,Student_Qualification_Code,NSFAS_Status,Attendance_Mode,Qualification_Fulfilled_Indicator,CREG_Qualification_Code,CREG_Course_Code,CRSE_Course_Code,Foundation_Course_Indicator,CRSE_058,Validation_Result");
-                await using var sysConn = new SqlConnection(systemConnStr);
-                await sysConn.OpenAsync();
-                await using var sysCmd = sysConn.CreateConfiguredCommand();
-                sysCmd.CommandText = @"
-SELECT Extract_Number, Control_Type, Student_Number, Student_Qualification_Code,
-    NSFAS_Status, Attendance_Mode, Qualification_Fulfilled_Indicator,
-    CREG_Qualification_Code, CREG_Course_Code, CRSE_Course_Code,
-    Foundation_Course_Indicator, CRSE_058, Validation_Result
-FROM dbo.Rule18Results WHERE RunID = @RunID
-ORDER BY Extract_Number;";
-                sysCmd.Parameters.AddWithValue("@RunID", runId);
-                sysCmd.CommandTimeout = 300;
-                await using var sysReader = await sysCmd.ExecuteReaderAsync();
-                while (await sysReader.ReadAsync())
-                {
-                    var vals = new string[sysReader.FieldCount];
-                    for (var i = 0; i < sysReader.FieldCount; i++)
-                        vals[i] = Rule18CsvEscape(sysReader.IsDBNull(i) ? "" : sysReader.GetValue(i)?.ToString() ?? "");
-                    await writer2.WriteLineAsync(string.Join(",", vals));
-                }
-                await writer2.FlushAsync();
-                return ms2.ToArray();
-            }
-
-            // Fallback: re-query HEMIS directly
-            var server = string.IsNullOrWhiteSpace(overrideServer) ? summary.Server : overrideServer;
-            if (string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(summary.Database))
-                throw new InvalidOperationException("Cannot export: server or database is missing from the saved run.");
-
-            var connStr = BuildConnectionString(server, summary.Database, "ODBC Driver 17 for SQL Server");
-            await using var conn = new SqlConnection(connStr);
-            await conn.OpenAsync();
-            await Rule18RunPrepSqlAsync(conn, summary);
-
-            await using var ms = new MemoryStream();
-            await using var writer = new StreamWriter(ms, new UTF8Encoding(false), bufferSize: 65536, leaveOpen: true);
-
-            var headers = Rule18ExportHeaders();
-            await writer.WriteLineAsync(string.Join(",", headers.Select(Rule18CsvEscape)));
-
-            await using var cmd = conn.CreateConfiguredCommand();
-            cmd.CommandText = @"
-SELECT
-    ROW_NUMBER() OVER (ORDER BY Control_Type, Student_Number, Student_Qualification_Code, CREG_Course_Code) AS Extract_Number,
-    Control_Type, Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-    Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-    CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058, Validation_Result
-FROM #Rule18_Validation
-ORDER BY Control_Type, Student_Number, Student_Qualification_Code, CREG_Course_Code;";
-            cmd.CommandTimeout = 600;
-
-            await using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-            {
-                var values = new string[reader.FieldCount];
-                for (var i = 0; i < reader.FieldCount; i++)
-                    values[i] = reader.IsDBNull(i) ? "" : (reader.GetValue(i)?.ToString() ?? "");
-                await writer.WriteLineAsync(string.Join(",", values.Select(Rule18CsvEscape)));
-            }
-
-            await writer.FlushAsync();
-            return ms.ToArray();
-        }
-
-        private async Task Rule18RunPrepSqlAsync(SqlConnection conn, Rule18ValidationSummary summary)
-        {
-            var studTable  = Sanitise(string.IsNullOrWhiteSpace(summary.StudTable) ? "dbo_STUD" : summary.StudTable);
-            var bridgeTable = Sanitise(string.IsNullOrWhiteSpace(summary.BridgeTable) ? "dbo_CREG" : summary.BridgeTable);
-            var crseTable  = Sanitise(string.IsNullOrWhiteSpace(summary.CrseTable) ? "dbo_CRSE" : summary.CrseTable);
-            var nsfasCol   = Sanitise(string.IsNullOrWhiteSpace(summary.NsfasFilterCol) ? "_019" : summary.NsfasFilterCol);
-            var nsfasVal   = (string.IsNullOrWhiteSpace(summary.NsfasFilterValue) ? "NS" : summary.NsfasFilterValue).Replace("'", "''");
-            var foundCol   = Sanitise(string.IsNullOrWhiteSpace(summary.FoundationFilterCol) ? "_091" : summary.FoundationFilterCol);
-            var foundVal   = (string.IsNullOrWhiteSpace(summary.FoundationFilterValue) ? "Y" : summary.FoundationFilterValue).Replace("'", "''");
-            var distCol    = Sanitise(string.IsNullOrWhiteSpace(summary.DistanceFilterCol) ? "_024" : summary.DistanceFilterCol);
-            var distVal    = (string.IsNullOrWhiteSpace(summary.DistanceFilterValue) ? "D" : summary.DistanceFilterValue).Replace("'", "''");
-            var credJoinCol   = Sanitise(string.IsNullOrWhiteSpace(summary.CredJoinCol) ? "_001" : summary.CredJoinCol);
-            var credCourseCol = Sanitise(string.IsNullOrWhiteSpace(summary.CredCourseCol) ? "_030" : summary.CredCourseCol);
-            var crseCourseCol = Sanitise(string.IsNullOrWhiteSpace(summary.CrseCourseCol) ? "_030" : summary.CrseCourseCol);
-            var crseNameCol   = Sanitise(string.IsNullOrWhiteSpace(summary.CrseNameCol) ? "_058" : summary.CrseNameCol);
-
-            await using var cmd = conn.CreateConfiguredCommand();
-            cmd.CommandText = BuildRule18PrepSql(studTable, bridgeTable, crseTable,
-                nsfasCol, nsfasVal, foundCol, foundVal, distCol, distVal,
-                credJoinCol, credCourseCol, crseCourseCol, crseNameCol);
-            cmd.CommandTimeout = 600;
-            await cmd.ExecuteNonQueryAsync();
-        }
-
-        private static List<string> Rule18ExportHeaders() =>
-            new()
-            {
-                "Extract_Number", "Control_Type", "Student_Number", "Student_Qualification_Code",
-                "NSFAS_Status", "Attendance_Mode", "Qualification_Fulfilled_Indicator",
-                "CREG_Qualification_Code", "CREG_Course_Code", "CRSE_Course_Code",
-                "Foundation_Course_Indicator", "CRSE_058", "Validation_Result"
-            };
-
-        private static void Rule18WriteSummarySheet(XLWorkbook wb, Rule18ValidationSummary summary)
-        {
-            var ws = wb.Worksheets.Add("Summary");
-            Rule18StyleTitle(ws, 1, "HEMIS RULE 18: NSFAS STUDENT VALIDATION", 2);
-            var data = new[]
-            {
-                ("Database", summary.Database),
-                ("STUD Table", summary.StudTable),
-                ("Bridge Table", summary.BridgeTable),
-                ("CRSE Table", summary.CrseTable),
-                ("Validation Date", summary.Timestamp),
-                ("Join Path", summary.TableLinkageText),
-                ("", ""),
-                ("RESULT SUMMARY", ""),
-                ("NSFAS Population", summary.NsfasPopulationCount.ToString("N0")),
-                ("Control Result Rows", summary.TotalValidated.ToString("N0")),
-                ("Matching Rows", summary.PassCount.ToString("N0")),
-                ("Non-Matching Rows", summary.FailCount.ToString("N0")),
-                ("Exception Rate", $"{summary.ExceptionRate:F2}%"),
-                ("Status", summary.Status),
-            };
-            var row = 2;
-            foreach (var (label, value) in data)
-            {
-                if (label == "RESULT SUMMARY")
-                {
-                    var hdr = ws.Cell(row, 1);
-                    hdr.Value = label;
-                    hdr.Style.Font.Bold = true;
-                    hdr.Style.Fill.BackgroundColor = XLColor.FromHtml("#8B0000");
-                    hdr.Style.Font.FontColor = XLColor.White;
-                    ws.Range(row, 1, row, 2).Merge();
-                }
-                else if (label != "")
-                {
-                    ws.Cell(row, 1).Value = label;
-                    ws.Cell(row, 1).Style.Font.Bold = true;
-                    ws.Cell(row, 1).Style.Fill.BackgroundColor = XLColor.FromHtml("#F5F5F5");
-                    ws.Cell(row, 2).Value = value;
-                }
-                row++;
-            }
-            ws.Column(1).Width = 30;
-            ws.Column(2).Width = 70;
-        }
-
-        private static async Task Rule18WriteControlSheetAsync(
-            XLWorkbook wb, SqlConnection conn,
-            string sheetName, string title, string controlType, List<string> headers)
-        {
-            const int MaxDataRows = 1_048_573;
-
-            var sql = $@"
-SELECT
-    ROW_NUMBER() OVER (ORDER BY Student_Number, Student_Qualification_Code, CREG_Course_Code) AS Extract_Number,
-    Control_Type, Student_Number, Student_Qualification_Code, NSFAS_Status, Attendance_Mode,
-    Qualification_Fulfilled_Indicator, CREG_Qualification_Code,
-    CREG_Course_Code, CRSE_Course_Code, Foundation_Course_Indicator, CRSE_058, Validation_Result
-FROM #Rule18_Validation
-WHERE Control_Type = '{controlType}'
-ORDER BY Student_Number, Student_Qualification_Code, CREG_Course_Code;";
-
-            await using var cmd = conn.CreateConfiguredCommand();
-            cmd.CommandText = sql;
-            cmd.CommandTimeout = 600;
-
-            var ws = Rule18NewControlSheet(wb, sheetName, title, headers);
-            var dataRow = 3;
-            var part = 1;
-
-            await using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-            {
-                if (dataRow > MaxDataRows + 2)
-                {
-                    Rule18SetColWidths(ws);
-                    part++;
-                    ws = Rule18NewControlSheet(wb, Rule18OverflowSheetName(sheetName, part), $"{title} (Part {part})", headers);
-                    dataRow = 3;
-                }
-                for (var i = 0; i < reader.FieldCount; i++)
-                    ws.Cell(dataRow, i + 1).Value = reader.IsDBNull(i) ? "" : (reader.GetValue(i)?.ToString() ?? "");
-                dataRow++;
-            }
-            Rule18SetColWidths(ws);
-        }
-
-        private static string Rule18OverflowSheetName(string baseName, int part)
-        {
-            var suffix = $" Pt {part}";
-            var max = 31 - suffix.Length;
-            return (baseName.Length > max ? baseName[..max] : baseName) + suffix;
-        }
-
-        private static IXLWorksheet Rule18NewControlSheet(XLWorkbook wb, string sheetName, string title, List<string> headers)
-        {
-            var ws = wb.Worksheets.Add(sheetName);
-            Rule18StyleTitle(ws, 1, title, headers.Count);
-            for (var i = 0; i < headers.Count; i++)
-            {
-                var cell = ws.Cell(2, i + 1);
-                cell.Value = headers[i];
-                cell.Style.Font.Bold = true;
-                cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#8B0000");
-                cell.Style.Font.FontColor = XLColor.White;
-            }
-            return ws;
-        }
-
-        private static void Rule18StyleTitle(IXLWorksheet ws, int row, string title, int colSpan)
-        {
-            ws.Range(row, 1, row, colSpan).Merge();
-            var cell = ws.Cell(row, 1);
-            cell.Value = title;
-            cell.Style.Font.Bold = true;
-            cell.Style.Font.FontSize = 14;
-            cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#8B0000");
-            cell.Style.Font.FontColor = XLColor.White;
-            cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
-        }
-
-        private static void Rule18SetColWidths(IXLWorksheet ws)
-        {
-            ws.Column(1).Width = 14;
-            ws.Column(2).Width = 28;
-            ws.Column(3).Width = 16;
-            ws.Column(4).Width = 28;
-            ws.Column(5).Width = 16;
-            ws.Column(6).Width = 16;
-            ws.Column(7).Width = 14;
-            ws.Column(8).Width = 14;
-            ws.Column(9).Width = 16;
-            ws.Column(10).Width = 16;
-            ws.Column(11).Width = 16;
-            ws.Column(12).Width = 14;
-            ws.Column(13).Width = 14;
-        }
-
-        private static string Rule18CsvEscape(string value)
-        {
-            if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
-                return $"\"{value.Replace("\"", "\"\"")}\"";
-            return value;
+            catch { return null; }
         }
     }
 }
-
-

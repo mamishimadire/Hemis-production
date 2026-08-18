@@ -10,9 +10,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
 
         // QUAL table
         public string QualTable { get; set; } = "dbo_QUAL";
@@ -57,9 +54,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule38VerifyRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
+        public int ClientId { get; set; }
         public string QualTable { get; set; } = "dbo_QUAL";
         public string PqmTable { get; set; } = "PQM";
         public string QualIdCol { get; set; } = "_001";
@@ -90,9 +85,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule38GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public string TableRole { get; set; } = "";  // "qual" | "pqm"
     }
@@ -165,7 +158,6 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
 
         // Config stored with results
         public string QualTable { get; set; } = "dbo_QUAL";
@@ -199,6 +191,8 @@ namespace HemisAudit.ViewModels
         public List<Rule38ValidationRow> ValidationRows { get; set; } = new();
         public bool IsPreviewOnly { get; set; }
         public int PreviewLimit { get; set; }
+        public bool RowsTruncated { get; set; }
+        public string? Warning { get; set; }
         public string? Error { get; set; }
     }
 
@@ -207,9 +201,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string QualTable { get; set; } = "dbo_QUAL";
         public string QualIdCol { get; set; } = "_001";
         public string QualNameCol { get; set; } = "_003";
@@ -262,7 +253,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule38ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();

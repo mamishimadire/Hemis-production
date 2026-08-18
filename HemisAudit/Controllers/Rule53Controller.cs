@@ -116,10 +116,10 @@ namespace HemisAudit.Controllers
                 (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
 
-            review.GeneratedSql = await _rule53.GenerateSqlAsync(new Rule53ValidationRequest
+            review.GeneratedSql = _rule53.GenerateValidationSql(new Rule53ValidationRequest
             {
-                ClientId = review.ClientId, Server = review.SourceServer, Database = review.Summary.Database,
-                ValpacTable = review.Summary.ValpacTable, ProdTable = review.Summary.ProdTable,
+                ClientId = review.ClientId,
+                ValpacTable = review.Summary!.ValpacTable, ProdTable = review.Summary.ProdTable,
                 ValpacSubjCol = review.Summary.ValpacSubjCol, ProdSubjCol = review.Summary.ProdSubjCol
             });
 
@@ -127,20 +127,15 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule53.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule53.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule53.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetColumns([FromBody] Rule53GetColumnsRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule53.GetColumnsAsync(model.ClientId, model.TableName, model.TableRole)));
 
         [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] Rule53VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                await _rule53.GetColumnsAsync(request.Server, request.Database, request.Driver, request.ValpacTable)));
-
-        [HttpPost]
-        public async Task<IActionResult> VerifyTables([FromBody] Rule53VerifyRequest request) =>
+        public async Task<IActionResult> VerifyTables([FromBody] Rule53ValidationRequest request) =>
             Json(await RequireDataAnalystAsync(async () => await _rule53.VerifyTablesAsync(request)));
 
         [HttpPost]
@@ -225,7 +220,7 @@ namespace HemisAudit.Controllers
             }
             catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
 
-            var workspace = await _rule53.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email, includeSummary: false);
+            var workspace = await _rule53.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
             return Json(new { success = true, message = "Signoff saved.", resultsVisible, workspace });
@@ -251,7 +246,7 @@ namespace HemisAudit.Controllers
             try { await _rule53.RemoveSignoffAsync(model.RunId.Value, user!.Email!); }
             catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
 
-            var workspace = await _rule53.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email, includeSummary: false);
+            var workspace = await _rule53.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
             await _audit.LogAsync("remove_validation_signoff", $"{review.CurrentUserEngagementRole} removed signoff for Rule 53 run {model.RunId.Value}", user?.Id, user?.Email);
@@ -265,8 +260,9 @@ namespace HemisAudit.Controllers
             var role = await GetCurrentSystemRoleAsync(user);
             if (request.ClientId > 0 && !await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
                 return Json(new Rule53SqlResult { Success = false, Error = "You cannot access this engagement." });
-            return Json(await RequireDataAnalystAsync(async () => new Rule53SqlResult { Success = true, Sql = await _rule53.GenerateSqlAsync(request) }));
+            return Json(await RequireDataAnalystAsync(async () => new Rule53SqlResult { Success = true, Sql = _rule53.GenerateValidationSql(request) }));
         }
+
         [HttpPost]
         public async Task<IActionResult> GenerateRScript([FromBody] Rule53ValidationRequest request)
         {
@@ -331,7 +327,8 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            return File(_export.ExportRule53Excel(review.Summary), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule53_CRSE_Production_Run_{runId}.xlsx");
+            var fullSummary = await _rule53.GetStoredSummaryAsync(runId) ?? review.Summary!;
+            return File(_export.ExportRule53Excel(fullSummary), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule53_CRSE_Production_Run_{runId}.xlsx");
         }
 
         [HttpGet]
@@ -339,7 +336,8 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            return File(_export.ExportRule53Csv(review.Summary), "text/csv", $"Rule53_CRSE_Production_Run_{runId}.csv");
+            var fullSummary = await _rule53.GetStoredSummaryAsync(runId) ?? review.Summary!;
+            return File(_export.ExportRule53Csv(fullSummary), "text/csv", $"Rule53_CRSE_Production_Run_{runId}.csv");
         }
 
         [HttpGet]
@@ -347,10 +345,10 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var sql = await _rule53.GenerateSqlAsync(new Rule53ValidationRequest
+            var sql = _rule53.GenerateValidationSql(new Rule53ValidationRequest
             {
-                ClientId = review.ClientId, Server = review.SourceServer, Database = review.Summary.Database,
-                ValpacTable = review.Summary.ValpacTable, ProdTable = review.Summary.ProdTable,
+                ClientId = review.ClientId,
+                ValpacTable = review.Summary!.ValpacTable, ProdTable = review.Summary.ProdTable,
                 ValpacSubjCol = review.Summary.ValpacSubjCol, ProdSubjCol = review.Summary.ProdSubjCol
             });
             return File(_export.ExportSql(sql), "application/sql", $"Rule53_CRSE_Production_{runId}.sql");
@@ -376,16 +374,16 @@ namespace HemisAudit.Controllers
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
             if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase)) return Json(new { success = false, error = "Only the assigned data analyst can download the SQL script." });
-            return File(_export.ExportSql(await _rule53.GenerateSqlAsync(request)), "application/sql", $"Rule53_CRSE_Production_{Ts()}.sql");
+            return File(_export.ExportSql(_rule53.GenerateValidationSql(request)), "application/sql", $"Rule53_CRSE_Production_{Ts()}.sql");
         }
 
-        // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Private helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        // ─── Private helpers ─────────────────────────────────────────────────
 
         private async Task<Rule53RunReviewViewModel?> LoadAuthorizedSavedRunAsync(int runId, bool requireDownloadAccess)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
-            var review = await _rule53.GetSavedRunAsync(runId, user?.Email, includeFullResults: requireDownloadAccess);
+            var review = await _rule53.GetSavedRunAsync(runId, user?.Email);
             if (review == null) { TempData["Error"] = "Saved validation run was not found."; return null; }
             if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role)) { TempData["Error"] = "You do not have access."; return null; }
             if (!CanViewSavedRun(review, role)) { TempData["Error"] = "Only analyst-signed results are available."; return null; }
@@ -398,16 +396,16 @@ namespace HemisAudit.Controllers
             var user = await _users.GetUserAsync(User);
             if (summary.SavedRunId is int savedRunId && savedRunId > 0)
             {
-                var review = await _rule53.GetSavedRunAsync(savedRunId, user?.Email, includeFullResults: true);
-                if (review?.Summary != null) return review.Summary;
+                var stored = await _rule53.GetStoredSummaryAsync(savedRunId);
+                if (stored != null) return stored;
             }
             if (summary.ClientId > 0)
             {
-                var workspace = await _rule53.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email, includeSummary: false);
+                var workspace = await _rule53.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email);
                 if (workspace?.RunId is int workspaceRunId && workspaceRunId > 0)
                 {
-                    var review = await _rule53.GetSavedRunAsync(workspaceRunId, user?.Email, includeFullResults: true);
-                    if (review?.Summary != null) return review.Summary;
+                    var stored = await _rule53.GetStoredSummaryAsync(workspaceRunId);
+                    if (stored != null) return stored;
                 }
             }
             return summary;

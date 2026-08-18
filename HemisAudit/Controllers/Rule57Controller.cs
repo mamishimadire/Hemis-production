@@ -141,7 +141,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = _rule57.GenerateSql(new Rule57ValidationRequest
             {
                 ClientId               = review.ClientId,
-                Database               = review.Summary.Database,
                 StudTable              = review.Summary.StudTable,
                 StudIdCol              = review.Summary.StudIdCol,
                 StudCodeCol            = review.Summary.StudCodeCol,
@@ -156,20 +155,16 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule57.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule57.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule57.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule57GetColumnsRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule57.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName, model.TableRole)));
+                await _rule57.GetColumnsAsync(model.ClientId, model.TableName, model.TableRole)));
 
         [HttpPost]
-        public async Task<IActionResult> VerifyTables([FromBody] Rule57VerifyRequest request) =>
+        public async Task<IActionResult> VerifyTables([FromBody] Rule57ValidationRequest request) =>
             Json(await RequireDataAnalystAsync(async () => await _rule57.VerifyDataAsync(request)));
 
         [HttpPost]
@@ -361,7 +356,7 @@ namespace HemisAudit.Controllers
             if (request.ClientId > 0 && !await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
                 return Json(new SqlResult { Success = false, Error = "You cannot access this engagement." });
 
-            return Json(RequireDataAnalystResult(() => new SqlResult { Success = true, Sql = _rule57.GenerateSql(request) }));
+            return Json(await RequireDataAnalystAsync(async () => new SqlResult { Success = true, Sql = _rule57.GenerateSql(request) }));
         }
         [HttpPost]
         public async Task<IActionResult> GenerateRScript([FromBody] Rule57ValidationRequest request)
@@ -372,7 +367,7 @@ namespace HemisAudit.Controllers
             if (request.ClientId > 0 && !await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
                 return Json(new SqlResult { Success = false, Error = "You cannot access this engagement." });
 
-            return Json(RequireDataAnalystResult(() => new SqlResult
+            return Json(await RequireDataAnalystAsync(async () => new SqlResult
             {
                 Success = true,
                 Sql = Rule57RScriptGenerator.Generate(request) + RScriptScaffold.BuildAutoExportFooter("Rule57")
@@ -518,7 +513,6 @@ namespace HemisAudit.Controllers
             var request = new Rule57ValidationRequest
             {
                 ClientId               = review.ClientId,
-                Database               = review.Summary.Database,
                 StudTable              = review.Summary.StudTable,
                 StudIdCol              = review.Summary.StudIdCol,
                 StudCodeCol            = review.Summary.StudCodeCol,
@@ -569,7 +563,7 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule57_RegistrationAgreement_{Ts()}.sql");
         }
 
-        // Ã¢â€â‚¬Ã¢â€â‚¬ Private helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        // ─── Private helpers ─────────────────────────────────────────────────
 
         private async Task<Rule57RunReviewViewModel?> LoadAuthorizedSavedRunAsync(int runId, bool requireDownloadAccess)
         {
@@ -656,15 +650,6 @@ namespace HemisAudit.Controllers
             if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
                 return new { success = false, error = "Only the assigned data analyst can configure or run Rule 57." };
             return await action();
-        }
-
-        private object RequireDataAnalystResult(Func<SqlResult> factory)
-        {
-            var user = _users.GetUserAsync(User).GetAwaiter().GetResult();
-            var role = GetCurrentSystemRoleAsync(user).GetAwaiter().GetResult();
-            if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
-                return new { success = false, error = "Only the assigned data analyst can generate the SQL script." };
-            return factory();
         }
 
         private static string Ts() => DateTime.Now.ToString("yyyyMMdd_HHmmss");

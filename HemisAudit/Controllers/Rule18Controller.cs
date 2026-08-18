@@ -151,8 +151,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = await _rule18.GenerateSqlAsync(new Rule18ValidationRequest
             {
                 ClientId = review.ClientId,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 BridgeTable = review.Summary.BridgeTable,
                 CrseTable = review.Summary.CrseTable,
@@ -170,22 +168,17 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule18.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule18.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule18.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumnValues([FromBody] Rule18ColumnValuesRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule18.GetColumnValuesAsync(model.Server, model.Database, model.Driver, model.TableName, model.ColumnName)));
+                await _rule18.GetColumnValuesAsync(model.ClientId, model.TableName, model.ColumnName)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTableColumns([FromBody] Rule18ColumnValuesRequest model) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                await _rule18.GetTableColumnsListAsync(model.Server, model.Database, model.Driver, model.TableName)));
+        public async Task<IActionResult> GetColumns([FromBody] Rule16ColumnsRequest request) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule18.GetColumnsAsync(request.ClientId, request.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule18VerifyRequest request) =>
@@ -576,22 +569,22 @@ namespace HemisAudit.Controllers
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
-            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true, includeFullResults: false);
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true, includeFullResults: true);
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = await _rule18.ExportFullExcelAsync(review.Summary, review.SourceServer);
+            var bytes = _export.ExportExcel(review.Summary);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule18_NSFAS_Population_Run_{runId}.xlsx");
         }
 
         [HttpGet]
         public async Task<IActionResult> DownloadSavedCsv(int runId)
         {
-            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true, includeFullResults: false);
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true, includeFullResults: true);
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = await _rule18.ExportFullCsvAsync(review.Summary, review.SourceServer);
+            var bytes = _export.ExportCsv(review.Summary);
             return File(bytes, "text/csv", $"Rule18_NSFAS_Population_Run_{runId}.csv");
         }
 
@@ -605,8 +598,6 @@ namespace HemisAudit.Controllers
             var request = new Rule18ValidationRequest
             {
                 ClientId = review.ClientId,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 BridgeTable = review.Summary.BridgeTable,
                 CrseTable = review.Summary.CrseTable
@@ -619,16 +610,16 @@ namespace HemisAudit.Controllers
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule18ValidationSummary summary)
         {
-            var (resolved, server) = await ResolveExportInfoAsync(summary);
-            var bytes = await _rule18.ExportFullExcelAsync(resolved, server);
+            var resolved = await ResolveExportInfoAsync(summary);
+            var bytes = _export.ExportExcel(resolved);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule18_NSFAS_Population_{Ts()}.xlsx");
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule18ValidationSummary summary)
         {
-            var (resolved, server) = await ResolveExportInfoAsync(summary);
-            var bytes = await _rule18.ExportFullCsvAsync(resolved, server);
+            var resolved = await ResolveExportInfoAsync(summary);
+            var bytes = _export.ExportCsv(resolved);
             return File(bytes, "text/csv", $"Rule18_NSFAS_Population_{Ts()}.csv");
         }
 
@@ -710,15 +701,15 @@ namespace HemisAudit.Controllers
             return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
         }
 
-        private async Task<(Rule18ValidationSummary summary, string server)> ResolveExportInfoAsync(Rule18ValidationSummary summary)
+        private async Task<Rule18ValidationSummary> ResolveExportInfoAsync(Rule18ValidationSummary summary)
         {
             var user = await _users.GetUserAsync(User);
 
             if (summary.SavedRunId is int savedRunId && savedRunId > 0)
             {
-                var review = await _rule18.GetSavedRunAsync(savedRunId, user?.Email, includeFullResults: false);
+                var review = await _rule18.GetSavedRunAsync(savedRunId, user?.Email, includeFullResults: true);
                 if (review?.Summary != null)
-                    return (review.Summary, review.SourceServer);
+                    return review.Summary;
             }
 
             if (summary.ClientId > 0)
@@ -726,13 +717,13 @@ namespace HemisAudit.Controllers
                 var workspace = await _rule18.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email, includeSummary: false);
                 if (workspace?.RunId is int workspaceRunId && workspaceRunId > 0)
                 {
-                    var review = await _rule18.GetSavedRunAsync(workspaceRunId, user?.Email, includeFullResults: false);
+                    var review = await _rule18.GetSavedRunAsync(workspaceRunId, user?.Email, includeFullResults: true);
                     if (review?.Summary != null)
-                        return (review.Summary, review.SourceServer);
+                        return review.Summary;
                 }
             }
 
-            return (summary, summary.Server);
+            return summary;
         }
 
         private async Task<object> RequireDataAnalystAsync<T>(Func<Task<T>> action)

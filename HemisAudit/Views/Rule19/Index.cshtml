@@ -117,30 +117,16 @@
         <div class="accordion-item">
             <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
                 <span class="acc-icon">DB</span>
-                <span>Database Connection</span>
+                <span>Engagement Dataset</span>
                 <span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-connection">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label for="server">Server Name</label>
-                        <input id="server" type="text" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                    </div>
-                    <div class="field-group">
-                        <label for="driver">Driver</label>
-                        <select id="driver">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group">
-                        <label for="database">Database</label>
-                        <select id="database"></select>
-                    </div>
+                <div class="alert alert--info" id="datasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
                 <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                    <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
+                    <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                    <button type="button" class="btn btn-primary" id="connectBtn">Refresh Tables</button>
                     <button type="button" class="btn btn-info" id="verifyBtn">Verify Tables</button>
                 </div>
                 <div id="connectionOutput" class="status-output"></div>
@@ -381,9 +367,8 @@
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'),
-        driver: document.getElementById('driver'),
-        database: document.getElementById('database'),
+        datasetStatusAlert: document.getElementById('datasetStatusAlert'),
+        datasetsLink: document.getElementById('datasetsLink'),
         studTable: document.getElementById('studTable'),
         qualTable: document.getElementById('qualTable'),
         credTable: document.getElementById('credTable'),
@@ -535,9 +520,6 @@
         return {
             clientId: parseInt(els.clientId.value || '0', 10) || 0,
             runId: state.currentRunId,
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
             studTable: els.studTable.value,
             qualTable: els.qualTable.value,
             qualCodeColumn: els.qualCodeColumn.value,
@@ -663,7 +645,6 @@
             <div class="card" style="padding:20px">
                 <h3 class="section-title" style="margin-top:0">Run Summary</h3>
                 <div class="rule19-summary-grid">
-                    <div><div class="rule19-muted">Database</div><div>${htmlEscape(summary.database)}</div></div>
                     <div><div class="rule19-muted">Linkage</div><div>${htmlEscape(summary.tableLinkageText)}</div></div>
                     <div><div class="rule19-muted">Fulfilled Rule</div><div>${htmlEscape(summary.fulfilledColumn)} = '${htmlEscape(summary.fulfilledValue)}'</div></div>
                     <div><div class="rule19-muted">Qualification Type Rule</div><div>${htmlEscape(summary.qualTypeColumn)} IN (${htmlEscape(summary.mdTypesText)})</div></div>
@@ -941,9 +922,7 @@
         state.resultsVisible = !!resultsVisible;
         state.isDirty = false;
 
-        els.server.value = workspace.server || '';
-        els.driver.value = workspace.driver || 'ODBC Driver 17 for SQL Server';
-        ensureOption(els.database, workspace.database || '');
+        if (els.datasetsLink) els.datasetsLink.href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
         ensureOption(els.studTable, workspace.studTable || 'dbo_STUD');
         ensureOption(els.qualTable, workspace.qualTable || 'dbo_QUAL');
         ensureOption(els.qualCodeColumn, workspace.qualCodeColumn || '_001');
@@ -970,6 +949,14 @@
         if (pqmTypeEl)  ensureOption(pqmTypeEl,  workspace.pqmQualTypeColumn || '');
         els.mdTypesText.value = workspace.mdTypesText || defaultMdTypes;
         els.workspaceSignoffComment.value = workspace.currentUserSignoffComment || '';
+
+        loadTables({ silent: true }).then(() => {
+            ensureOption(els.studTable, workspace.studTable || 'dbo_STUD');
+            ensureOption(els.qualTable, workspace.qualTable || 'dbo_QUAL');
+            if (credTableEl) ensureOption(credTableEl, workspace.credTable || '');
+            if (crseTableEl) ensureOption(crseTableEl, workspace.crseTable || '');
+            if (pqmTableEl) ensureOption(pqmTableEl, workspace.pqmTable || '');
+        }).catch(() => { /* best-effort background refresh */ });
 
         updateWorkspaceCard(workspace);
 
@@ -1012,49 +999,21 @@
         hydrateWorkspace(data.workspace, data.resultsVisible);
     }
 
-    async function connectDatabase() {
-        const server = els.server.value.trim();
-        if (!server) {
-            setAlert(els.connectionOutput, 'warning', 'Enter the SQL Server name first.');
-            return;
-        }
+    async function loadTables(options = {}) {
+        if (!state.clientId) return;
 
-        showSpinner('Loading databases...');
-        try {
-            const data = await postJson(`${apiBasePath}/GetDatabases`, {
-                server,
-                driver: els.driver.value
-            });
-            if (!data.success) {
-                throw new Error(data.error || 'Failed to load databases.');
-            }
-
-            populateSelect(els.database, data.databases || []);
-            setAlert(els.connectionOutput, 'success', `Loaded ${(data.databases || []).length} database(s).`);
-            if ((data.databases || []).length) {
-                await loadTables();
-            }
-        } finally {
-            hideSpinner();
-        }
-    }
-
-    async function loadTables() {
-        if (!els.database.value) return;
-
-        const data = await postJson(`${apiBasePath}/GetTables`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value
-        });
+        const data = await postJson(`${apiBasePath}/GetTables`, { clientId: state.clientId });
         if (!data.success) {
+            if (!options.silent && els.datasetStatusAlert) {
+                els.datasetStatusAlert.className = 'alert alert--error';
+                els.datasetStatusAlert.textContent = data.error || 'Failed to load tables.';
+            }
             throw new Error(data.error || 'Failed to load tables.');
         }
 
         populateSelect(els.studTable, data.tables || [], data.autoStudTable || 'dbo_STUD');
         populateSelect(els.qualTable, data.tables || [], data.autoQualTable || 'dbo_QUAL');
 
-        const optionalPrefix = '<option value="">Select table (optional)</option>';
         const pqmSel = document.getElementById('pqmTable');
         if (pqmSel) {
             pqmSel.innerHTML = '<option value="">Select PQM table (optional)</option>';
@@ -1082,16 +1041,21 @@
         }
         await loadStudColumns();
         await loadQualColumns();
-        setAlert(els.configOutput, 'success', `Loaded ${(data.tables || []).length} table(s).`);
+
+        if (!options.silent) {
+            if (els.datasetStatusAlert) {
+                els.datasetStatusAlert.className = 'alert alert--success';
+                els.datasetStatusAlert.textContent = `Loaded ${(data.tables || []).length} table(s) from this engagement's dataset.`;
+            }
+            setAlert(els.configOutput, 'success', `Loaded ${(data.tables || []).length} table(s).`);
+        }
     }
 
     async function loadStudColumns() {
         if (!els.studTable.value) return;
 
         const data = await postJson(`${apiBasePath}/GetColumns`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
+            clientId: state.clientId,
             tableName: els.studTable.value
         });
         if (!data.success) {
@@ -1107,9 +1071,7 @@
         if (!els.qualTable.value) return;
 
         const data = await postJson(`${apiBasePath}/GetColumns`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
+            clientId: state.clientId,
             tableName: els.qualTable.value
         });
         if (!data.success) {
@@ -1124,8 +1086,7 @@
     async function loadCredColumns(preferredJoinCol, preferredCourseCol) {
         if (!els.credTable?.value) return;
         const data = await postJson(`${apiBasePath}/GetColumns`, {
-            server: els.server.value.trim(), database: els.database.value,
-            driver: els.driver.value, tableName: els.credTable.value
+            clientId: state.clientId, tableName: els.credTable.value
         });
         if (!data.success) return;
         const joinSel = document.getElementById('credJoinCol');
@@ -1137,8 +1098,7 @@
     async function loadCrseColumns(preferredCourseCol) {
         if (!els.crseTable?.value) return;
         const data = await postJson(`${apiBasePath}/GetColumns`, {
-            server: els.server.value.trim(), database: els.database.value,
-            driver: els.driver.value, tableName: els.crseTable.value
+            clientId: state.clientId, tableName: els.crseTable.value
         });
         if (!data.success) return;
         const courseSel = document.getElementById('crseCourseCol');
@@ -1150,9 +1110,7 @@
         if (!pqmSel?.value) return;
 
         const data = await postJson(`${apiBasePath}/GetColumns`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
+            clientId: state.clientId,
             tableName: pqmSel.value
         });
         if (!data.success) return;
@@ -1172,9 +1130,7 @@
 
         try {
             const data = await postJson(`${apiBasePath}/LoadFilterValues`, {
-                server: els.server.value.trim(),
-                database: els.database.value,
-                driver: els.driver.value,
+                clientId: state.clientId,
                 studTable: els.studTable.value,
                 fulfilledColumn: els.fulfilledColumn.value
             });
@@ -1357,10 +1313,6 @@
         state.uiMutationVersion++;
         await fetchWorkspace();
     });
-    els.database.addEventListener('change', async () => {
-        await markWorkspaceDirty();
-        await loadTables();
-    });
     els.studTable.addEventListener('change', async () => {
         await markWorkspaceDirty();
         await loadStudColumns();
@@ -1395,7 +1347,7 @@
     });
     document.getElementById('pqmQualNameColumn')?.addEventListener('change', markWorkspaceDirty);
     document.getElementById('pqmQualTypeColumn')?.addEventListener('change', markWorkspaceDirty);
-    document.getElementById('connectBtn').addEventListener('click', () => connectDatabase().catch(err => {
+    document.getElementById('connectBtn').addEventListener('click', () => loadTables().catch(err => {
         hideSpinner();
         setAlert(els.connectionOutput, 'error', htmlEscape(err.message));
     }));

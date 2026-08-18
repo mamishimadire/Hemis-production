@@ -14,9 +14,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
         // QUAL table
         public string QualTable { get; set; } = "";
         public string QualIdCol { get; set; } = "";
@@ -150,7 +147,6 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         // QUAL
         public string QualTable { get; set; } = "";
         public string QualIdCol { get; set; } = "";
@@ -192,9 +188,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule11VerifyRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string QualTable { get; set; } = "";
         public string CesmTable { get; set; } = "";
         public string PqmTable { get; set; } = "";
@@ -218,9 +212,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule11FilterValueRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string QualTable { get; set; } = "";
         public string ApprovalColumn { get; set; } = "";
     }
@@ -252,9 +244,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule11GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public string TableRole { get; set; } = "";
     }
@@ -274,9 +264,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         // QUAL
         public string QualTable { get; set; } = "";
         public string QualIdCol { get; set; } = "";
@@ -334,7 +321,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule11ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();

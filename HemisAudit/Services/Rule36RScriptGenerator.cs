@@ -7,7 +7,7 @@ public static class Rule36RScriptGenerator
     private static string RString(string? value) =>
         (value ?? "").Replace("\\", "\\\\").Replace("'", "\\'");
 
-    public static string Generate(ValidationRequest req)
+    public static string Generate(Rule36ValidationRequest req)
     {
         var studTable     = RString(req.StudTable);
         var deceasedTable = RString(req.DeceasedTable);

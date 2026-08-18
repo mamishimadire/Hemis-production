@@ -4,9 +4,6 @@ namespace HemisAudit.ViewModels
     {
         public int    ClientId   { get; set; }
         public int?   RunId      { get; set; }
-        public string Server     { get; set; } = "";
-        public string Database   { get; set; } = "";
-        public string Driver     { get; set; } = "ODBC Driver 17 for SQL Server";
         // STUD table
         public string StudTable       { get; set; } = "dbo_STUD";
         public string StudKey         { get; set; } = "_001";
@@ -40,9 +37,6 @@ namespace HemisAudit.ViewModels
         public string QualId          { get; set; } = "";
         public string QualName        { get; set; } = "";
         public string PqmName         { get; set; } = "";
-        // Legacy export compatibility; Rule 46 no longer uses CRED/CRSE.
-        public string CredId          { get; set; } = "";
-        public string CredCourse      { get; set; } = "";
         public string ValidationResult{ get; set; } = "PASS";
         public string ResultDetail    { get; set; } = "";
     }
@@ -63,9 +57,9 @@ namespace HemisAudit.ViewModels
     {
         public bool    Success       { get; set; }
         public string? Error         { get; set; }
+        public string? Warning       { get; set; }
         public string  Status        { get; set; } = "";
         public string  Timestamp     { get; set; } = "";
-        public string  Database      { get; set; } = "";
         public int     ClientId      { get; set; }
         public int?    SavedRunId    { get; set; }
         // config echo
@@ -99,9 +93,6 @@ namespace HemisAudit.ViewModels
     {
         public int    ClientId   { get; set; }
         public int?   RunId      { get; set; }
-        public string Server     { get; set; } = "";
-        public string Database   { get; set; } = "";
-        public string Driver     { get; set; } = "ODBC Driver 17 for SQL Server";
         public string StudTable       { get; set; } = "dbo_STUD";
         public string StudKey         { get; set; } = "_001";
         public string StudIdCol       { get; set; } = "_008";
@@ -145,7 +136,6 @@ namespace HemisAudit.ViewModels
         public bool   IsCurrentRun   { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer   { get; set; } = "";
         public string CurrentUserEngagementRole  { get; set; } = "";
         public bool   HasDataAnalystSignoff      { get; set; }
         public bool   CurrentUserHasSignedOff    { get; set; }
@@ -180,9 +170,17 @@ namespace HemisAudit.ViewModels
 
     public class Rule46ColumnDiscoveryResult
     {
-        public bool         Success  { get; set; }
-        public List<string> Columns  { get; set; } = new();
-        public string?      Error    { get; set; }
+        public bool         Success      { get; set; }
+        public List<string> Columns      { get; set; } = new();
+        public string?      AutoSelected { get; set; }
+        public string?      Error        { get; set; }
+    }
+
+    public class Rule46GetColumnsRequest
+    {
+        public int    ClientId  { get; set; }
+        public string TableName { get; set; } = "";
+        public string TableRole { get; set; } = "";
     }
 
     public class Rule46VerifyResult

@@ -19,7 +19,6 @@
     var sqlRequestJson = System.Text.Json.JsonSerializer.Serialize(new Rule64ValidationRequest
     {
         ClientId = Model.ClientId,
-        Database = summary.Database,
         StudTable = summary.StudTable,
         CregTable = summary.CregTable,
         ProdTable = summary.ProdTable,
@@ -127,10 +126,6 @@
         <div>
             <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Rule</div>
             <div>Rule 64 - STUD to CREG Student Number Validation</div>
-        </div>
-        <div>
-            <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Database</div>
-            <div>@summary.Database</div>
         </div>
         <div>
             <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">STUD Table</div>

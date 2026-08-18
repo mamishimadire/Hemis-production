@@ -44,7 +44,6 @@
 <div class="card" style="padding:20px;margin-bottom:20px">
     <h3 class="section-title" style="margin-top:0">Run Summary</h3>
     <div class="form-grid">
-        <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Database</div><div>@Model.Summary.Database</div></div>
         <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">STUD Table</div><div>@Model.Summary.StudTable</div></div>
         <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">CREG Table</div><div>@Model.Summary.CregTable</div></div>
         <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Funding Source Filter</div><div style="font-size:12px"><code>@Model.Summary.FundingSourceCol</code> IN (@(string.IsNullOrWhiteSpace(Model.Summary.FundingSourceValues) ? "ALL — no filter applied" : Model.Summary.FundingSourceValues))</div></div>
@@ -110,6 +109,7 @@
                 <tr>
                     <th>#</th>
                     <th>STUD [_007] Student No</th>
+                    <th>Qual Code [@Model.Summary.StudQualCol]</th>
                     <th>Funding Source [@Model.Summary.FundingSourceCol]</th>
                     <th>CREG [_007]</th>
                     <th>Result</th>
@@ -123,6 +123,7 @@
                     <tr style="background:@(row.ValidationResult == "FAIL" ? "#FFF3F3" : "#F3FFF3")">
                         <td>@row.ValidationNumber</td>
                         <td>@DV("STUD_NO")</td>
+                        <td>@DV("QUAL_CODE")</td>
                         <td>@DV("FUNDING_SOURCE")</td>
                         <td>@DV("CREG_STUD_NO")</td>
                         <td><span class="badge @(row.ValidationResult == "FAIL" ? "badge--fail" : "badge--pass")">@row.ValidationResult</span></td>

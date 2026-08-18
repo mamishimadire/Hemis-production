@@ -4,10 +4,9 @@ namespace HemisAudit.Services
 {
     public interface IRule57Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<Rule57TableListResult> GetTablesAsync(string server, string database, string driver);
-        Task<ColumnListResult> GetColumnsAsync(string server, string database, string driver, string tableName, string tableRole);
-        Task<Rule57VerifyResult> VerifyDataAsync(Rule57VerifyRequest request);
+        Task<Rule57TableListResult> GetTablesAsync(int clientId);
+        Task<Rule57ColumnDiscoveryResult> GetColumnsAsync(int clientId, string tableName, string tableRole);
+        Task<Rule57VerifyResult> VerifyDataAsync(Rule57ValidationRequest request);
         Task<Rule57ValidationSummary> RunValidationAsync(Rule57ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<int?> GetClientIdForRunAsync(int runId);
         Task<Rule57WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null);

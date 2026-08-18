@@ -8,7 +8,7 @@ namespace HemisAudit.Services
 {
     public interface IExportService
     {
-        byte[] ExportRule36Excel(ValidationSummary summary);
+        byte[] ExportRule36Excel(Rule36ValidationSummary summary);
         byte[] ExportRule37Excel(Rule37ValidationSummary summary);
         byte[] ExportRule37Csv(Rule37ValidationSummary summary, bool exceptionsOnly = false);
         byte[] ExportRule11Excel(Rule11ValidationSummary summary);
@@ -24,6 +24,7 @@ namespace HemisAudit.Services
         byte[] ExportRule59Excel(Rule59ValidationSummary summary);
         byte[] ExportRule59Csv(Rule59ValidationSummary summary);
         byte[] ExportRule60Excel(Rule41ValidationSummary summary);
+        byte[] ExportRule41FamilyExcel(Rule41ValidationSummary summary, string ruleTitle, string studLabel, string h16Label);
         byte[] ExportRule38Excel(Rule38ValidationSummary summary);
         byte[] ExportRule38Csv(Rule38ValidationSummary summary, bool exceptionsOnly = false);
         byte[] ExportExcel(Rule10ValidationSummary summary);
@@ -49,7 +50,7 @@ namespace HemisAudit.Services
         byte[] ExportExcel(Rule29ValidationSummary summary);
         byte[] ExportExcel(Rule31ValidationSummary summary);
         byte[] ExportExcel(Rule32ValidationSummary summary);
-        byte[] ExportRule36Csv(ValidationSummary summary, bool exceptionsOnly = false);
+        byte[] ExportRule36Csv(Rule36ValidationSummary summary, bool exceptionsOnly = false);
         byte[] ExportCsv(Rule10ValidationSummary summary);
         byte[] ExportCsv(Rule11ValidationSummary summary);
         byte[] ExportCsv(Rule12ValidationSummary summary);
@@ -100,7 +101,7 @@ namespace HemisAudit.Services
         private const int Rule18DetailedSheetRowThreshold = 10000;
 
         // ─── Excel Export — mirrors notebook Excel with 3 sheets ─────────────
-        public byte[] ExportRule36Excel(ValidationSummary summary)
+        public byte[] ExportRule36Excel(Rule36ValidationSummary summary)
         {
             using var wb = new XLWorkbook();
 
@@ -116,7 +117,6 @@ namespace HemisAudit.Services
 
             var summaryData = new[]
             {
-                ("Database",            summary.Database),
                 ("STUD Table",          summary.StudTable),
                 ("Deceased Table",      summary.DeceasedTable),
                 ("STUD Column",         summary.StudColumn),
@@ -294,7 +294,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 34: CENSUS DATE VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("Source Table", summary.TableName),
                 ("Client Census Table", usesClientComparison ? summary.ClientTableName : "(not used)"),
                 ("First Day Column", summary.FirstDayColumn),
@@ -422,7 +421,6 @@ namespace HemisAudit.Services
 
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("Source Table", summary.TableName),
                 ("Duplicate Field", summary.DuplicateColumn),
                 ("Validation Rule", duplicateRule),
@@ -523,7 +521,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 26: DBO_PROF TO PAYROLL_SAMPLE 4-CONTROL VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("PROF Table", summary.ProfTable),
                 ("Payroll Table", summary.PayrollTable),
                 ("Blank Payroll GROUP_NAME Pass Codes", summary.BlankPayrollGroupPassCodes),
@@ -725,7 +722,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 29: SINGLE COLUMN FILTER", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("Source Table", summary.TableName),
                 ("Filter Column", summary.FilterColumn),
                 ("Filter Value", summary.FilterValue),
@@ -811,7 +807,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 17: GRADUATE STUDENTS FULFILLED QUALIFICATION VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database",               summary.Database),
                 ("STUD Table",             summary.TableName),
                 ("QUAL Table",             summary.QualTable),
                 ("QUAL Join Column",       summary.QualJoinCol),
@@ -897,7 +892,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 16: STUDENT POPULATION VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("STUD Table", summary.StudTable),
                 ("Bridge Table", summary.BridgeTable),
                 ("CRSE Table", summary.CrseTable),
@@ -998,7 +992,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 15: COURSE CREDENTIALS VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database",              summary.Database),
                 ("CRED Table",            summary.CredTable),
                 ("QUAL Table",            summary.QualTable),
                 ("CREG Table",            summary.RegistrationTable),
@@ -1171,7 +1164,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 14: COURSE REGISTRATION VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("CRSE Table", summary.StudTable),
                 ("CREG Table", summary.BridgeTable),
                 ("Validation Date", summary.Timestamp),
@@ -1262,7 +1254,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 18: NSFAS STUDENT VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("STUD Table", summary.StudTable),
                 ("Bridge Table", summary.BridgeTable),
                 ("CRSE Table", summary.CrseTable),
@@ -1415,7 +1406,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 19: MASTERS & PHD POPULATION", 2);
             var summaryData = new List<(string Label, string Value)>
             {
-                ("Database", summary.Database),
                 ("STUD Table", summary.StudTable),
                 ("QUAL Table", summary.QualTable),
                 ("Qual Code Column", summary.QualCodeColumn),
@@ -1520,7 +1510,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 25: RECONCILE COURSE DATASETS", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("CRSE Table", summary.CrseTable),
                 ("Audit Table", summary.AuditTable),
                 ("H16 Table", summary.H16Table),
@@ -1619,7 +1608,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 23: RECONCILE DATASETS", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("STUD Table", summary.StudTable),
                 ("Audit Table", summary.AuditTable),
                 ("H16 Table", summary.H16Table),
@@ -1723,7 +1711,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 13: CESM QUALIFICATION POPULATION VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("CESM Table", summary.StudTable),
                 ("QUAL Table", summary.QualTable),
                 ("STUD Table", summary.CregTable),
@@ -1970,7 +1957,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 12: COURSE SELECTION FROM dbo_CREG", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("CREG Table", summary.CregTable),
                 ("CRES Table", summary.CresTable),
                 ("Validation Date", summary.Timestamp),
@@ -2283,7 +2269,6 @@ namespace HemisAudit.Services
         {
             var rows = new List<(string Label, string Value)>
             {
-                ("Database", summary.Database),
                 ("Rule", summary.RuleLabel),
                 ("Rule Title", summary.RuleTitle),
                 ("Validation Date", summary.Timestamp),
@@ -2499,7 +2484,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 20: FOUNDATION VALIDATION (3-PART)", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("STUD Table", summary.StudTable),
                 ("QUAL Table", summary.QualTable),
                 ("Bridge Table", summary.CregTable),
@@ -2597,7 +2581,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 22: STAFF SAMPLING (DBO_PROF)", 2);
             var summaryData = new List<(string Label, string Value)>
             {
-                ("Database", summary.Database),
                 ("PROF Table", summary.ProfTable),
                 ("Employment Status Filter Column", summary.Column041),
                 ("Personnel Category Filter Column", summary.Column039),
@@ -2706,7 +2689,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 24: RECONCILE QUALIFICATION DATASETS", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("QUAL Table", summary.QualTable),
                 ("Audit Table", summary.AuditTable),
                 ("H16 Table", summary.H16Table),
@@ -2812,7 +2794,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 27: ERROR VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("Source Table", summary.TableName),
                 ("Filter Column", summary.FilterColumn),
                 ("Filter Value", summary.FilterValue),
@@ -2897,7 +2878,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, $"HEMIS RULE {ruleNumber}: FATAL ERRORS WITH EXCLUSIONS ({tableScope})", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("Source Table", summary.TableName),
                 ("Error Type Column", summary.ErrorTypeColumn),
                 ("Error Column", summary.ErrorColumn),
@@ -2991,7 +2971,7 @@ namespace HemisAudit.Services
         }
 
         // ─── CSV Export ───────────────────────────────────────────────────────
-        public byte[] ExportRule36Csv(ValidationSummary summary, bool exceptionsOnly = false)
+        public byte[] ExportRule36Csv(Rule36ValidationSummary summary, bool exceptionsOnly = false)
         {
             var sb = new StringBuilder();
 
@@ -3141,7 +3121,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 37: CESM vs PQM VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database",            summary.Database),
                 ("CESM Table",          $"{summary.CesmTable} (ID: {summary.CesmIdCol}, Code: {summary.CesmCodeCol})"),
                 ("QUAL Table",          $"{summary.QualTable} (ID: {summary.QualIdCol}, Name: {summary.QualNameCol})"),
                 ("PQM Table",           $"{summary.PqmTable} (Name: {summary.PqmNameCol}, Code1: {summary.PqmCode1Col}, Code2: {summary.PqmCode2Col})"),
@@ -3530,7 +3509,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 38: QUAL -> PQM VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database",          summary.Database),
                 ("QUAL Table",        $"{summary.QualTable} (ID: {summary.QualIdCol}, Name: {summary.QualNameCol})"),
                 ("PQM Table",         $"{summary.PqmTable} (Name: {summary.PqmNameCol}, Type: {summary.PqmQualTypeCol}, Total: {summary.PqmMinTimeTotalCol}, WIL: {summary.PqmWilCol}, Subsidy: {summary.PqmTotalSubsidyCol})"),
                 ("Population Split",  summary.UseMPrefixPopulationSplit
@@ -4539,7 +4517,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 64: STUD TO CREG VALIDATION SUMMARY", 2);
             var summaryData = new[]
             {
-                ("Database",           summary.Database),
                 ("STUD Table",         summary.StudTable),
                 ("CREG Table",         summary.CregTable),
                 ("PRODUCTION Table",   summary.ProdTable),
@@ -4605,7 +4582,6 @@ namespace HemisAudit.Services
                 ExceptionRate = summary.ExceptionRate,
                 Status = summary.Status,
                 Timestamp = summary.Timestamp,
-                Database = summary.Database,
                 TableName = $"{summary.StudTable} -> {summary.QualTable}",
                 FilterColumn = summary.FulfilledColumn,
                 FilterValue = summary.FulfilledValue,
@@ -4648,7 +4624,7 @@ namespace HemisAudit.Services
             cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
         }
 
-        private static void WriteValidationHeaderRow(IXLWorksheet ws, int row, ValidationSummary summary)
+        private static void WriteValidationHeaderRow(IXLWorksheet ws, int row, Rule36ValidationSummary summary)
         {
             var headers = new[] { "Validation Number", "Validation Result", "Exception Reason", "Student ID" }
                 .Concat(GetAdditionalHeaders(summary))
@@ -4664,7 +4640,7 @@ namespace HemisAudit.Services
             }
         }
 
-        private static void WriteValidationRows(IXLWorksheet ws, int startRow, ValidationSummary summary)
+        private static void WriteValidationRows(IXLWorksheet ws, int startRow, Rule36ValidationSummary summary)
         {
             var headers = GetAdditionalHeaders(summary);
             var rowIndex = startRow;
@@ -4695,7 +4671,7 @@ namespace HemisAudit.Services
                 ws.Column(c).AdjustToContents();
         }
 
-        private static List<string> GetAdditionalHeaders(ValidationSummary summary) =>
+        private static List<string> GetAdditionalHeaders(Rule36ValidationSummary summary) =>
             summary.ValidationRows
                 .SelectMany(r => r.AdditionalColumns.Keys)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -5726,7 +5702,6 @@ namespace HemisAudit.Services
                 ExceptionRate = summary.ExceptionRate,
                 Status = summary.Status,
                 Timestamp = summary.Timestamp,
-                Database = summary.Database,
                 TableName = summary.TableName,
                 ErrorTypeColumn = summary.ErrorTypeColumn,
                 ErrorColumn = summary.ErrorColumn,
@@ -5765,7 +5740,6 @@ namespace HemisAudit.Services
                 ExceptionRate = summary.ExceptionRate,
                 Status = summary.Status,
                 Timestamp = summary.Timestamp,
-                Database = summary.Database,
                 StudTable = summary.StudTable,
                 BridgeTable = summary.BridgeTable,
                 CrseTable = summary.CrseTable,
@@ -5967,7 +5941,7 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 51: VALPAC DATA IN PRODUCTION", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database), ("VALPAC Table", summary.ValpacTable), ("PRODUCTION Table", summary.ProdTable),
+                ("VALPAC Table", summary.ValpacTable), ("PRODUCTION Table", summary.ProdTable),
                 ("Column Mapping", summary.TableLinkageText), ("Validation Date", summary.Timestamp), ("", ""),
                 ("VALIDATION RESULTS", ""), ("Total Tested", summary.TotalValidated.ToString("N0")),
                 ("PASS (found in Production)", (summary.PassCount - summary.PassWithReviewCount - summary.NotInCregCount - summary.CregWithdrawnCount).ToString("N0")),
@@ -6279,13 +6253,12 @@ namespace HemisAudit.Services
                 cell.Style.Font.FontColor = XLColor.White;
             }
             int rowIndex = 3;
-            foreach (var row in summary.ReviewRows)
+            foreach (var row in summary.ValidationRows)
             {
-                var v = row.DisplayValues;
-                wsResults.Cell(rowIndex, 1).Value = row.ValidationNumber;
-                wsResults.Cell(rowIndex, 2).Value = v.TryGetValue("VALPAC_SUBJ", out var vs) ? vs ?? "" : "";
-                wsResults.Cell(rowIndex, 3).Value = v.TryGetValue("VALPAC_APPROVAL_STATUS", out var aps) ? aps ?? "" : "";
-                wsResults.Cell(rowIndex, 4).Value = v.TryGetValue("PROD_SUBJ",   out var ps) ? ps ?? "" : "";
+                wsResults.Cell(rowIndex, 1).Value = row.RowNumber;
+                wsResults.Cell(rowIndex, 2).Value = row.ValpacSubj;
+                wsResults.Cell(rowIndex, 3).Value = row.ApprovalStatus;
+                wsResults.Cell(rowIndex, 4).Value = row.ProdSubj;
                 wsResults.Cell(rowIndex, 5).Value = row.ValidationResult;
                 wsResults.Range(rowIndex, 1, rowIndex, 5).Style.Fill.BackgroundColor =
                     string.Equals(row.ValidationResult, "FAIL", StringComparison.OrdinalIgnoreCase) ? XLColor.FromHtml("#FFF3F3") : XLColor.FromHtml("#F3FFF3");
@@ -6297,7 +6270,7 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 52: dbo_QUAL QUALIFICATION CODE IN MT-audit-prod-QUAL", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database), ("Source Table (dbo_QUAL)", summary.ValpacTable), ("Target Table (MT-audit-prod-QUAL)", summary.ProdTable),
+                ("Source Table (dbo_QUAL)", summary.ValpacTable), ("Target Table (MT-audit-prod-QUAL)", summary.ProdTable),
                 ("Column Mapping", summary.TableLinkageText),
                 ("Approval Status Column", summary.ApprovalStatusCol ?? "_004"),
                 ("Approval Status Filter", string.IsNullOrWhiteSpace(summary.ApprovalStatusValues) ? "ALL — no filter applied" : summary.ApprovalStatusValues),
@@ -6332,15 +6305,14 @@ namespace HemisAudit.Services
             var aCol  = summary.ApprovalStatusCol ?? "_004";
             var sb = new StringBuilder();
             sb.AppendLine($"Validation_Number,VALPAC_{vSubj},Approval_Status_{aCol},PROD_{pSubj},Validation_Result");
-            foreach (var row in summary.ReviewRows)
+            foreach (var row in summary.ValidationRows)
             {
-                var v = row.DisplayValues;
                 sb.AppendLine(string.Join(",", new[]
                 {
-                    CsvEscape(row.ValidationNumber.ToString()),
-                    CsvEscape(v.TryGetValue("VALPAC_SUBJ", out var a) ? a : ""),
-                    CsvEscape(v.TryGetValue("VALPAC_APPROVAL_STATUS", out var s) ? s : ""),
-                    CsvEscape(v.TryGetValue("PROD_SUBJ",   out var b) ? b : ""),
+                    CsvEscape(row.RowNumber.ToString()),
+                    CsvEscape(row.ValpacSubj),
+                    CsvEscape(row.ApprovalStatus),
+                    CsvEscape(row.ProdSubj),
                     CsvEscape(row.ValidationResult)
                 }));
             }
@@ -6365,12 +6337,11 @@ namespace HemisAudit.Services
                 cell.Style.Font.FontColor = XLColor.White;
             }
             int rowIndex = 3;
-            foreach (var row in summary.ReviewRows)
+            foreach (var row in summary.ValidationRows)
             {
-                var v = row.DisplayValues;
-                wsResults.Cell(rowIndex, 1).Value = row.ValidationNumber;
-                wsResults.Cell(rowIndex, 2).Value = v.TryGetValue("VALPAC_SUBJ", out var vs) ? vs ?? "" : "";
-                wsResults.Cell(rowIndex, 3).Value = v.TryGetValue("PROD_SUBJ",   out var ps) ? ps ?? "" : "";
+                wsResults.Cell(rowIndex, 1).Value = row.RowNumber;
+                wsResults.Cell(rowIndex, 2).Value = row.ValpacSubj;
+                wsResults.Cell(rowIndex, 3).Value = row.ProdSubj;
                 wsResults.Cell(rowIndex, 4).Value = row.ValidationResult;
                 wsResults.Range(rowIndex, 1, rowIndex, 4).Style.Fill.BackgroundColor =
                     string.Equals(row.ValidationResult, "FAIL", StringComparison.OrdinalIgnoreCase) ? XLColor.FromHtml("#FFF3F3") : XLColor.FromHtml("#F3FFF3");
@@ -6382,7 +6353,7 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 53: dbo_CRSE SUBJECT CODE IN MT-audit-prod-CRSE", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database), ("Source Table (dbo_CRSE)", summary.ValpacTable), ("Target Table (MT-audit-prod-CRSE)", summary.ProdTable),
+                ("Source Table (dbo_CRSE)", summary.ValpacTable), ("Target Table (MT-audit-prod-CRSE)", summary.ProdTable),
                 ("Column Mapping", summary.TableLinkageText), ("Validation Date", summary.Timestamp), ("", ""),
                 ("VALIDATION RESULTS", ""), ("Total Tested", summary.TotalValidated.ToString("N0")),
                 ("PASS (found in PRODUCTION)", summary.PassCount.ToString("N0")), ("FAIL (not found in PRODUCTION)", summary.FailCount.ToString("N0")),
@@ -6413,14 +6384,13 @@ namespace HemisAudit.Services
             var pSubj = summary.ProdSubjCol ?? "IALSUBJ";
             var sb = new StringBuilder();
             sb.AppendLine($"Validation_Number,VALPAC_{vSubj},PROD_{pSubj},Validation_Result");
-            foreach (var row in summary.ReviewRows)
+            foreach (var row in summary.ValidationRows)
             {
-                var v = row.DisplayValues;
                 sb.AppendLine(string.Join(",", new[]
                 {
-                    CsvEscape(row.ValidationNumber.ToString()),
-                    CsvEscape(v.TryGetValue("VALPAC_SUBJ", out var a) ? a : ""),
-                    CsvEscape(v.TryGetValue("PROD_SUBJ",   out var b) ? b : ""),
+                    CsvEscape(row.RowNumber.ToString()),
+                    CsvEscape(row.ValpacSubj),
+                    CsvEscape(row.ProdSubj),
                     CsvEscape(row.ValidationResult)
                 }));
             }
@@ -6433,9 +6403,11 @@ namespace HemisAudit.Services
         {
             using var wb = new XLWorkbook();
             var fundCol = summary.FundingSourceCol ?? "_019";
+            var studQualCol = summary.StudQualCol ?? "_001";
+            var cregQualCol = summary.CregQualCol ?? "_001";
             var wsResults = wb.Worksheets.Add("Validation Results");
-            StyleHeaderRow(wsResults, 1, $"RULE 66: NSFAS Students [{fundCol}] in CREG [{summary.CregStudentNoCol ?? "_007"}]", 4);
-            var headers = new[] { "Validation #", $"STUD [{summary.StudStudentNoCol ?? "_007"}] Student No", $"Funding Source [{fundCol}]", $"CREG [{summary.CregStudentNoCol ?? "_007"}]", "Result" };
+            StyleHeaderRow(wsResults, 1, $"RULE 66: NSFAS Students [{fundCol}] in CREG [{summary.CregStudentNoCol ?? "_007"}]+[{cregQualCol}]", 7);
+            var headers = new[] { "Validation #", $"STUD [{summary.StudStudentNoCol ?? "_007"}] Student No", $"Qual Code [{studQualCol}]", $"Funding Source [{fundCol}]", $"CREG [{summary.CregStudentNoCol ?? "_007"}]", "Result", "Note" };
             for (int i = 0; i < headers.Length; i++)
             {
                 var cell = wsResults.Cell(2, i + 1);
@@ -6449,22 +6421,25 @@ namespace HemisAudit.Services
                 var v = row.DisplayValues;
                 wsResults.Cell(rowIndex, 1).Value = row.ValidationNumber;
                 wsResults.Cell(rowIndex, 2).Value = v.TryGetValue("STUD_NO",       out var sn)  ? sn  ?? "" : "";
-                wsResults.Cell(rowIndex, 3).Value = v.TryGetValue("FUNDING_SOURCE", out var fs)  ? fs  ?? "" : "";
-                wsResults.Cell(rowIndex, 4).Value = v.TryGetValue("CREG_STUD_NO",  out var cn)  ? cn  ?? "" : "";
-                wsResults.Cell(rowIndex, 5).Value = row.ValidationResult;
-                wsResults.Range(rowIndex, 1, rowIndex, 5).Style.Fill.BackgroundColor =
+                wsResults.Cell(rowIndex, 3).Value = v.TryGetValue("QUAL_CODE",     out var qc)  ? qc  ?? "" : "";
+                wsResults.Cell(rowIndex, 4).Value = v.TryGetValue("FUNDING_SOURCE", out var fs)  ? fs  ?? "" : "";
+                wsResults.Cell(rowIndex, 5).Value = v.TryGetValue("CREG_STUD_NO",  out var cn)  ? cn  ?? "" : "";
+                wsResults.Cell(rowIndex, 6).Value = row.ValidationResult;
+                wsResults.Cell(rowIndex, 7).Value = Rule66PassCategoryNote(row);
+                wsResults.Range(rowIndex, 1, rowIndex, 7).Style.Fill.BackgroundColor =
                     string.Equals(row.ValidationResult, "FAIL", StringComparison.OrdinalIgnoreCase) ? XLColor.FromHtml("#FFF3F3") : XLColor.FromHtml("#F3FFF3");
                 rowIndex++;
             }
-            for (int c = 1; c <= 5; c++) wsResults.Column(c).AdjustToContents();
+            for (int c = 1; c <= 7; c++) wsResults.Column(c).AdjustToContents();
 
             var wsSummary = wb.Worksheets.Add("Summary");
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 66: NSFAS STUDENTS IN CREG", 2);
             var summaryData = new[]
             {
-                ("Database", summary.Database),
                 ("STUD Table", summary.StudTable),
                 ("CREG Table", summary.CregTable),
+                ("Qualification Code Column (STUD)", studQualCol),
+                ("Qualification Code Column (CREG)", cregQualCol),
                 ("Funding Source Column", fundCol),
                 ("Funding Source Filter", string.IsNullOrWhiteSpace(summary.FundingSourceValues) ? "ALL — no filter applied" : summary.FundingSourceValues),
                 ("Validation Date", summary.Timestamp), ("", ""),
@@ -6499,8 +6474,9 @@ namespace HemisAudit.Services
         public byte[] ExportRule66Csv(Rule66ValidationSummary summary)
         {
             var fundCol = summary.FundingSourceCol ?? "_019";
+            var studQualCol = summary.StudQualCol ?? "_001";
             var sb = new StringBuilder();
-            sb.AppendLine($"Validation_Number,STUD_NO,Funding_Source_{fundCol},CREG_STUD_NO,Validation_Result");
+            sb.AppendLine($"Validation_Number,STUD_NO,Qual_Code_{studQualCol},Funding_Source_{fundCol},CREG_STUD_NO,Validation_Result,Note");
             foreach (var row in summary.ReviewRows)
             {
                 var v = row.DisplayValues;
@@ -6508,12 +6484,28 @@ namespace HemisAudit.Services
                 {
                     CsvEscape(row.ValidationNumber.ToString()),
                     CsvEscape(v.TryGetValue("STUD_NO",        out var sn) ? sn : ""),
+                    CsvEscape(v.TryGetValue("QUAL_CODE",      out var qc) ? qc : ""),
                     CsvEscape(v.TryGetValue("FUNDING_SOURCE",  out var fs) ? fs : ""),
                     CsvEscape(v.TryGetValue("CREG_STUD_NO",   out var cn) ? cn : ""),
-                    CsvEscape(row.ValidationResult)
+                    CsvEscape(row.ValidationResult),
+                    CsvEscape(Rule66PassCategoryNote(row))
                 }));
             }
             return System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+        }
+
+        // Distinguishes the two ways a Rule 66 row can PASS: a "straight pass" where this exact
+        // student+qualification pair matched in CREG directly, versus a pass carried over from a
+        // different qualification of the same student (DIRECT_MATCH=FALSE) — the student cleared
+        // the control on another qualification, so this row itself has no direct CREG match.
+        private static string Rule66PassCategoryNote(Rule66ValidationRowRecord row)
+        {
+            var isPass = string.Equals(row.ValidationResult, "PASS", StringComparison.OrdinalIgnoreCase);
+            if (!isPass) return "No match on any qualification held by this student";
+
+            var isDirectMatch = row.DisplayValues.TryGetValue("DIRECT_MATCH", out var dm) &&
+                string.Equals(dm, "TRUE", StringComparison.OrdinalIgnoreCase);
+            return isDirectMatch ? "Straight pass" : "Passed on primary qualification code";
         }
 
         // ─── Rule 67: CREG-STUD Pair Validation ────────────────────────────────
@@ -6724,7 +6716,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 67: CREG-STUD PAIR VALIDATION", 2);
             var summaryRows = new List<(string label, string value)>
             {
-                ("Database", summary.Database),
                 ("CREG Table", summary.CregTable),
                 ("STUD Table", summary.StudTable),
                 ("E051 Column", e051Col),
@@ -6873,7 +6864,6 @@ namespace HemisAudit.Services
             {
                 ("Rule", "Rule 68 – Credit Overload Validation"),
                 ("Timestamp", summary.Timestamp),
-                ("Database", summary.Database),
                 ("CREG Table", summary.CregTable),
                 ("QUAL Table", summary.QualTable),
                 ("CRED Table", summary.CredTable),
@@ -6955,8 +6945,6 @@ namespace HemisAudit.Services
             }
             return System.Text.Encoding.UTF8.GetBytes(sb.ToString());
         }
-
-        // ─── Rule 11: QUAL vs CESM vs PQM Validation ───────────────────────────
 
         public byte[] ExportRule11Excel(Rule11ValidationSummary summary)
         {
@@ -7196,7 +7184,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 11: QUAL vs CESM vs PQM VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database",               summary.Database),
                 ("QUAL Table",             $"{summary.QualTable} — ID: {summary.QualIdCol} | Name: {summary.QualNameCol} | Approval: {summary.QualApprovalCol} | Type: {summary.QualHeqfTypeCol} | MinTime: {summary.QualMinTimeTotalCol} | WIL: {summary.QualMinTimeWilCol} | HEQF: {summary.QualHeqfCol} | Subsidy: {summary.QualTotalSubsidyCol}"),
                 ("CESM Table",             $"{summary.CesmTable} — ID: {summary.CesmIdCol} | Code: {summary.CesmCodeCol}"),
                 ("PQM Table",              $"{summary.PqmTable} — Name: {summary.PqmNameCol} | Type: {summary.PqmHeqfTypeCol} | Code: {summary.PqmCodeCol} | MinTime: {summary.PqmMinTimeTotalCol} | WIL: {summary.PqmWilCol} | Accreditation: {summary.PqmAccreditationCol} | Subsidy: {summary.PqmTotalSubsidyCol}"),
@@ -7627,7 +7614,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 54: CRED vs QUAL vs PQM VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database",           summary.Database),
                 ("CRED Table",         $"{summary.CredTable} (ID: {summary.CredIdCol}, Course: {summary.CredCourseCol}, Credit: {summary.CredCreditCol}, Research_1: {summary.CredResearch1Col})"),
                 ("QUAL Table",         $"{summary.QualTable} (ID: {summary.QualIdCol}, Name: {summary.QualNameCol})"),
                 ("PQM Table",          $"{summary.PqmTable} (Name: {summary.PqmNameCol}, Research_1: {summary.PqmResearch1Col})"),
@@ -7972,7 +7958,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 55: GRADUATE W-CODE VALIDATION", 2);
             var summaryData = new[]
             {
-                ("Database",         summary.Database),
                 ("STUD Table",       $"{summary.StudTable} (ID: {summary.StudIdCol}, Qual Code: {summary.StudQualCodeCol}, Fulfilled: {summary.StudFulfilledCol})"),
                 ("QUAL Table",       $"{summary.QualTable} (Code: {summary.QualCodeCol}, Name: {summary.QualNameCol}, Type: {summary.QualTypeCol}, Approval: {summary.QualApprovalCol})"),
                 ("Validation Date",  summary.Timestamp),
@@ -8260,7 +8245,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 57: REGISTRATION DOCUMENTATION AGREEMENT", 2);
             var summaryData = new[]
             {
-                ("Database",          summary.Database),
                 ("STUD Table",        $"{summary.StudTable} (ID: {summary.StudIdCol}, Code: {summary.StudCodeCol}, Reg Type: {summary.StudRegTypeCol})"),
                 ("CREG Table",        $"{summary.CregTable} (ID: {summary.CregIdCol}, Code: {summary.CregCodeCol}, Reg Type: {summary.CregRegTypeCol})"),
                 ("CREG Filter (_064)", summary.CregRegTypeFilterValue),
@@ -8407,7 +8391,6 @@ namespace HemisAudit.Services
             StyleHeaderRow(wsSummary, 1, "HEMIS RULE 58: STAFF VALPAC DATA IN PRODUCTION", 2);
             var rows = new[]
             {
-                ("Database",       summary.Database),
                 ("VALPAC Table",   summary.ValpacTable),
                 ("Production Table", summary.ProdTable),
                 ("Validation Date", summary.Timestamp),
@@ -8529,7 +8512,6 @@ namespace HemisAudit.Services
 
             var summaryData59 = new[]
             {
-                ("Database", summary.Database),
                 ("VALPAC Table", summary.ValpacTable),
                 ("Production Table", summary.ProdTable),
                 ("VALPAC Column", summary.ValpacCol037),
@@ -8642,103 +8624,6 @@ namespace HemisAudit.Services
             using var exportStream59 = new MemoryStream();
             wb.SaveAs(exportStream59);
             return exportStream59.ToArray();
-
-            var ws = wb.Worksheets.Add("Working Paper");
-
-            ws.Range(1, 1, 1, 6).Merge();
-            var title = ws.Cell(1, 1);
-            title.Value = "HEMIS RULE 59 — SFTE VALPAC DATA IN STAFF PRODUCTION";
-            title.Style.Fill.BackgroundColor = XLColor.FromHtml("#1A237E");
-            title.Style.Font.FontColor = XLColor.White;
-            title.Style.Font.Bold = true;
-            title.Style.Font.FontSize = 13;
-            title.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
-            ws.Row(1).Height = 24;
-
-            string[] headers = { "#", "Control Type", "Control Label", "Result", "Explanation", "Display Values" };
-            for (int c = 0; c < headers.Length; c++)
-            {
-                var cell = ws.Cell(2, c + 1);
-                cell.Value = headers[c];
-                cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#37474F");
-                cell.Style.Font.FontColor = XLColor.White;
-                cell.Style.Font.Bold = true;
-                cell.Style.Alignment.WrapText = true;
-            }
-            ws.Row(2).Height = 22;
-
-            var passRow = XLColor.FromHtml("#F3FFF3");
-            var failRow = XLColor.FromHtml("#FFF3F3");
-
-            int r = 3;
-            foreach (var row in summary.ReviewRows)
-            {
-                bool isPass = row.ValidationResult == "PASS";
-                var bg = isPass ? passRow : failRow;
-                ws.Cell(r, 1).Value = row.ValidationNumber;
-                ws.Cell(r, 2).Value = row.ControlType;
-                ws.Cell(r, 3).Value = row.ControlLabel;
-                ws.Cell(r, 4).Value = row.ValidationResult;
-                ws.Cell(r, 5).Value = row.ValidationExplanation;
-                ws.Cell(r, 6).Value = string.Join("; ", row.DisplayValues.Select(kv => $"{kv.Key}={kv.Value}"));
-                for (int c = 1; c <= 6; c++)
-                    ws.Cell(r, c).Style.Fill.BackgroundColor = bg;
-                ws.Cell(r, 4).Style.Font.FontColor = isPass ? XLColor.FromHtml("#1B5E20") : XLColor.FromHtml("#B71C1C");
-                ws.Cell(r, 4).Style.Font.Bold = true;
-                ws.Row(r).Height = 18;
-                r++;
-            }
-
-            ws.Column(1).Width = 6; ws.Column(2).Width = 18; ws.Column(3).Width = 24;
-            ws.Column(4).Width = 10; ws.Column(5).Width = 50; ws.Column(6).Width = 40;
-
-            var wsSummary = wb.Worksheets.Add("Summary");
-            StyleHeaderRow(wsSummary, 1, "HEMIS RULE 59: SFTE VALPAC DATA IN STAFF PRODUCTION", 2);
-            var rows = new[]
-            {
-                ("Database",         summary.Database),
-                ("VALPAC Table",     summary.ValpacTable),
-                ("Production Table", summary.ProdTable),
-                ("Column Mapping",   summary.TableLinkageText),
-                ("Validation Date",  summary.Timestamp),
-                ("", ""),
-                ("RESULTS",          ""),
-                ("Total Validated",  summary.TotalValidated.ToString("N0")),
-                ("Pass",             summary.PassCount.ToString("N0")),
-                ("Fail",             summary.FailCount.ToString("N0")),
-                ("Exception Rate",   $"{summary.ExceptionRate:F2}%"),
-                ("Status",           summary.Status)
-            };
-            int sr = 2;
-            foreach (var (lbl, val) in rows)
-            {
-                if (lbl == "RESULTS")
-                {
-                    wsSummary.Range(sr, 1, sr, 2).Merge();
-                    var hdr = wsSummary.Cell(sr, 1);
-                    hdr.Value = lbl; hdr.Style.Fill.BackgroundColor = XLColor.FromHtml("#37474F");
-                    hdr.Style.Font.FontColor = XLColor.White; hdr.Style.Font.Bold = true;
-                }
-                else if (lbl != "")
-                {
-                    wsSummary.Cell(sr, 1).Value = lbl;
-                    wsSummary.Cell(sr, 1).Style.Fill.BackgroundColor = XLColor.FromHtml("#F5F5F5");
-                    wsSummary.Cell(sr, 1).Style.Font.Bold = true;
-                    wsSummary.Cell(sr, 2).Value = val;
-                    if (lbl == "Status")
-                    {
-                        wsSummary.Cell(sr, 2).Style.Fill.BackgroundColor = val == "PASS"
-                            ? XLColor.FromHtml("#C8E6C9") : XLColor.FromHtml("#FFCDD2");
-                        wsSummary.Cell(sr, 2).Style.Font.Bold = true;
-                    }
-                }
-                sr++;
-            }
-            wsSummary.Column(1).Width = 26; wsSummary.Column(2).Width = 60;
-
-            using var ms = new MemoryStream();
-            wb.SaveAs(ms);
-            return ms.ToArray();
         }
 
         public byte[] ExportRule59Csv(Rule59ValidationSummary summary)
@@ -8769,13 +8654,12 @@ namespace HemisAudit.Services
 
             var summaryRows = new (string Label, string Value)[]
             {
-                ("Database", summary.Database),
                 ("Timestamp", summary.Timestamp),
                 ("Status", summary.Status),
                 ("CRSE Table", summary.Reconc.StudTable),
-                ("H16CRSE Table", summary.Reconc.AuditTable),
+                ("H16CRSE Table", summary.Reconc.H16Table),
                 ("CRSE Join Key", summary.Reconc.StudKey),
-                ("H16CRSE Join Key", summary.Reconc.AuditKey),
+                ("H16CRSE Join Key", summary.Reconc.H16Key),
                 ("Total Count", summary.Reconc.TotalCount.ToString()),
                 ("Agree Count", summary.Reconc.AgreeCount.ToString()),
                 ("Disagree Count", summary.Reconc.DisagreeCount.ToString()),
@@ -8810,7 +8694,7 @@ namespace HemisAudit.Services
             {
                 summarySheet.Cell(mappingRowIndex, 1).Value = pair.Label;
                 summarySheet.Cell(mappingRowIndex, 2).Value = pair.StudCol;
-                summarySheet.Cell(mappingRowIndex, 3).Value = pair.AuditCol;
+                summarySheet.Cell(mappingRowIndex, 3).Value = pair.H16Col;
                 mappingRowIndex++;
             }
 
@@ -8832,6 +8716,164 @@ namespace HemisAudit.Services
             return ms.ToArray();
         }
 
+        public byte[] ExportRule41FamilyExcel(Rule41ValidationSummary summary, string ruleTitle, string studLabel, string h16Label)
+        {
+            using var workbook = new XLWorkbook();
+
+            var summarySheet = workbook.Worksheets.Add("Summary");
+            summarySheet.Cell(1, 1).Value = ruleTitle;
+            summarySheet.Range(1, 1, 1, 2).Merge();
+            summarySheet.Cell(1, 1).Style.Font.Bold = true;
+            summarySheet.Cell(1, 1).Style.Font.FontSize = 14;
+
+            var summaryRows = new (string Label, string Value)[]
+            {
+                ("Timestamp", summary.Timestamp),
+                ("Status", summary.Status),
+                ($"{studLabel} Table", summary.Reconc.StudTable),
+                ($"{h16Label} Table", summary.Reconc.H16Table),
+                ($"{studLabel} Join Key", summary.Reconc.StudKey),
+                ($"{h16Label} Join Key", summary.Reconc.H16Key),
+                ("Total Count", summary.Reconc.TotalCount.ToString()),
+                ("Agree Count", summary.Reconc.AgreeCount.ToString()),
+                ("Disagree Count", summary.Reconc.DisagreeCount.ToString()),
+                ("Missing Count", summary.Reconc.MissingCount.ToString()),
+                ("Exception Rate", $"{summary.Reconc.ExceptionRate:F2}%")
+            };
+
+            summarySheet.Cell(3, 1).Value = "Field";
+            summarySheet.Cell(3, 2).Value = "Value";
+            summarySheet.Range(3, 1, 3, 2).Style.Font.Bold = true;
+            summarySheet.Range(3, 1, 3, 2).Style.Fill.BackgroundColor = XLColor.FromHtml("#D9EAF7");
+
+            var summaryRowIndex = 4;
+            foreach (var item in summaryRows)
+            {
+                summarySheet.Cell(summaryRowIndex, 1).Value = item.Label;
+                summarySheet.Cell(summaryRowIndex, 2).Value = item.Value;
+                summaryRowIndex++;
+            }
+
+            var mappingStartRow = summaryRowIndex + 2;
+            summarySheet.Cell(mappingStartRow, 1).Value = "Field Mappings";
+            summarySheet.Cell(mappingStartRow, 1).Style.Font.Bold = true;
+            summarySheet.Cell(mappingStartRow + 1, 1).Value = "Label";
+            summarySheet.Cell(mappingStartRow + 1, 2).Value = $"{studLabel} Column";
+            summarySheet.Cell(mappingStartRow + 1, 3).Value = $"{h16Label} Column";
+            summarySheet.Range(mappingStartRow + 1, 1, mappingStartRow + 1, 3).Style.Font.Bold = true;
+            summarySheet.Range(mappingStartRow + 1, 1, mappingStartRow + 1, 3).Style.Fill.BackgroundColor = XLColor.FromHtml("#D9EAF7");
+
+            var mappingRowIndex = mappingStartRow + 2;
+            foreach (var pair in summary.Reconc.Pairs)
+            {
+                summarySheet.Cell(mappingRowIndex, 1).Value = pair.Label;
+                summarySheet.Cell(mappingRowIndex, 2).Value = pair.StudCol;
+                summarySheet.Cell(mappingRowIndex, 3).Value = pair.H16Col;
+                mappingRowIndex++;
+            }
+
+            summarySheet.Columns().AdjustToContents();
+
+            WriteRule41FamilyReconciliationWorksheet(
+                workbook,
+                "All Results",
+                summary.Reconc,
+                summary.Reconc.ExceptionRows.Concat(summary.Reconc.Rows),
+                studLabel,
+                h16Label);
+            WriteRule41FamilyReconciliationWorksheet(
+                workbook,
+                "Exceptions",
+                summary.Reconc,
+                summary.Reconc.ExceptionRows,
+                studLabel,
+                h16Label);
+
+            using var ms2 = new MemoryStream();
+            workbook.SaveAs(ms2);
+            return ms2.ToArray();
+        }
+
+        private static void WriteRule41FamilyReconciliationWorksheet(
+            XLWorkbook workbook,
+            string sheetName,
+            Rule41ReconciliationSummary reconc,
+            IEnumerable<Rule41ReconcRow> rows,
+            string studLabel,
+            string h16Label)
+        {
+            var worksheet = workbook.Worksheets.Add(sheetName);
+            worksheet.Cell(1, 1).Value = $"{studLabel} vs {h16Label} Reconciliation";
+            worksheet.Cell(1, 1).Style.Font.Bold = true;
+            worksheet.Cell(1, 1).Style.Font.FontSize = 13;
+
+            worksheet.Cell(2, 1).Value = $"{studLabel} Table";
+            worksheet.Cell(2, 2).Value = reconc.StudTable;
+            worksheet.Cell(2, 3).Value = $"{h16Label} Table";
+            worksheet.Cell(2, 4).Value = reconc.H16Table;
+
+            worksheet.Cell(3, 1).Value = "Total";
+            worksheet.Cell(3, 2).Value = reconc.TotalCount;
+            worksheet.Cell(3, 3).Value = "Agree";
+            worksheet.Cell(3, 4).Value = reconc.AgreeCount;
+            worksheet.Cell(3, 5).Value = "Disagree";
+            worksheet.Cell(3, 6).Value = reconc.DisagreeCount;
+            worksheet.Cell(3, 7).Value = "Missing";
+            worksheet.Cell(3, 8).Value = reconc.MissingCount;
+            worksheet.Cell(3, 9).Value = "Exception Rate";
+            worksheet.Cell(3, 10).Value = $"{reconc.ExceptionRate:F2}%";
+
+            var headerRow = 5;
+            var columnIndex = 1;
+            worksheet.Cell(headerRow, columnIndex++).Value = "Row No";
+            worksheet.Cell(headerRow, columnIndex++).Value = $"{studLabel} Ref";
+
+            foreach (var pair in reconc.Pairs)
+            {
+                worksheet.Cell(headerRow, columnIndex++).Value = $"{studLabel}_{pair.Label}";
+                worksheet.Cell(headerRow, columnIndex++).Value = $"{h16Label}_{pair.Label}";
+                worksheet.Cell(headerRow, columnIndex++).Value = $"MATCH_{pair.Label}";
+            }
+
+            worksheet.Cell(headerRow, columnIndex++).Value = "Overall Result";
+            worksheet.Cell(headerRow, columnIndex).Value = "Disagree Detail";
+
+            worksheet.Range(headerRow, 1, headerRow, columnIndex).Style.Font.Bold = true;
+            worksheet.Range(headerRow, 1, headerRow, columnIndex).Style.Fill.BackgroundColor = XLColor.FromHtml("#D9EAF7");
+
+            var rowIndex = headerRow + 1;
+            foreach (var row in rows)
+            {
+                var cellIndex = 1;
+                worksheet.Cell(rowIndex, cellIndex++).Value = row.RowNumber;
+                worksheet.Cell(rowIndex, cellIndex++).Value = row.StudentRef;
+
+                foreach (var pair in reconc.Pairs)
+                {
+                    if (row.Fields.TryGetValue(pair.Label, out var field))
+                    {
+                        worksheet.Cell(rowIndex, cellIndex++).Value = field.StudValue;
+                        worksheet.Cell(rowIndex, cellIndex++).Value = field.H16Value;
+                        worksheet.Cell(rowIndex, cellIndex++).Value = field.Match;
+                    }
+                    else
+                    {
+                        worksheet.Cell(rowIndex, cellIndex++).Value = "-";
+                        worksheet.Cell(rowIndex, cellIndex++).Value = "-";
+                        worksheet.Cell(rowIndex, cellIndex++).Value = "-";
+                    }
+                }
+
+                worksheet.Cell(rowIndex, cellIndex++).Value = row.OverallResult;
+                worksheet.Cell(rowIndex, cellIndex).Value = row.DisagreeDetail;
+                rowIndex++;
+            }
+
+            worksheet.SheetView.FreezeRows(headerRow);
+            worksheet.Range(headerRow, 1, Math.Max(headerRow, rowIndex - 1), columnIndex).SetAutoFilter();
+            worksheet.Columns().AdjustToContents();
+        }
+
         private static void WriteRule60ReconciliationWorksheet(
             XLWorkbook workbook,
             string sheetName,
@@ -8846,7 +8888,7 @@ namespace HemisAudit.Services
             worksheet.Cell(2, 1).Value = "CRSE Table";
             worksheet.Cell(2, 2).Value = reconc.StudTable;
             worksheet.Cell(2, 3).Value = "H16CRSE Table";
-            worksheet.Cell(2, 4).Value = reconc.AuditTable;
+            worksheet.Cell(2, 4).Value = reconc.H16Table;
 
             worksheet.Cell(3, 1).Value = "Total";
             worksheet.Cell(3, 2).Value = reconc.TotalCount;
@@ -8889,7 +8931,7 @@ namespace HemisAudit.Services
                     if (row.Fields.TryGetValue(pair.Label, out var field))
                     {
                         worksheet.Cell(rowIndex, cellIndex++).Value = field.StudValue;
-                        worksheet.Cell(rowIndex, cellIndex++).Value = field.AuditValue;
+                        worksheet.Cell(rowIndex, cellIndex++).Value = field.H16Value;
                         worksheet.Cell(rowIndex, cellIndex++).Value = field.Match;
                     }
                     else
@@ -8911,4 +8953,3 @@ namespace HemisAudit.Services
         }
     }
 }
-

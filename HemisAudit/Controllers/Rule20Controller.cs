@@ -154,8 +154,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = await _rule20.GenerateSqlAsync(new Rule20ValidationRequest
             {
                 ClientId = review.ClientId,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 QualTable = review.Summary.QualTable,
                 CregTable = review.Summary.CregTable,
@@ -169,16 +167,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule20.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule20.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule20.GetTablesAsync(model.Server, model.Database, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] Rule20GetColumnsRequest request) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule20.GetColumnsAsync(request.Server, request.Database, request.Driver, request.TableName)));
+        public async Task<IActionResult> GetColumns([FromBody] Rule16ColumnsRequest request) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule20.GetColumnsAsync(request.ClientId, request.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule20VerifyRequest request) =>
@@ -190,11 +184,9 @@ namespace HemisAudit.Controllers
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
             _logger.LogInformation(
-                "Rule20 RunValidation requested by {Email}. ClientId={ClientId}, Server={Server}, Database={Database}, StudTable={StudTable}, QualTable={QualTable}, CregTable={CregTable}, CrseTable={CrseTable}",
+                "Rule20 RunValidation requested by {Email}. ClientId={ClientId}, StudTable={StudTable}, QualTable={QualTable}, CregTable={CregTable}, CrseTable={CrseTable}",
                 user?.Email,
                 request.ClientId,
-                request.Server,
-                request.Database,
                 request.StudTable,
                 request.QualTable,
                 request.CregTable,
@@ -622,8 +614,6 @@ namespace HemisAudit.Controllers
             var request = new Rule20ValidationRequest
             {
                 ClientId = review.ClientId,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 QualTable = review.Summary.QualTable,
                 CregTable = review.Summary.CregTable,

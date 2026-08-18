@@ -15,9 +15,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule10GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
     }
 
@@ -50,10 +48,8 @@ namespace HemisAudit.ViewModels
 
     public class Rule10VerifyRequest
     {
+        public int ClientId { get; set; }
         public int RuleNumber { get; set; } = 10;
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string QualTable { get; set; } = "dbo_QUAL";
         public string StudTable { get; set; } = "dbo_STUD";
         public string CregTable { get; set; } = "dbo_CREG";
@@ -87,9 +83,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public int RuleNumber { get; set; } = 10;
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string QualTable { get; set; } = "dbo_QUAL";
         public string StudTable { get; set; } = "dbo_STUD";
         public string CregTable { get; set; } = "dbo_CREG";
@@ -162,7 +155,6 @@ namespace HemisAudit.ViewModels
         public string Status { get; set; } = "";
         public string OverallStatusText { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string QualTable { get; set; } = "dbo_QUAL";
         public string StudTable { get; set; } = "dbo_STUD";
         public string CregTable { get; set; } = "dbo_CREG";
@@ -197,7 +189,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule10ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -216,9 +207,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string QualTable { get; set; } = "dbo_QUAL";
         public string StudTable { get; set; } = "dbo_STUD";
         public string CregTable { get; set; } = "dbo_CREG";

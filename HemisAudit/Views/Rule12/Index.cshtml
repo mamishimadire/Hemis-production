@@ -126,30 +126,16 @@
             <div class="accordion-item">
                 <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
                     <span class="acc-icon">DB</span>
-                    <span>Database Connection</span>
+                    <span>Engagement Dataset</span>
                     <span class="acc-chevron">v</span>
                 </button>
                 <div class="accordion-body" id="body-connection">
-                    <div class="form-grid">
-                        <div class="field-group">
-                            <label for="server">Server Name</label>
-                            <input id="server" type="text" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                        </div>
-                        <div class="field-group">
-                            <label for="driver">Driver</label>
-                            <select id="driver">
-                                <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                                <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                                <option value="SQL Server">SQL Server</option>
-                            </select>
-                        </div>
-                        <div class="field-group">
-                            <label for="database">Database</label>
-                            <select id="database"></select>
-                        </div>
+                    <div class="alert alert--info" id="datasetStatusAlert">
+                        Select an engagement above to load its uploaded tables.
                     </div>
                     <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                        <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
+                        <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                        <button type="button" class="btn btn-primary" id="connectBtn">Refresh Tables</button>
                     </div>
                     <div id="connectionOutput" class="status-output"></div>
                 </div>
@@ -403,9 +389,8 @@ window.toggleAccordion = function (section) {
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'),
-        driver: document.getElementById('driver'),
-        database: document.getElementById('database'),
+        datasetStatusAlert: document.getElementById('datasetStatusAlert'),
+        datasetsLink: document.getElementById('datasetsLink'),
         cregTable: document.getElementById('cregTable'),
         qualTable: document.getElementById('qualTable'),
         cresTable: document.getElementById('cresTable'),
@@ -716,9 +701,6 @@ window.toggleAccordion = function (section) {
         return {
             clientId:        parseInt(els.clientId.value || '0', 10) || 0,
             runId:           state.currentRunId,
-            server:          els.server?.value.trim() || '',
-            database:        els.database?.value || '',
-            driver:          els.driver?.value || 'ODBC Driver 17 for SQL Server',
             cregTable:       els.cregTable?.value || 'dbo_CREG',
             qualTable:       els.qualTable?.value || 'dbo_QUAL',
             cresTable:       els.cresTable?.value || 'dbo_CRES',
@@ -815,16 +797,13 @@ window.toggleAccordion = function (section) {
     }
 
     async function loadColumnsForTable(role, tableName, options = {}) {
-        const server = els.server?.value?.trim();
-        const db = els.database?.value;
         const resolvedTableName = tableName
             || (role === 'creg' ? els.cregTable?.value : role === 'qual' ? els.qualTable?.value : els.cresTable?.value);
-        if (!server || !db || !resolvedTableName) return;
+        if (!state.clientId || !resolvedTableName) return;
         try {
             const data = await postJson(`/Rule12/GetColumns`, {
-                server, database: db,
-                driver: els.driver?.value || 'ODBC Driver 17 for SQL Server',
-                cregTable: resolvedTableName
+                clientId: state.clientId,
+                tableName: resolvedTableName
             });
             if (!data.success || !data.columns) return;
             const cols = data.columns || [];
@@ -1124,9 +1103,6 @@ window.toggleAccordion = function (section) {
         state.resultsVisible = !!resultsVisible;
         state.hasPendingValidation = false;
 
-        if (els.server) els.server.value = workspace.server || '';
-        if (els.driver) els.driver.value = workspace.driver || 'ODBC Driver 17 for SQL Server';
-        syncSelectValue(els.database, workspace.database, 'Select database');
         syncSelectValue(els.cregTable, workspace.cregTable, 'Select table');
         syncSelectValue(els.qualTable, workspace.qualTable || 'dbo_QUAL', 'Select table');
         syncSelectValue(els.cresTable, workspace.cresTable || 'dbo_CRES', 'Select table');
@@ -1203,64 +1179,47 @@ window.toggleAccordion = function (section) {
 
     async function hydrateWorkspace(workspace, resultsVisible, loadToken) {
         state.isHydrating = true;
-        let reconnectWarning = '';
 
         try {
             if (workspace.summary && resultsVisible) {
                 applySummary(workspace.summary, { fromWorkspace: true });
             }
 
-            if (workspace.server) {
-                await connect({
-                    preferredDatabase: workspace.database || '',
-                    silent: true,
-                    skipLoadTables: true,
-                    statusMessage: workspace.database
-                        ? `Connected to ${workspace.database}. Restored from saved run #${workspace.runId || '-'}.`
-                        : 'Connected using the saved Rule 12 workspace.'
-                });
-            }
-
             if (loadToken !== workspaceLoadToken || state.clientId !== Number(els.clientId?.value || 0)) return;
 
-            if (workspace.database) {
-                await loadTables({
-                    preferredDatabase: workspace.database || '',
-                    preferredCregTable: workspace.cregTable || '',
-                    preferredQualTable: workspace.qualTable || '',
-                    preferredCresTable: workspace.cresTable || '',
-                    preferredCregStudentCol: workspace.cregStudentCol || '',
-                    preferredCregQualCol: workspace.cregQualCol || '',
-                    preferredCregCourseCol: workspace.cregCourseCol || '',
-                    preferredCregExtra1Col: workspace.cregExtra1Col || '',
-                    preferredCregExtra2Col: workspace.cregExtra2Col || '',
-                    preferredCregFilterCol: workspace.cregFilterCol || '',
-                    preferredCregExtra3Col: workspace.cregExtra3Col || '',
-                    preferredQualJoinCol: workspace.qualJoinCol || '',
-                    preferredQualDescCol: workspace.qualDescCol || '',
-                    preferredCresCourseCol: workspace.cresCourseCol || '',
-                    preferredCresStatusCol: workspace.cresStatusCol || '',
-                    preferredCresExtra1Col: workspace.cresExtra1Col || '',
-                    silent: true
-                });
-            }
+            await loadTables({
+                preferredCregTable: workspace.cregTable || '',
+                preferredQualTable: workspace.qualTable || '',
+                preferredCresTable: workspace.cresTable || '',
+                preferredCregStudentCol: workspace.cregStudentCol || '',
+                preferredCregQualCol: workspace.cregQualCol || '',
+                preferredCregCourseCol: workspace.cregCourseCol || '',
+                preferredCregExtra1Col: workspace.cregExtra1Col || '',
+                preferredCregExtra2Col: workspace.cregExtra2Col || '',
+                preferredCregFilterCol: workspace.cregFilterCol || '',
+                preferredCregExtra3Col: workspace.cregExtra3Col || '',
+                preferredQualJoinCol: workspace.qualJoinCol || '',
+                preferredQualDescCol: workspace.qualDescCol || '',
+                preferredCresCourseCol: workspace.cresCourseCol || '',
+                preferredCresStatusCol: workspace.cresStatusCol || '',
+                preferredCresExtra1Col: workspace.cresExtra1Col || '',
+                silent: true
+            });
         } catch (error) {
-            reconnectWarning = resultsVisible
-                ? 'Saved workspace results are still loaded, but the live SQL source could not be reconnected.'
-                : 'The saved workspace was found, but the live SQL source could not be reconnected.';
-            setAlert(els.connectionOutput, 'warning', escapeHtml(error?.message || 'Live SQL reconnect failed.'));
+            if (els.datasetStatusAlert) {
+                els.datasetStatusAlert.className = 'alert alert--warning';
+                els.datasetStatusAlert.textContent = error?.message || 'Could not load tables for this engagement.';
+            }
         } finally {
             state.isHydrating = false;
             if (loadToken !== workspaceLoadToken || state.clientId !== Number(els.clientId?.value || 0)) return;
             applyWorkspace(workspace, resultsVisible, true, { suppressToast: true });
-            if (reconnectWarning) {
-                setWorkspaceState(reconnectWarning, 'warning', { suppressToast: true });
-            }
         }
     }
 
     async function loadWorkspace() {
         state.clientId = Number(els.clientId?.value || 0);
+        if (els.datasetsLink) els.datasetsLink.href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
         workspaceLoadToken += 1;
         const loadToken = workspaceLoadToken;
         if (!state.clientId) {
@@ -1273,61 +1232,16 @@ window.toggleAccordion = function (section) {
         if (loadToken !== workspaceLoadToken || state.clientId !== Number(els.clientId?.value || 0)) return;
         if (!data.hasWorkspace || !data.workspace) {
             applyWorkspace(null, false, false, { suppressToast: true });
+            await loadTables({ silent: true });
             return;
         }
         await hydrateWorkspace(data.workspace, data.resultsVisible, loadToken);
     }
 
-    async function connect(options = {}) {
-        const server = els.server?.value?.trim();
-        if (!server) throw new Error('Enter the SQL Server name first.');
-
-        const data = await postJson(`${apiBasePath}/GetDatabases`, {
-            server,
-            driver: els.driver.value
-        });
-        if (!data.success) throw new Error(data.error || 'Connection failed.');
-
-        els.database.innerHTML = '<option value="">Select database</option>';
-        data.databases.forEach(db => {
-            const option = document.createElement('option');
-            option.value = db;
-            option.textContent = db;
-            els.database.appendChild(option);
-        });
-
-        const preferredDatabase = options.preferredDatabase
-            || ((data.databases || []).includes(els.database.value) ? els.database.value : '');
-        if (preferredDatabase && (data.databases || []).includes(preferredDatabase)) {
-            els.database.value = preferredDatabase;
-        }
-
-        setAlert(
-            els.connectionOutput,
-            'success',
-            options.statusMessage || `Connected. Found ${data.databases.length} database(s).`
-        );
-
-        if (!options.skipLoadTables && els.database.value) {
-            await loadTables({
-                preferredDatabase: els.database.value,
-                silent: !!options.silent
-            });
-        }
-        return data;
-    }
-
     async function loadTables(options = {}) {
-        if (options.preferredDatabase) {
-            syncSelectValue(els.database, options.preferredDatabase, 'Select database');
-        }
-        if (!els.database.value) return;
+        if (!state.clientId) return;
 
-        const data = await postJson(`${apiBasePath}/GetTables`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value
-        });
+        const data = await postJson(`${apiBasePath}/GetTables`, { clientId: state.clientId });
         if (!data.success) throw new Error(data.error || 'Could not load tables.');
 
         const tables = data.tables || [];
@@ -1379,6 +1293,10 @@ window.toggleAccordion = function (section) {
                 : Promise.resolve()
         ]);
 
+        if (els.datasetStatusAlert) {
+            els.datasetStatusAlert.className = 'alert alert--success';
+            els.datasetStatusAlert.textContent = `Loaded ${data.tables.length} table(s) from this engagement's dataset.`;
+        }
         if (!options.silent) {
             setAlert(els.configOutput, 'success', `Loaded ${data.tables.length} table(s).`);
         }
@@ -1518,7 +1436,6 @@ window.toggleAccordion = function (section) {
             <div class="card" style="padding:20px;margin-top:20px">
                 <h3 class="section-title" style="margin-top:0">Run Summary</h3>
                 <div class="form-grid">
-                    <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Database</div><div>${escapeHtml(summary.database)}</div></div>
                     <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Linkage</div><div style="font-size:12px">${escapeHtml(summary.tableLinkageText)}</div></div>
                     <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">CREG Records</div><div>${(summary.cregRecordCount||0).toLocaleString()}</div></div>
                     <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">QUAL Records</div><div>${(summary.qualRecordCount||0).toLocaleString()}</div></div>
@@ -1683,12 +1600,12 @@ window.toggleAccordion = function (section) {
         els.cregFilterValues?.addEventListener('input', () => {
             els.cregFilterValues.value = normalizeCsvValues(els.cregFilterValues.value);
         });
-        els.database?.addEventListener('change', () => loadTables().catch(err => {
-            els.configOutput.innerHTML = `<div class="alert alert--error">${escapeHtml(err.message)}</div>`;
-        }));
-        document.getElementById('connectBtn')?.addEventListener('click', () => connect().catch(err => {
+        document.getElementById('connectBtn')?.addEventListener('click', () => loadTables().catch(err => {
             hideSpinner();
-            els.connectionOutput.innerHTML = `<div class="alert alert--error">${escapeHtml(err.message)}</div>`;
+            if (els.datasetStatusAlert) {
+                els.datasetStatusAlert.className = 'alert alert--error';
+                els.datasetStatusAlert.textContent = err.message;
+            }
         }));
         document.getElementById('verifyBtn')?.addEventListener('click', () => verifyTables().catch(err => {
             hideSpinner();

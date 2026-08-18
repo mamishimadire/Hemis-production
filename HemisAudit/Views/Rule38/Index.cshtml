@@ -113,31 +113,17 @@
         <div class="accordion-item" id="acc-connection">
             <button class="accordion-toggle" onclick="toggleAccordion('connection')">
                 <span class="acc-icon">DB</span>
-                <span>Database Connection</span>
+                <span>Engagement Dataset</span>
                 <span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-connection">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label>Server Name</label>
-                        <input type="text" id="serverInput" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                    </div>
-                    <div class="field-group">
-                        <label>Driver</label>
-                        <select id="driverSelect">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group" id="dbFieldGroup" style="display:none">
-                        <label>Database</label>
-                        <select id="databaseSelect">
-                            <option value="">Select database</option>
-                        </select>
-                    </div>
+                <div class="alert alert--info" id="datasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
-                <button class="btn btn-primary" id="connectBtn" onclick="connectServer()">Connect</button>
+                <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
+                    <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                    <button class="btn btn-primary" id="connectBtn" onclick="loadTables()">Refresh Tables</button>
+                </div>
                 <div class="status-output" id="connectionStatus"></div>
             </div>
         </div>
@@ -597,7 +583,6 @@ async function markWorkspaceDirty() {
 }
 
 function resetWorkspaceState(clearClient = false) {
-    state.server = ''; state.database = ''; state.driver = 'ODBC Driver 17 for SQL Server';
     state.qualTable = ''; state.pqmTable = '';
     state.qualIdCol = '_001'; state.qualNameCol = '_003'; state.qualApprovalCol = '_004';
     state.qualApprovalValue = 'A'; state.qualTypeCol = '_005';
@@ -618,10 +603,9 @@ function resetWorkspaceState(clearClient = false) {
     state.editWarningAccepted = false; state.isDirty = false;
     if (clearClient) state.clientId = 0;
 
-    document.getElementById('serverInput').value = '';
-    document.getElementById('driverSelect').value = 'ODBC Driver 17 for SQL Server';
-    document.getElementById('databaseSelect').innerHTML = '<option value="">Select database</option>';
-    document.getElementById('dbFieldGroup').style.display = 'none';
+    document.getElementById('datasetStatusAlert').className = 'alert alert--info';
+    document.getElementById('datasetStatusAlert').textContent = 'Select an engagement above to load its uploaded tables.';
+    document.getElementById('datasetsLink').href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
     ['qualTableSelect','pqmTableSelect'].forEach(id => {
         document.getElementById(id).innerHTML = '<option value="">Select table</option>';
     });
@@ -795,6 +779,8 @@ async function handleClientChange(value) {
 
 async function loadWorkspaceState() {
     if (!state.clientId) { renderWorkspaceState(); return; }
+    const datasetsLinkEl = document.getElementById('datasetsLink');
+    if (datasetsLinkEl) datasetsLinkEl.href = `/EngagementDatasets?clientId=${state.clientId}`;
     showSpinner('Loading saved workspace...');
     try {
         const result = await getJson(`/Rule38/GetWorkspaceState?clientId=${state.clientId}`);
@@ -802,7 +788,11 @@ async function loadWorkspaceState() {
             setWorkspaceInfo(`Error: ${escapeHtml(result.error || 'Failed to load saved workspace.')}`, 'error');
             return;
         }
-        if (!result.hasWorkspace || !result.workspace) { renderWorkspaceState(); return; }
+        if (!result.hasWorkspace || !result.workspace) {
+            renderWorkspaceState();
+            await loadTables().catch(() => { /* best-effort background refresh */ });
+            return;
+        }
         await hydrateWorkspace(result.workspace);
     } finally {
         hideSpinner();
@@ -822,8 +812,6 @@ async function hydrateWorkspace(workspace) {
         state.resultsVisible = !!workspace.resultsVisible;
         state.editWarningAccepted = false;
 
-        document.getElementById('serverInput').value = workspace.server || '';
-        document.getElementById('driverSelect').value = workspace.driver || 'ODBC Driver 17 for SQL Server';
         document.getElementById('qualApprovalValueInput').value = workspace.qualApprovalValue || 'A';
         document.getElementById('heqfCodesInput').value = workspace.heqfIndicatorCodesCsv || 'H/,HEQF,HEQSF';
         document.getElementById('signoffComment').value = workspace.currentUserSignoffComment || '';
@@ -832,8 +820,6 @@ async function hydrateWorkspace(workspace) {
         const pgCsvH = document.getElementById('postgraduateTypesCsvInput');
         if (pgCsvH) pgCsvH.value = workspace.postgraduateTypesCsv || '07,27,28,49,72,73,08,30,50,74,75';
 
-        state.server = workspace.server || '';
-        state.driver = workspace.driver || 'ODBC Driver 17 for SQL Server';
         state.heqfIndicatorCodesCsv = workspace.heqfIndicatorCodesCsv || 'H/,HEQF,HEQSF';
         state.useMPrefixPopulationSplit = !!(workspace.useMPrefixPopulationSplit ?? workspace.excludeMPrefixPattern);
         state.postgraduateTypesCsv = workspace.postgraduateTypesCsv || '07,27,28,49,72,73,08,30,50,74,75';
@@ -847,41 +833,30 @@ async function hydrateWorkspace(workspace) {
         }
 
         try {
-            if (workspace.server) {
-                await connectServer({
-                    preferredDatabase: workspace.database || '',
-                    silent: true,
-                    statusMessage: workspace.database
-                        ? `Connected to <strong>${workspace.database}</strong>. Restored from saved run #${workspace.runId}.`
-                        : 'Connected using the saved Rule 38 workspace.'
-                });
-            }
-            if (workspace.database) {
-                await loadTables({
-                    preferredQualTable: workspace.qualTable || '',
-                    preferredPqmTable: workspace.pqmTable || '',
-                    preferredQualIdCol: workspace.qualIdCol || '',
-                    preferredQualNameCol: workspace.qualNameCol || '',
-                    preferredQualApprovalCol: workspace.qualApprovalCol || '',
-                    preferredQualTypeCol: workspace.qualTypeCol || '',
-                    preferredQualMinTimeTotalCol: workspace.qualMinTimeTotalCol || '',
-                    preferredQualMinTimeWilCol: workspace.qualMinTimeWilCol || '',
-                    preferredQualHeqfCol: workspace.qualHeqfCol || '',
-                    preferredQualTotalSubsidyCol: workspace.qualTotalSubsidyCol || '',
-                    preferredPqmNameCol: workspace.pqmNameCol || '',
-                    preferredPqmQualTypeCol: workspace.pqmQualTypeCol || '',
-                    preferredPqmMinTimeTotalCol: workspace.pqmMinTimeTotalCol || '',
-                    preferredPqmWilCol: workspace.pqmWilCol || '',
-                    preferredPqmAccreditationCol: workspace.pqmAccreditationCol || '',
-                    preferredPqmTotalSubsidyCol: workspace.pqmTotalSubsidyCol || '',
-                    silent: true
-                });
-            }
+            await loadTables({
+                preferredQualTable: workspace.qualTable || '',
+                preferredPqmTable: workspace.pqmTable || '',
+                preferredQualIdCol: workspace.qualIdCol || '',
+                preferredQualNameCol: workspace.qualNameCol || '',
+                preferredQualApprovalCol: workspace.qualApprovalCol || '',
+                preferredQualTypeCol: workspace.qualTypeCol || '',
+                preferredQualMinTimeTotalCol: workspace.qualMinTimeTotalCol || '',
+                preferredQualMinTimeWilCol: workspace.qualMinTimeWilCol || '',
+                preferredQualHeqfCol: workspace.qualHeqfCol || '',
+                preferredQualTotalSubsidyCol: workspace.qualTotalSubsidyCol || '',
+                preferredPqmNameCol: workspace.pqmNameCol || '',
+                preferredPqmQualTypeCol: workspace.pqmQualTypeCol || '',
+                preferredPqmMinTimeTotalCol: workspace.pqmMinTimeTotalCol || '',
+                preferredPqmWilCol: workspace.pqmWilCol || '',
+                preferredPqmAccreditationCol: workspace.pqmAccreditationCol || '',
+                preferredPqmTotalSubsidyCol: workspace.pqmTotalSubsidyCol || '',
+                silent: true
+            });
         } catch (error) {
             reconnectWarning = state.resultsVisible
-                ? 'Saved workspace results are still loaded from SQL, but the live source could not be reconnected.'
-                : 'The saved workspace was found in SQL, but the live source could not be reconnected.';
-            setStatus('connectionStatus', `Warning: ${escapeHtml(error?.message || 'Live SQL reconnect failed.')}`, 'warning');
+                ? 'Saved workspace results are still loaded, but the uploaded tables could not be refreshed.'
+                : 'The saved workspace was found, but the uploaded tables could not be refreshed.';
+            setStatus('connectionStatus', `Warning: ${escapeHtml(error?.message || 'Unable to load tables.')}`, 'warning');
         }
     } finally {
         state.isHydrating = false;
@@ -891,43 +866,22 @@ async function hydrateWorkspace(workspace) {
     }
 }
 
-async function connectServer(options = {}) {
-    state.server = document.getElementById('serverInput').value.trim();
-    state.driver = document.getElementById('driverSelect').value;
-    if (!state.server) { setStatus('connectionStatus', 'Enter a server name.', 'error'); return null; }
-    if (!options.silent) showSpinner('Connecting to server...');
-    setStatus('connectionStatus', 'Connecting...', 'info');
-    const result = await post('/Rule38/GetDatabases', { server: state.server, driver: state.driver });
+async function loadTables(options = {}) {
+    if (!state.clientId) return null;
+    if (!options.silent) showSpinner('Loading uploaded tables...');
+
+    const result = await post('/Rule38/GetTables', { clientId: state.clientId });
     if (!options.silent) hideSpinner();
-    if (!result.success) { setStatus('connectionStatus', `Error: ${result.error || result.Error || 'Could not connect to the server.'}`, 'error'); return null; }
-
-    const dbSelect = document.getElementById('databaseSelect');
-    dbSelect.innerHTML = '<option value="">Select database</option>';
-    result.databases.forEach(db => dbSelect.appendChild(new Option(db, db)));
-    document.getElementById('dbFieldGroup').style.display = 'block';
-
-    if (options.preferredDatabase && result.databases.includes(options.preferredDatabase)) {
-        dbSelect.value = options.preferredDatabase;
-        state.database = options.preferredDatabase;
+    if (!result.success) {
+        document.getElementById('datasetStatusAlert').className = 'alert alert--error';
+        document.getElementById('datasetStatusAlert').textContent = result.error || result.Error || 'Unable to load tables.';
+        setStatus('connectionStatus', `Error: ${result.error || result.Error || 'Could not load tables.'}`, 'error');
+        return null;
     }
 
-    setStatus('connectionStatus',
-        options.statusMessage || `Connected. Found ${result.databases.length} database(s). Select one below.`, 'success');
-    return result;
-}
-
-async function loadTables(options = {}) {
-    state.database = document.getElementById('databaseSelect').value;
-    if (!state.database) return null;
-    if (!options.silent) showSpinner('Loading tables...');
-
-    const result = await post('/Rule38/GetTables', {
-        server: state.server, database: state.database, driver: state.driver
-    });
-    if (!options.silent) hideSpinner();
-    if (!result.success) { setStatus('connectionStatus', `Error: ${result.error || result.Error || 'Could not load tables.'}`, 'error'); return null; }
-
-    setStatus('connectionStatus', `Connected to <strong>${state.database}</strong>. Found ${result.tables.length} tables.`, 'success');
+    document.getElementById('datasetStatusAlert').className = 'alert alert--success';
+    document.getElementById('datasetStatusAlert').textContent = `Loaded ${result.tables.length} table(s) from this engagement's dataset.`;
+    setStatus('connectionStatus', `Found ${result.tables.length} table(s).`, 'success');
 
     ['qualTableSelect','pqmTableSelect'].forEach(id => {
         const sel = document.getElementById(id);
@@ -1025,7 +979,7 @@ async function loadColumnsForTable(which, options = {}) {
 
     for (const roleInfo of roles) {
         const result = await post('/Rule38/GetColumns', {
-            server: state.server, database: state.database, driver: state.driver,
+            clientId: state.clientId,
             tableName, tableRole: roleInfo.key
         });
         if (!result.success) continue;
@@ -1097,13 +1051,13 @@ async function verifyTables() {
         setWorkspaceInfo('Archived engagements are read-only. Verification is disabled.', 'error'); return;
     }
     syncStateFromSelects();
-    if (!state.server || !state.database || !state.qualTable || !state.pqmTable || !state.qualIdCol) {
-        setStatus('tableStatus', 'Select the server, database, both tables, and the QUAL ID column first.', 'warning'); return;
+    if (!state.clientId || !state.qualTable || !state.pqmTable || !state.qualIdCol) {
+        setStatus('tableStatus', 'Select the engagement, both tables, and the QUAL ID column first.', 'warning'); return;
     }
     showSpinner('Verifying data...');
     try {
         const result = await post('/Rule38/VerifyTables', {
-            server: state.server, database: state.database, driver: state.driver,
+            clientId: state.clientId,
             qualTable: state.qualTable, pqmTable: state.pqmTable,
             qualIdCol: state.qualIdCol || '_001',
             qualApprovalCol: state.qualApprovalCol || '_004',
@@ -1765,7 +1719,7 @@ async function generateSql() {
         const el = document.getElementById('sqlContent');
         el.classList.remove('empty-state');
         el.innerHTML = `
-            ${renderSectionHeader('Rule 38 SQL Code', 'Generated SQL matches the QUAL -> PQM validation formula', `Database: ${escapeHtml(state.database || '')}`)}
+            ${renderSectionHeader('Rule 38 SQL Code', 'Generated SQL matches the QUAL -> PQM validation formula', `Table: ${escapeHtml(state.qualTable || '')}`)}
             <div class="sql-toolbar">
                 <button class="btn btn-sm btn-primary" onclick="copyToClipboard('sqlCode')">Copy</button>
                 <button class="btn btn-sm btn-info" onclick="downloadSql()">Download SQL</button>
@@ -1789,7 +1743,7 @@ async function generateRScript() {
         const el = document.getElementById('rContent');
         el.classList.remove('empty-state');
         el.innerHTML = `
-            ${renderSectionHeader('Rule 38 R Code', 'Generated R script matches the QUAL -> PQM validation formula', `Database: ${escapeHtml(state.database || '')}`)}
+            ${renderSectionHeader('Rule 38 R Code', 'Generated R script matches the QUAL -> PQM validation formula', `Table: ${escapeHtml(state.qualTable || '')}`)}
             <div class="sql-toolbar">
                 <button class="btn btn-sm btn-primary" onclick="copyToClipboard('rCode')">Copy</button>
                 <button class="btn btn-sm btn-info" onclick="downloadRScript()">Download R</button>
@@ -1848,8 +1802,6 @@ function validateConfig() {
     syncStateFromSelects();
     const missing = [];
     if (!state.clientId)          missing.push('engagement');
-    if (!state.server)            missing.push('server');
-    if (!state.database)          missing.push('database');
     if (!state.qualTable)         missing.push('QUAL table');
     if (!state.pqmTable)          missing.push('PQM table');
     if (!state.qualIdCol)         missing.push('QUAL ID column');
@@ -1872,7 +1824,6 @@ function buildRequest() {
     syncStateFromSelects();
     return {
         clientId: state.clientId, runId: state.currentRunId,
-        server: state.server, database: state.database, driver: state.driver,
         qualTable: state.qualTable,
         qualIdCol: state.qualIdCol, qualNameCol: state.qualNameCol,
         qualApprovalCol: state.qualApprovalCol, qualApprovalValue: state.qualApprovalValue,
@@ -2012,19 +1963,6 @@ async function removeWorkspaceSignoff() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    document.getElementById('serverInput').addEventListener('input', async () => {
-        state.server = document.getElementById('serverInput').value.trim();
-        await markWorkspaceDirty();
-    });
-    document.getElementById('driverSelect').addEventListener('change', async () => {
-        state.driver = document.getElementById('driverSelect').value;
-        await markWorkspaceDirty();
-    });
-    document.getElementById('databaseSelect').addEventListener('change', async e => {
-        state.database = e.target.value;
-        await markWorkspaceDirty();
-        await loadTables();
-    });
     document.getElementById('qualApprovalValueInput').addEventListener('input', async () => {
         state.qualApprovalValue = document.getElementById('qualApprovalValueInput').value.trim();
         await markWorkspaceDirty();

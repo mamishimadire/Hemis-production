@@ -4,9 +4,8 @@ namespace HemisAudit.Services
 {
     public interface IRule35Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<TableListResult> GetTablesAsync(string server, string database, string driver);
-        Task<Rule35ColumnSelectionResult> GetColumnsAsync(string server, string database, string driver, string tableName);
+        Task<TableListResult> GetTablesAsync(int clientId);
+        Task<Rule35ColumnSelectionResult> GetColumnsAsync(int clientId, string tableName);
         Task<Rule35VerifyResult> VerifyTableAsync(Rule35VerifyRequest request);
         Task<Rule35ValidationSummary> RunValidationAsync(Rule35ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<int?> GetClientIdForRunAsync(int runId);

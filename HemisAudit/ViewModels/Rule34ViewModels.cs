@@ -27,9 +27,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule34GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
     }
 
@@ -46,9 +44,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule34VerifyRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public string ClientTableName { get; set; } = "";
         public string FirstDayColumn { get; set; } = "";
@@ -75,9 +71,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string TableName { get; set; } = "";
         public string ClientTableName { get; set; } = "";
         public string FirstDayColumn { get; set; } = "";
@@ -119,7 +112,6 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string TableName { get; set; } = "";
         public string ClientTableName { get; set; } = "";
         public string FirstDayColumn { get; set; } = "";
@@ -138,9 +130,11 @@ namespace HemisAudit.ViewModels
         public string BlockColumn { get; set; } = "";
         public string BlockExcludeValues { get; set; } = "";
         public int ExcludedRowCount { get; set; }
+        public bool RowsTruncated { get; set; }
         public List<Rule34HolidayItemViewModel> Holidays { get; set; } = new();
         public List<Rule34ValidationRowRecord> ValidationRows { get; set; } = new();
         public List<Rule34ValidationRowRecord> Exceptions { get; set; } = new();
+        public string? Warning { get; set; }
         public string? Error { get; set; }
     }
 
@@ -151,7 +145,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule34ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -169,9 +162,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string TableName { get; set; } = "";
         public string ClientTableName { get; set; } = "";
         public string FirstDayColumn { get; set; } = "";
@@ -223,4 +213,3 @@ namespace HemisAudit.ViewModels
         public string? Error { get; set; }
     }
 }
-

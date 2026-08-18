@@ -11,9 +11,6 @@ namespace HemisAudit.ViewModels
     {
         public int    ClientId      { get; set; }
         public int?   RunId         { get; set; }
-        public string Server        { get; set; } = "";
-        public string Database      { get; set; } = "";
-        public string Driver        { get; set; } = "ODBC Driver 17 for SQL Server";
         public string ValpacTable   { get; set; } = "";
         public string SfteTable     { get; set; } = "";
         public string ValpacKeyCol  { get; set; } = "_037";
@@ -28,8 +25,6 @@ namespace HemisAudit.ViewModels
         public int     ClientId               { get; set; }
         public string  Status                 { get; set; } = "";
         public string  Timestamp              { get; set; } = "";
-        public string  Server                 { get; set; } = "";
-        public string  Database               { get; set; } = "";
         public string  ValpacTable            { get; set; } = "";
         public string  SfteTable              { get; set; } = "";
         public string  ValpacKeyCol           { get; set; } = "_037";
@@ -41,13 +36,12 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate          { get; set; }
         public List<Rule4001ReconcRow> ReviewRows  { get; set; } = new();
         public List<Rule4001ReconcRow> AgreeSample { get; set; } = new();
+        public string? Warning { get; set; }
     }
 
     public class Rule4001VerifyRequest
     {
-        public string Server      { get; set; } = "";
-        public string Database    { get; set; } = "";
-        public string Driver      { get; set; } = "ODBC Driver 17 for SQL Server";
+        public int    ClientId    { get; set; }
         public string ValpacTable { get; set; } = "";
         public string SfteTable   { get; set; } = "";
     }
@@ -73,9 +67,6 @@ namespace HemisAudit.ViewModels
     {
         public int       ClientId                  { get; set; }
         public int?      RunId                     { get; set; }
-        public string    Server                    { get; set; } = "";
-        public string    Database                  { get; set; } = "";
-        public string    Driver                    { get; set; } = "ODBC Driver 17 for SQL Server";
         public string    ValpacTable               { get; set; } = "";
         public string    SfteTable                 { get; set; } = "";
         public string    ValpacKeyCol              { get; set; } = "_037";

@@ -1,0 +1,96 @@
+@model HemisAudit.Services.DatasetStagingInfo
+@{
+    ViewData["Title"] = "Modify columns";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    int clientId = ViewBag.ClientId;
+    var dataTypes = new[]
+    {
+        "bit", "tinyint", "smallint", "int", "bigint",
+        "decimal(18,2)", "numeric(18,2)", "money", "smallmoney",
+        "float", "real",
+        "date", "datetime", "datetime2", "datetimeoffset", "smalldatetime", "timestamp", "time",
+        "char(10)", "nchar(10)", "varchar(50)", "nvarchar(50)", "varchar(max)", "nvarchar(max)",
+        "text", "ntext", "uniqueidentifier", "xml",
+        "binary(50)", "varbinary(50)", "varbinary(max)", "geography", "geometry", "hierarchyid", "sql_variant"
+    };
+}
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">❌ @TempData["Error"]</div>
+}
+
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+    <div>
+        <h1>Modify columns</h1>
+        <p><strong>@Model.OriginalFileName</strong> — step 3 of 3: verify the generated table schema.</p>
+    </div>
+    <form asp-action="UploadCancel" asp-route-clientId="@clientId" method="post" style="display:inline-flex;align-items:center;">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="token" value="@Model.Token" />
+        <button type="submit" class="btn btn-secondary">Cancel upload</button>
+    </form>
+</div>
+
+<div class="wizard-page-content" style="display:grid;grid-template-columns:260px minmax(0,1fr);gap:24px;align-items:start;">
+    <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:20px;">
+        <div style="font-weight:700;margin-bottom:16px;color:var(--brand)">Import steps</div>
+        <ol style="padding-left:18px;margin:0;list-style:decimal;">
+            <li style="margin-bottom:12px;color:var(--text-muted)">Specify input file</li>
+            <li style="margin-bottom:12px;color:var(--text-muted)">Preview data</li>
+            <li style="margin-bottom:0;font-weight:700;color:var(--text)">Modify columns</li>
+        </ol>
+    </div>
+
+    <div style="min-width:0;">
+        <form asp-action="UploadCommit" asp-route-clientId="@clientId" method="post">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="token" value="@Model.Token" />
+
+            <div class="card" style="margin-bottom:20px;padding:24px;">
+                <h2 style="margin-top:0;margin-bottom:12px">Modify columns</h2>
+                <p style="color:var(--text-muted);margin-bottom:18px">Review the generated table schema. Adjust names, choose data types, and mark nullable columns before creating the table.</p>
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Original header</th>
+                                <th>Column name</th>
+                                <th>Data type</th>
+                                <th style="width:120px;text-align:center">Allow blanks</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var col in Model.Columns)
+                            {
+                                <tr>
+                                    <td style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;">@col.OriginalHeader
+                                        <input type="hidden" name="originalHeader" value="@col.OriginalHeader" />
+                                    </td>
+                                    <td><input type="text" name="columnName" value="@col.ColumnName" maxlength="63" required /></td>
+                                    <td>
+                                        <input list="dataTypeOptions" name="dataType" value="@col.DataType" required style="width:100%;min-width:180px;" />
+                                        <datalist id="dataTypeOptions">
+                                            @foreach (var dt in dataTypes)
+                                            {
+                                                <option value="@dt"></option>
+                                            }
+                                        </datalist>
+                                    </td>
+                                    <td style="text-align:center">
+                                        <input type="checkbox" name="allowNulls" value="@col.OriginalHeader" @(col.AllowNulls ? "checked" : "") />
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="wizard-nav-bar" style="background:transparent;border-top:none;margin:20px 0 0;padding:0;">
+                <a asp-action="UploadPreview" asp-route-clientId="@clientId" asp-route-token="@Model.Token" class="btn btn-secondary">← Previous</a>
+                <button type="submit" class="btn btn-success">Create table →</button>
+            </div>
+        </form>
+    </div>
+</div>

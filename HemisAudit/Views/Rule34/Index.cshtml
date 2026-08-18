@@ -75,31 +75,17 @@
         <div class="accordion-item" id="acc-connection">
             <button class="accordion-toggle" onclick="toggleAccordion('connection')">
                 <span class="acc-icon">DB</span>
-                <span>Database Connection</span>
+                <span>Engagement Dataset</span>
                 <span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-connection" style="display:none">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label>Server Name</label>
-                        <input type="text" id="serverInput" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                    </div>
-                    <div class="field-group">
-                        <label>Driver</label>
-                        <select id="driverSelect">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group" id="dbFieldGroup" style="display:none">
-                        <label>Database</label>
-                        <select id="databaseSelect">
-                            <option value="">Select database</option>
-                        </select>
-                    </div>
+                <div class="alert alert--info" id="datasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
-                <button class="btn btn-primary" onclick="connectServer()">Connect</button>
+                <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
+                    <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                    <button type="button" class="btn btn-primary" id="connectBtn" onclick="loadTables()">Refresh Tables</button>
+                </div>
                 <div class="status-output" id="connectionStatus"></div>
             </div>
         </div>
@@ -263,9 +249,6 @@ const currentSystemRole = '@(ViewBag.CurrentSystemRole ?? "")';
 let spinnerDelayHandle = null;
 const state = {
     clientId: parseInt(document.getElementById('clientIdSelect')?.value || '0') || 0,
-    server: '',
-    database: '',
-    driver: 'ODBC Driver 17 for SQL Server',
     tableName: '',
     clientTableName: '',
     firstDayColumn: '',
@@ -290,8 +273,6 @@ const state = {
     isDirty: false,
     chartInstances: {},
     cache: {
-        databases: {},
-        tables: {},
         columns: {}
     }
 };
@@ -405,9 +386,7 @@ async function downloadPost(url, data, filename) {
 }
 
 function resetWorkspaceState(clearClient) {
-    state.server = '';
-    state.database = '';
-    state.driver = 'ODBC Driver 17 for SQL Server';
+    state.cache.columns = {};
     state.tableName = '';
     state.clientTableName = '';
     state.firstDayColumn = '';
@@ -426,9 +405,6 @@ function resetWorkspaceState(clearClient) {
     state.isDirty = false;
     if (clearClient) state.clientId = 0;
 
-    document.getElementById('serverInput').value = '';
-    document.getElementById('driverSelect').value = 'ODBC Driver 17 for SQL Server';
-    document.getElementById('databaseSelect').innerHTML = '<option value="">Select database</option>';
     document.getElementById('tableSelect').innerHTML = '<option value="">Select table</option>';
     document.getElementById('clientTableSelect').innerHTML = '<option value="">Select table</option>';
     document.getElementById('firstDaySelect').innerHTML = '<option value="">Select column</option>';
@@ -437,7 +413,6 @@ function resetWorkspaceState(clearClient) {
     document.getElementById('blockColumnSelect').innerHTML = '<option value="">Select column</option>';
     document.getElementById('clientJoinColumnSelect').innerHTML = '<option value="">Select column</option>';
     document.getElementById('blockExcludeInput').value = '5, 5F, 8F, 8G, R0, R1, R2';
-    document.getElementById('dbFieldGroup').style.display = 'none';
     document.getElementById('signoffComment').value = '';
     document.getElementById('verifyPreview').style.display = 'none';
     document.getElementById('downloadAllBtn').disabled = true;
@@ -453,6 +428,9 @@ function resetWorkspaceState(clearClient) {
     document.getElementById('sqlContent').innerHTML = '<p>Click "Generate SQL" or run validation to generate the SQL script.</p>';
     document.getElementById('downloadsContent').className = 'empty-state';
     document.getElementById('downloadsContent').innerHTML = '<p>Run validation first, then use "Download All" or the individual download buttons.</p>';
+    document.getElementById('datasetStatusAlert').className = 'alert alert--info';
+    document.getElementById('datasetStatusAlert').textContent = 'Select an engagement above to load its uploaded tables.';
+    document.getElementById('datasetsLink').href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
     updateHeaderBadge('');
     renderWorkspaceState();
 }
@@ -569,9 +547,6 @@ async function handleClientChange(value) {
 function applyWorkspace(workspace, preserveMessage) {
     state.isHydrating = true;
     state.currentRunId = workspace.runId || null;
-    state.server = workspace.server || '';
-    state.database = workspace.database || '';
-    state.driver = workspace.driver || 'ODBC Driver 17 for SQL Server';
     state.tableName = workspace.tableName || '';
     state.clientTableName = workspace.clientTableName || '';
     state.firstDayColumn = workspace.firstDayColumn || '';
@@ -591,8 +566,6 @@ function applyWorkspace(workspace, preserveMessage) {
     state.editWarningAccepted = false;
     state.isDirty = false;
 
-    document.getElementById('serverInput').value = state.server;
-    document.getElementById('driverSelect').value = state.driver;
     document.getElementById('startYearInput').value = state.startYear;
     document.getElementById('endYearInput').value = state.endYear;
     document.getElementById('blockExcludeInput').value = state.blockExcludeValues;
@@ -603,11 +576,6 @@ function applyWorkspace(workspace, preserveMessage) {
             const o = document.createElement('option'); o.value = o.textContent = state.blockColumn; bSel.appendChild(o);
         }
         bSel.value = state.blockColumn;
-    }
-    if (state.database) {
-        document.getElementById('dbFieldGroup').style.display = 'block';
-        document.getElementById('databaseSelect').innerHTML = `<option value="${escapeHtml(state.database)}">${escapeHtml(state.database)}</option>`;
-        document.getElementById('databaseSelect').value = state.database;
     }
     if (state.tableName) {
         document.getElementById('tableSelect').innerHTML = `<option value="${escapeHtml(state.tableName)}">${escapeHtml(state.tableName)}</option>`;
@@ -652,9 +620,6 @@ function applyWorkspace(workspace, preserveMessage) {
 
 function applyWorkspaceReviewState(workspace) {
     state.currentRunId = workspace.runId || state.currentRunId;
-    state.server = workspace.server || state.server;
-    state.database = workspace.database || state.database;
-    state.driver = workspace.driver || state.driver;
     state.tableName = workspace.tableName || state.tableName;
     state.clientTableName = workspace.clientTableName || state.clientTableName;
     state.firstDayColumn = workspace.firstDayColumn || state.firstDayColumn;
@@ -679,15 +644,8 @@ function applyWorkspaceReviewState(workspace) {
     state.hasDataAnalystSignoff = !!workspace.hasDataAnalystSignoff;
     state.currentStatus = workspace.currentStatus || state.currentStatus;
     state.resultsVisible = !!workspace.resultsVisible;
-    document.getElementById('serverInput').value = state.server;
-    document.getElementById('driverSelect').value = state.driver;
     document.getElementById('startYearInput').value = state.startYear;
     document.getElementById('endYearInput').value = state.endYear;
-    if (state.database) {
-        document.getElementById('dbFieldGroup').style.display = 'block';
-        document.getElementById('databaseSelect').innerHTML = `<option value="${escapeHtml(state.database)}">${escapeHtml(state.database)}</option>`;
-        document.getElementById('databaseSelect').value = state.database;
-    }
     if (state.tableName) {
         document.getElementById('tableSelect').innerHTML = `<option value="${escapeHtml(state.tableName)}">${escapeHtml(state.tableName)}</option>`;
         document.getElementById('tableSelect').value = state.tableName;
@@ -723,6 +681,8 @@ function applyWorkspaceReviewState(workspace) {
 
 async function loadWorkspaceState() {
     if (!state.clientId) return;
+    const datasetsLinkEl = document.getElementById('datasetsLink');
+    if (datasetsLinkEl) datasetsLinkEl.href = `/EngagementDatasets?clientId=${state.clientId}`;
     showSpinner('Loading saved workspace...');
     try {
         const result = await getJson(`/Rule34/GetWorkspaceState?clientId=${state.clientId}`);
@@ -731,10 +691,12 @@ async function loadWorkspaceState() {
             return;
         }
 
+        await loadTables().catch(() => { /* best-effort background refresh */ });
+
         if (!result.hasWorkspace) {
             setWorkspaceInfo(
                 currentSystemRole === 'DataAnalyst'
-                    ? 'No saved Rule 34 workspace exists for this engagement yet. Connect, configure, run validation, then save and sign off.'
+                    ? 'No saved Rule 34 workspace exists for this engagement yet. Select the source table, configure, run validation, then save and sign off.'
                     : 'No saved Rule 34 workspace exists for this engagement yet. This module is read-only for your role.',
                 'info');
             renderWorkspaceState();
@@ -771,69 +733,23 @@ async function loadHolidays() {
     }
 }
 
-async function connectServer() {
-    state.server = document.getElementById('serverInput').value.trim();
-    state.driver = document.getElementById('driverSelect').value;
-    if (!state.server) {
-        setStatus('connectionStatus', 'Enter a server name first.', 'warning');
-        return;
-    }
-
-    const cacheKey = `${state.server}|${state.driver}`;
-    if (state.cache.databases[cacheKey]) {
-        document.getElementById('dbFieldGroup').style.display = 'block';
-        const select = document.getElementById('databaseSelect');
-        select.innerHTML = '<option value="">Select database</option>' +
-            state.cache.databases[cacheKey].map(db => `<option value="${escapeHtml(db)}">${escapeHtml(db)}</option>`).join('');
-        setStatus('connectionStatus', `Loaded ${state.cache.databases[cacheKey].length} cached databases. Select one to continue.`, 'success');
-        await markWorkspaceDirty();
-        return;
-    }
-
-    showSpinner('Connecting to SQL Server...');
-    try {
-        const result = await post('/Rule34/GetDatabases', { server: state.server, driver: state.driver });
-        if (!result.success) {
-            setStatus('connectionStatus', escapeHtml(result.error || 'Connection failed.'), 'error');
-            return;
-        }
-
-        state.cache.databases[cacheKey] = result.databases || [];
-        document.getElementById('dbFieldGroup').style.display = 'block';
-        const select = document.getElementById('databaseSelect');
-        select.innerHTML = '<option value="">Select database</option>' +
-            (result.databases || []).map(db => `<option value="${escapeHtml(db)}">${escapeHtml(db)}</option>`).join('');
-        setStatus('connectionStatus', `Found ${result.databases.length} databases. Select one to continue.`, 'success');
-        await markWorkspaceDirty();
-    } finally {
-        hideSpinner();
-    }
-}
-
 async function loadTables() {
-    if (!state.server || !state.database) return;
-    const cacheKey = `${state.server}|${state.driver}|${state.database}`;
-    if (state.cache.tables[cacheKey]) {
-        const cached = state.cache.tables[cacheKey];
-        populateRule34TableSelects(cached.tables || [], cached.autoStudTable || '');
-        if (state.tableName) await loadColumns();
-        if (state.clientTableName) await loadClientColumns();
-        return;
-    }
+    if (!state.clientId) return;
 
-    showSpinner('Loading tables...');
+    showSpinner('Loading uploaded tables...');
     try {
-        const result = await post('/Rule34/GetTables', { server: state.server, database: state.database, driver: state.driver });
+        const result = await post('/Rule34/GetTables', { clientId: state.clientId });
         if (!result.success) {
+            document.getElementById('datasetStatusAlert').className = 'alert alert--error';
+            document.getElementById('datasetStatusAlert').textContent = result.error || 'Unable to load tables.';
             setStatus('configStatus', escapeHtml(result.error || 'Failed to load tables.'), 'error');
             return;
         }
 
-        state.cache.tables[cacheKey] = {
-            tables: result.tables || [],
-            autoStudTable: result.autoStudTable || ''
-        };
-        populateRule34TableSelects(result.tables || [], result.autoStudTable || '');
+        const tables = result.tables || [];
+        document.getElementById('datasetStatusAlert').className = 'alert alert--success';
+        document.getElementById('datasetStatusAlert').textContent = `Loaded ${tables.length} table(s) from this engagement's dataset.`;
+        populateRule34TableSelects(tables, result.autoStudTable || '');
         if (state.tableName) await loadColumns();
         if (state.clientTableName) await loadClientColumns();
     } finally {
@@ -869,7 +785,7 @@ function populateRule34TableSelects(tables, autoSourceTable) {
 
 async function loadColumns() {
     if (!state.tableName) return;
-    const cacheKey = `${state.server}|${state.driver}|${state.database}|${state.tableName}`;
+    const cacheKey = `src|${state.tableName}`;
     if (state.cache.columns[cacheKey]) {
         populateRule34SourceColumnSelects(state.cache.columns[cacheKey]);
         return;
@@ -878,9 +794,7 @@ async function loadColumns() {
     showSpinner('Loading columns...');
     try {
         const result = await post('/Rule34/GetColumns', {
-            server: state.server,
-            database: state.database,
-            driver: state.driver,
+            clientId: state.clientId,
             tableName: state.tableName
         });
 
@@ -899,7 +813,7 @@ async function loadColumns() {
 
 async function loadClientColumns() {
     if (!state.clientTableName) return;
-    const cacheKey = `${state.server}|${state.driver}|${state.database}|${state.clientTableName}`;
+    const cacheKey = `client|${state.clientTableName}`;
     if (state.cache.columns[cacheKey]) {
         populateRule34ClientColumnSelects(state.cache.columns[cacheKey]);
         return;
@@ -908,9 +822,7 @@ async function loadClientColumns() {
     showSpinner('Loading client census columns...');
     try {
         const result = await post('/Rule34/GetColumns', {
-            server: state.server,
-            database: state.database,
-            driver: state.driver,
+            clientId: state.clientId,
             tableName: state.clientTableName
         });
 
@@ -993,17 +905,15 @@ function populateRule34ClientColumnSelects(result) {
 }
 
 async function verifyTable() {
-    if (!state.server || !state.database || !state.tableName || !state.clientTableName || !state.firstDayColumn || !state.lastDayColumn || !state.censusDateColumn || !state.blockColumn || !state.clientJoinColumn) {
-        setStatus('configStatus', 'Select the server, database, source table, client table, date columns, and join columns first.', 'warning');
+    if (!state.clientId || !state.tableName || !state.clientTableName || !state.firstDayColumn || !state.lastDayColumn || !state.censusDateColumn || !state.blockColumn || !state.clientJoinColumn) {
+        setStatus('configStatus', 'Select the engagement, source table, client table, date columns, and join columns first.', 'warning');
         return;
     }
 
     showSpinner('Verifying table...');
     try {
         const result = await post('/Rule34/VerifyTable', {
-            server: state.server,
-            database: state.database,
-            driver: state.driver,
+            clientId: state.clientId,
             tableName: state.tableName,
             clientTableName: state.clientTableName,
             firstDayColumn: state.firstDayColumn,
@@ -1055,8 +965,6 @@ async function verifyTable() {
 function validateConfig() {
     const missing = [];
     if (!state.clientId) missing.push('engagement');
-    if (!state.server) missing.push('server');
-    if (!state.database) missing.push('database');
     if (!state.tableName) missing.push('source table');
     if (!state.clientTableName) missing.push('client census table');
     if (!state.firstDayColumn) missing.push('first day column');
@@ -1082,9 +990,6 @@ function buildRequest() {
     return {
         clientId: state.clientId,
         runId: state.currentRunId,
-        server: state.server,
-        database: state.database,
-        driver: state.driver,
         tableName: state.tableName,
         clientTableName: state.clientTableName,
         firstDayColumn: state.firstDayColumn,
@@ -1583,22 +1488,6 @@ function escapeHtml(value) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    document.getElementById('serverInput').addEventListener('input', async e => {
-        state.server = e.target.value.trim();
-        await markWorkspaceDirty();
-    });
-
-    document.getElementById('driverSelect').addEventListener('change', async e => {
-        state.driver = e.target.value;
-        await markWorkspaceDirty();
-    });
-
-    document.getElementById('databaseSelect').addEventListener('change', async e => {
-        state.database = e.target.value;
-        await markWorkspaceDirty();
-        await loadTables();
-    });
-
     document.getElementById('tableSelect').addEventListener('change', async e => {
         state.tableName = e.target.value;
         await markWorkspaceDirty();

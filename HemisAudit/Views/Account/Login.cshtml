@@ -26,8 +26,44 @@
     </script>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="~/css/site.css" />
+    <style>
+        .login-bg-video {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 0;
+            pointer-events: none;
+            display: block;
+        }
+        .login-bg-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(10, 12, 20, 0.45);
+            z-index: 1;
+            pointer-events: none;
+        }
+        .login-wrap {
+            position: relative;
+            z-index: 2;
+        }
+        body.login-page {
+            background: transparent;
+            min-height: 100vh;
+        }
+        html, body {
+            background: transparent;
+        }
+    </style>
 </head>
 <body class="login-page">
+    <video class="login-bg-video" autoplay muted loop playsinline preload="auto" src="@(Url.Content("~/videos/login-background.mp4"))"></video>
+    <div class="login-bg-overlay" aria-hidden="true"></div>
     <div class="login-wrap">
         <div class="login-card">
             <div class="login-brand">
@@ -39,6 +75,17 @@
             </div>
 
             <h2 class="login-heading">Sign in to your account</h2>
+
+            <div class="login-mode-tabs" style="display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--border);">
+                <button type="button" id="tabClient" class="login-mode-tab" data-mode="Client"
+                        style="flex:1;padding:10px;border:none;background:none;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;">
+                    Client Login
+                </button>
+                <button type="button" id="tabServiceProvider" class="login-mode-tab" data-mode="ServiceProvider"
+                        style="flex:1;padding:10px;border:none;background:none;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;">
+                    Service Provider
+                </button>
+            </div>
 
             @if (!ViewData.ModelState.IsValid)
             {
@@ -59,11 +106,18 @@
 
             <form asp-action="Login" method="post">
                 <input type="hidden" name="ReturnUrl" value="@ViewData["ReturnUrl"]" />
+                <input asp-for="LoginMode" type="hidden" id="loginModeInput" />
                 @Html.AntiForgeryToken()
+
+                <div class="field-group" id="clientCodeGroup" style="margin-bottom:14px">
+                    <label asp-for="ClientCode">Client Code</label>
+                    <input asp-for="ClientCode" type="text" placeholder="e.g. 100001" autocomplete="off" />
+                    <span asp-validation-for="ClientCode" class="field-error"></span>
+                </div>
 
                 <div class="field-group" style="margin-bottom:14px">
                     <label asp-for="Email">Email address</label>
-                    <input asp-for="Email" type="email" placeholder="you@sng.gt.com" autocomplete="email" />
+                    <input asp-for="Email" type="email" placeholder="you@mamishihemissolutions.co.za" autocomplete="email" />
                     <span asp-validation-for="Email" class="field-error"></span>
                 </div>
 
@@ -75,7 +129,7 @@
 
                 <input asp-for="RememberMe" type="hidden" value="true" />
 
-                <div class="alert alert--info" style="margin-bottom:20px">
+                <div class="alert alert--info" style="margin-bottom:20px;color:#000">
                     Your sign-in stays available on this browser for up to 8 hours unless you sign out sooner.
                 </div>
 
@@ -94,8 +148,42 @@
             </form>
         </div>
 
+        <script>
+            (function () {
+                var clientTab = document.getElementById('tabClient');
+                var spTab = document.getElementById('tabServiceProvider');
+                var modeInput = document.getElementById('loginModeInput');
+                var clientCodeGroup = document.getElementById('clientCodeGroup');
+
+                function setMode(mode) {
+                    modeInput.value = mode;
+                    var isClient = mode === 'Client';
+                    clientCodeGroup.style.display = isClient ? '' : 'none';
+                    clientTab.style.borderBottomColor = isClient ? 'var(--brand)' : 'transparent';
+                    spTab.style.borderBottomColor = isClient ? 'transparent' : 'var(--brand)';
+                }
+
+                clientTab.addEventListener('click', function () { setMode('Client'); });
+                spTab.addEventListener('click', function () { setMode('ServiceProvider'); });
+
+                setMode(modeInput.value === 'ServiceProvider' ? 'ServiceProvider' : 'Client');
+            })();
+
+            var loginVideo = document.querySelector('.login-bg-video');
+            if (loginVideo) {
+                loginVideo.play().catch(function () {
+                    // Some browsers require a user gesture; mute + autoplay already set.
+                });
+                loginVideo.addEventListener('pause', function () {
+                    if (document.visibilityState === 'visible') {
+                        loginVideo.play().catch(function () {});
+                    }
+                });
+            }
+        </script>
+
         <p style="color:var(--text-muted);font-size:12px;text-align:center;margin-top:20px">
-            SNG Grant Thornton - HEMIS Validation Suite - v1.0
+            Mamishi IT Audit Solutions - HEMIS Validation Suite - v1.0
         </p>
     </div>
 </body>

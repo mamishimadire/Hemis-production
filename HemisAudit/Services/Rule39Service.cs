@@ -1,67 +1,75 @@
-using Microsoft.Data.SqlClient;
-using Newtonsoft.Json;
+using System.Globalization;
 using System.Security.Cryptography;
+using HemisAudit.Helpers;
+using HemisAudit.Models;
 using HemisAudit.ViewModels;
+using Microsoft.AspNetCore.Identity;
+using Newtonsoft.Json;
+using Npgsql;
 
 namespace HemisAudit.Services
 {
+    // Rule 39: First-Time Entering Students vs Non-Aligned Qualifications — validates against
+    // the engagement's own uploaded Supabase data instead of a live SQL Server connection.
+    // Rule 39 is functionally identical to Rule 21 (same STUD/QUAL/NAL cross-match, same
+    // ViewModel shape) under a different rule number, so this port mirrors Rule21Service.cs
+    // exactly rather than re-deriving the query. STUD is filtered on the first-time entering flag,
+    // LEFT JOINed to QUAL (for the qualification name) and then to the Non-Aligned Qualifications
+    // reference table (filtered by Category). Any student whose qualification code is found in the
+    // NAL list is FLAGGED; everyone else is CLEAR. Unlike Rule18/19/20 this is not a
+    // 100%-PASS-by-construction rule — FLAGGED is the genuine exception outcome — so results are
+    // capped defensively: all FLAGGED rows are kept (up to a generous safety cap, since that is the
+    // actionable exception list), while CLEAR rows are only ever stored as a representative sample
+    // (matching what the field has always been named) to keep the saved JSON bounded regardless of
+    // how large the first-time-entering population is.
     public class Rule39Service : IRule39Service
     {
-        private const int SqlCommandTimeoutSeconds = SqlLargeDataExtensions.LargeDataCommandTimeoutSeconds;
         private const int BrowserPreviewPerResultLimit = 10;
-        private readonly IConfiguration _configuration;
-        private readonly IPendingValidationCacheService _pendingValidationCache;
+        private const int MaxFlaggedRows = 5000;
+        private const int ClearSampleSize = 500;
 
-        public Rule39Service(IConfiguration configuration, IPendingValidationCacheService pendingValidationCache)
+        private readonly IConfiguration _configuration;
+        private readonly IEngagementDatasetService _datasets;
+        private readonly ISystemDatabaseService _systemDb;
+        private readonly UserManager<ApplicationUser> _userManager;
+
+        public Rule39Service(
+            IConfiguration configuration,
+            IEngagementDatasetService datasets,
+            ISystemDatabaseService systemDb,
+            UserManager<ApplicationUser> userManager)
         {
             _configuration = configuration;
-            _pendingValidationCache = pendingValidationCache;
+            _datasets = datasets;
+            _systemDb = systemDb;
+            _userManager = userManager;
         }
 
-        public async Task<DatabaseListResult> GetDatabasesAsync(string server, string driver)
+        // ── Engagement data source (uploaded tables, not a live SQL Server) ────────────────
+
+        public async Task<Rule39TableDiscoveryResult> GetTablesAsync(int clientId)
         {
             try
             {
-                await using var conn = new SqlConnection(BuildConnectionString(server, "master", driver));
-                await conn.OpenAsync();
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT name FROM sys.databases WHERE name NOT IN ('master','tempdb','model','msdb') ORDER BY name;";
-                await using var reader = await cmd.ExecuteReaderAsync();
-                var items = new List<string>();
-                while (await reader.ReadAsync()) items.Add(reader.GetString(0));
-                return new DatabaseListResult { Success = true, Databases = items };
-            }
-            catch (Exception ex)
-            {
-                return new DatabaseListResult { Success = false, Error = ex.Message };
-            }
-        }
-
-        public async Task<Rule39TableDiscoveryResult> GetTablesAsync(string server, string database, string driver)
-        {
-            try
-            {
-                await using var conn = new SqlConnection(BuildConnectionString(server, database, driver));
-                await conn.OpenAsync();
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME;";
-                await using var reader = await cmd.ExecuteReaderAsync();
-                var tables = new List<string>();
-                while (await reader.ReadAsync()) tables.Add(reader.GetString(0));
+                var tables = await _datasets.ListTableNamesAsync(clientId);
+                if (tables.Count == 0)
+                {
+                    return new Rule39TableDiscoveryResult
+                    {
+                        Success = false,
+                        Error = "No tables have been uploaded for this engagement yet. Upload data under Datasets first."
+                    };
+                }
 
                 return new Rule39TableDiscoveryResult
                 {
                     Success = true,
                     Tables = tables,
-                    AutoStudTable = FindFirst(tables,
-                        ["dbo_STUD", "STUD"],
-                        ["stud"]),
-                    AutoQualTable = FindFirst(tables,
-                        ["dbo_QUAL", "QUAL"],
-                        ["qual"]),
+                    AutoStudTable = FindFirst(tables, ["dbo_STUD", "dbo_stud", "STUD", "stud"], ["stud"]),
+                    AutoQualTable = FindFirst(tables, ["dbo_QUAL", "dbo_qual", "QUAL", "qual"], ["qual"]),
                     AutoNalTable = FindFirst(tables,
                         ["Non_Aligned_Qualifications", "NonAligned_Qualifications", "NON_ALIGNED_QUALIFICATIONS"],
-                        ["non_aligned", "nonaligned", "nal_qual"])
+                        ["non_aligned", "nonaligned", "nal_qual", "nal"])
                 };
             }
             catch (Exception ex)
@@ -70,36 +78,28 @@ namespace HemisAudit.Services
             }
         }
 
-        public async Task<Rule39ColumnDiscoveryResult> GetColumnsAsync(string server, string database, string driver, string tableName, string tableRole)
+        public async Task<Rule39ColumnDiscoveryResult> GetColumnsAsync(int clientId, string tableName)
         {
             try
             {
-                var columns = await GetTableColumnsAsync(server, database, driver, tableName);
-                var result = new Rule39ColumnDiscoveryResult { Success = true, Columns = columns };
-
-                if (string.Equals(tableRole, "stud", StringComparison.OrdinalIgnoreCase))
+                var columns = await _datasets.GetValidatedColumnsAsync(clientId, tableName);
+                return new Rule39ColumnDiscoveryResult
                 {
-                    result.AutoQualRefColumn  = FindFirst(columns, ["_001"], ["_001", "qual_ref", "qualcode"]);
-                    result.AutoFirstTimeColumn = FindFirst(columns, ["_010"], ["_010", "firsttime", "first_time"]);
-                    result.AutoStud007Column = FindFirst(columns, ["_007"], ["_007"]);
-                    result.AutoStud008Column = FindFirst(columns, ["_008"], ["_008"]);
-                    result.AutoStud012Column = FindFirst(columns, ["_012"], ["_012"]);
-                    result.AutoStud026Column = FindFirst(columns, ["_026"], ["_026"]);
-                }
-                else if (string.Equals(tableRole, "qual", StringComparison.OrdinalIgnoreCase))
-                {
-                    result.AutoQualCodeColumn = FindFirst(columns, ["_001"], ["_001", "qual_code", "qualification_code"]);
-                    result.AutoQualNameColumn = FindFirst(columns, ["_003"], ["_003", "qual_name", "qualification_name"]);
-                }
-                else
-                {
-                    result.AutoNalRefColumn      = FindFirst(columns, ["Qualification_reference_number"], ["qual_ref", "qualification_ref", "qualref"]);
-                    result.AutoNalNameColumn     = FindFirst(columns, ["Existing_qualification_name"], ["exist_qual", "qual_name", "qualname"]);
-                    result.AutoNalAlignedColumn  = FindFirst(columns, ["Aligned_qualification_name"], ["aligned_qual", "aligned"]);
-                    result.AutoNalCategoryColumn = FindFirst(columns, ["Category"], ["category", "cat"]);
-                }
-
-                return result;
+                    Success = true,
+                    Columns = columns,
+                    AutoQualRefColumn    = FindFirst(columns, ["_001"], ["qual_ref", "qualcode", "qual"]),
+                    AutoFirstTimeColumn  = FindFirst(columns, ["_010"], ["firsttime", "first_time"]),
+                    AutoStud007Column    = FindFirst(columns, ["_007"], ["_007"]),
+                    AutoStud008Column    = FindFirst(columns, ["_008"], ["_008"]),
+                    AutoStud012Column    = FindFirst(columns, ["_012"], ["_012"]),
+                    AutoStud026Column    = FindFirst(columns, ["_026"], ["_026"]),
+                    AutoQualCodeColumn   = FindFirst(columns, ["_001"], ["qual_code", "qualification_code"]),
+                    AutoQualNameColumn   = FindFirst(columns, ["_003"], ["qual_name", "qualification_name"]),
+                    AutoNalRefColumn     = FindFirst(columns, ["Qualification_reference_number"], ["qual_ref", "qualification_ref", "qualref"]),
+                    AutoNalNameColumn    = FindFirst(columns, ["Existing_qualification_name"], ["exist_qual", "qual_name", "qualname"]),
+                    AutoNalAlignedColumn = FindFirst(columns, ["Aligned_qualification_name"], ["aligned_qual", "aligned"]),
+                    AutoNalCategoryColumn = FindFirst(columns, ["Category"], ["category", "cat"])
+                };
             }
             catch (Exception ex)
             {
@@ -107,28 +107,14 @@ namespace HemisAudit.Services
             }
         }
 
-        public async Task<Rule39DistinctValuesResult> GetDistinctValuesAsync(string server, string database, string driver, string tableName, string columnName, string? preferredValue)
+        public async Task<Rule39DistinctValuesResult> GetDistinctValuesAsync(int clientId, string tableName, string columnName, string? preferredValue)
         {
             try
             {
-                ValidateObjectName(tableName);
-                ValidateObjectName(columnName);
-                var tbl = Sanitise(tableName);
-                var col = Sanitise(columnName);
-
-                await using var conn = new SqlConnection(BuildConnectionString(server, database, driver));
-                await conn.OpenAsync();
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandTimeout = SqlCommandTimeoutSeconds;
-                cmd.CommandText = $"SELECT DISTINCT TOP 100 CAST([{col}] AS nvarchar(200)) FROM [{tbl}] WHERE [{col}] IS NOT NULL ORDER BY 1;";
-                await using var reader = await cmd.ExecuteReaderAsync();
-
-                var values = new List<string>();
-                while (await reader.ReadAsync())
-                {
-                    var v = reader.IsDBNull(0) ? null : reader.GetString(0).Trim();
-                    if (!string.IsNullOrEmpty(v)) values.Add(v);
-                }
+                var values = (await _datasets.GetDistinctColumnValuesAsync(clientId, tableName, columnName, take: 100))
+                    .Select(v => v.Value)
+                    .Where(v => !string.IsNullOrWhiteSpace(v))
+                    .ToList();
 
                 var autoValue = !string.IsNullOrWhiteSpace(preferredValue) && values.Any(v => string.Equals(v, preferredValue, StringComparison.OrdinalIgnoreCase))
                     ? values.First(v => string.Equals(v, preferredValue, StringComparison.OrdinalIgnoreCase))
@@ -146,29 +132,32 @@ namespace HemisAudit.Services
         {
             try
             {
-                ValidateObjectNames(request);
-                var connStr = BuildConnectionString(request.Server, request.Database, request.Driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
+                var studFirstTimeColumn = Default(request.StudFirstTimeColumn, "_010");
+                var studFirstTimeValue = Default(request.StudFirstTimeValue, "F");
+                var nalCategoryValue = Default(request.NalCategoryValue, "C");
 
-                var st = Sanitise(request.StudTable);
-                var qt = Sanitise(request.QualTable);
-                var nt = Sanitise(request.NalTable);
-                var s10 = Sanitise(request.StudFirstTimeColumn);
-                var nc = Sanitise(request.NalCategoryColumn);
-                var ftv = request.StudFirstTimeValue.Replace("'", "''");
-                var catv = request.NalCategoryValue.Replace("'", "''");
+                var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+                await using var connection = conn;
+
+                var ftv = EscapeSqlString(studFirstTimeValue.ToUpperInvariant());
+                var catv = EscapeSqlString(nalCategoryValue.ToUpperInvariant());
+
+                var studTotal = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.StudTable}\";");
+                var studFiltered = await CountAsync(connection,
+                    $"SELECT COUNT(*) FROM \"{schema}\".\"{request.StudTable}\" WHERE UPPER(TRIM(CAST(\"{studFirstTimeColumn}\" AS text))) = '{ftv}';");
+                var qualTotal = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.QualTable}\";");
+                var nalTotal = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.NalTable}\";");
+                var nalFiltered = await CountAsync(connection,
+                    $"SELECT COUNT(*) FROM \"{schema}\".\"{request.NalTable}\" WHERE UPPER(TRIM(CAST(\"{request.NalCategoryColumn}\" AS text))) = '{catv}';");
 
                 return new Rule39VerifyResult
                 {
                     Success = true,
-                    StudTotalCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{st}];"),
-                    StudFilteredCount = await CountAsync(conn,
-                        $"SELECT COUNT(*) FROM [{st}] WHERE UPPER(LTRIM(RTRIM(CAST([{s10}] AS nvarchar(50))))) = UPPER('{ftv}');"),
-                    QualTotalCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{qt}];"),
-                    NalTotalCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{nt}];"),
-                    NalFilteredCount = await CountAsync(conn,
-                        $"SELECT COUNT(*) FROM [{nt}] WHERE UPPER(LTRIM(RTRIM(CAST([{nc}] AS nvarchar(50))))) = UPPER('{catv}');")
+                    StudTotalCount = studTotal,
+                    StudFilteredCount = studFiltered,
+                    QualTotalCount = qualTotal,
+                    NalTotalCount = nalTotal,
+                    NalFilteredCount = nalFiltered
                 };
             }
             catch (Exception ex)
@@ -181,7 +170,6 @@ namespace HemisAudit.Services
         {
             try
             {
-                ValidateObjectNames(request);
                 var summary = await AnalyseAsync(request);
                 if (summary.Success && request.ClientId > 0)
                 {
@@ -206,59 +194,27 @@ namespace HemisAudit.Services
             }
         }
 
-        public async Task<int?> GetClientIdForRunAsync(int runId)
-        {
-            await using var connection = await OpenSystemConnectionAsync();
-            return await GetClientIdForRunAsync(connection, runId);
-        }
+        public async Task<int?> GetClientIdForRunAsync(int runId) => await _systemDb.GetClientIdForRunAsync(runId);
 
         public async Task<Rule39WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var currentUserId = await GetSystemUserIdByEmailAsync(connection, currentUserEmail);
+            var row = await _systemDb.GetCurrentRuleRunAsync(clientId, 39);
+            if (row == null) return null;
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT TOP 1
-    vr.RunID,
-    vr.ClientID,
-    ISNULL(vr.HemisServer, '') AS HemisServer,
-    ISNULL(vr.AuditDatabase, '') AS AuditDatabase,
-    ISNULL(vr.StudTable, '') AS StudTable,
-    ISNULL(vr.DeceasedTable, '') AS NalTable,
-    ISNULL(vr.StudColumn, '') AS StudQualRefColumn,
-    ISNULL(vr.DeceasedColumn, '') AS StudFirstTimeColumn,
-    ISNULL(vr.Status, '') AS Status,
-    vr.LastEditedByUserName,
-    vr.LastEditedAt,
-    vr.ResultsJSON
-FROM dbo.ValidationRuns vr
-WHERE vr.ClientID = @ClientID
-  AND vr.RuleNumber = 39
-  AND vr.IsCurrent = 1
-ORDER BY vr.RunTimestamp DESC, vr.RunID DESC;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync()) return null;
-
-            var deserializedSummary = DeserializeSummary(reader.IsDBNull(11) ? null : reader.GetString(11));
-            ApplyBrowserPreview(deserializedSummary);
+            var deserializedSummary = DeserializeSummary(row.ResultsJSON);
+            if (deserializedSummary != null) ApplyBrowserPreview(deserializedSummary);
 
             var workspace = new Rule39WorkspaceStateViewModel
             {
-                ClientId = reader.GetInt32(1),
-                RunId = reader.GetInt32(0),
-                Server = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                Database = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                StudTable = reader.IsDBNull(4) ? "" : reader.GetString(4),
-                QualTable = "dbo_QUAL",
-                NalTable = reader.IsDBNull(5) ? "" : reader.GetString(5),
-                StudQualRefColumn = reader.IsDBNull(6) ? "_001" : reader.GetString(6),
-                StudFirstTimeColumn = reader.IsDBNull(7) ? "_010" : reader.GetString(7),
-                CurrentStatus = reader.IsDBNull(8) ? "" : reader.GetString(8),
-                LastEditedByUserName = reader.IsDBNull(9) ? null : reader.GetString(9),
-                LastEditedAt = reader.IsDBNull(10) ? null : reader.GetDateTime(10),
+                ClientId = row.ClientId,
+                RunId = row.RunId,
+                StudTable = string.IsNullOrWhiteSpace(row.StudTable) ? "dbo_STUD" : row.StudTable,
+                NalTable = string.IsNullOrWhiteSpace(row.DeceasedTable) ? "Non_Aligned_Qualifications" : row.DeceasedTable,
+                StudQualRefColumn = string.IsNullOrWhiteSpace(row.StudColumn) ? "_001" : row.StudColumn,
+                StudFirstTimeColumn = string.IsNullOrWhiteSpace(row.DeceasedColumn) ? "_010" : row.DeceasedColumn,
+                CurrentStatus = row.Status,
+                LastEditedByUserName = row.LastEditedByUserName,
+                LastEditedAt = row.LastEditedAt,
                 Summary = deserializedSummary
             };
 
@@ -266,12 +222,12 @@ ORDER BY vr.RunTimestamp DESC, vr.RunID DESC;";
             {
                 workspace.StudFirstTimeValue = deserializedSummary.StudFirstTimeValue;
                 workspace.QualTable          = deserializedSummary.QualTable;
-                workspace.QualCodeColumn     = deserializedSummary.QualCodeColumn;
-                workspace.QualNameColumn     = deserializedSummary.QualNameColumn;
                 workspace.Stud007Column      = deserializedSummary.Stud007Column;
                 workspace.Stud008Column      = deserializedSummary.Stud008Column;
                 workspace.Stud012Column      = deserializedSummary.Stud012Column;
                 workspace.Stud026Column      = deserializedSummary.Stud026Column;
+                workspace.QualCodeColumn     = deserializedSummary.QualCodeColumn;
+                workspace.QualNameColumn     = deserializedSummary.QualNameColumn;
                 workspace.NalRefColumn       = deserializedSummary.NalRefColumn;
                 workspace.NalNameColumn      = deserializedSummary.NalNameColumn;
                 workspace.NalAlignedColumn   = deserializedSummary.NalAlignedColumn;
@@ -282,113 +238,84 @@ ORDER BY vr.RunTimestamp DESC, vr.RunID DESC;";
                 workspace.NalNqfColumn       = deserializedSummary.NalNqfColumn;
                 workspace.NalCreditsColumn   = deserializedSummary.NalCreditsColumn;
                 workspace.NalOutcomeColumn   = deserializedSummary.NalOutcomeColumn;
+                workspace.CurrentStatus      = deserializedSummary.Status;
             }
 
-            await reader.CloseAsync();
-            workspace.Driver = "ODBC Driver 17 for SQL Server";
-            workspace.CurrentUserEngagementRole = currentUserId.HasValue
-                ? await GetEngagementRoleAsync(connection, clientId, currentUserId.Value) ?? ""
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            workspace.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(clientId, currentUser.Id) ?? ""
                 : "";
 
-            var signoffs = await GetRunSignoffsAsync(connection, workspace.RunId!.Value, currentUserId);
+            var signoffs = await _systemDb.GetRuleRunSignoffsAsync(workspace.RunId!.Value, currentUser?.Id);
             workspace.HasDataAnalystSignoff = signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
             var currentRoleSignoff = signoffs.FirstOrDefault(s =>
-                HemisAudit.Helpers.ValidationRunAccessPolicy.IsSignoffOwnedByEngagementRole(s.SignoffRole, workspace.CurrentUserEngagementRole));
+                ValidationRunAccessPolicy.IsSignoffOwnedByEngagementRole(s.SignoffRole, workspace.CurrentUserEngagementRole));
             workspace.CurrentUserHasSignedOff = currentRoleSignoff != null;
             workspace.CurrentUserSignoffComment = currentRoleSignoff?.Comment ?? "";
-            workspace.IsWorkspaceSaved = await IsWorkspaceSavedAsync(connection, workspace.RunId!.Value);
+            workspace.IsWorkspaceSaved = await _systemDb.IsWorkspaceSavedAsync(workspace.RunId!.Value);
+
+            if (workspace.Summary != null)
+                workspace.Summary.SavedRunId = workspace.RunId;
 
             return workspace;
         }
 
         public async Task<Rule39RunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var currentUserId = await GetSystemUserIdByEmailAsync(connection, currentUserEmail);
+            var row = await _systemDb.GetRuleRunByIdAsync(runId, 39);
+            if (row == null) return null;
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT vr.RunID, vr.ClientID, vr.IsCurrent, c.EngagementName, c.MaconomyNumber, vr.HemisServer, vr.ResultsJSON
-FROM dbo.ValidationRuns vr
-INNER JOIN dbo.Clients c ON c.ClientID = vr.ClientID
-WHERE vr.RunID = @RunID AND vr.RuleNumber = 39;";
-            command.Parameters.AddWithValue("@RunID", runId);
+            // No browser-preview trimming here — Excel/CSV export reads this summary directly and
+            // must see the full (cap-limited-at-save-time, but otherwise complete) row set.
+            var summary = DeserializeSummary(row.ResultsJSON) ?? new Rule39ValidationSummary();
+            summary.ClientId = row.ClientId;
+            if (summary.SavedRunId.GetValueOrDefault() <= 0)
+                summary.SavedRunId = runId;
 
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync()) return null;
-
-            var summary = DeserializeSummary(reader.IsDBNull(6) ? null : reader.GetString(6));
-            if (summary == null) return null;
-
-            var viewModel = new Rule39RunReviewViewModel
+            var review = new Rule39RunReviewViewModel
             {
-                RunId = reader.GetInt32(0),
-                ClientId = reader.GetInt32(1),
-                IsCurrentRun = !reader.IsDBNull(2) && reader.GetBoolean(2),
-                EngagementName = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                MaconomyNumber = reader.IsDBNull(4) ? "" : reader.GetString(4),
-                SourceServer = reader.IsDBNull(5) ? "" : reader.GetString(5),
+                RunId = row.RunId,
+                ClientId = row.ClientId,
+                IsCurrentRun = row.IsCurrent,
+                EngagementName = row.EngagementName,
+                MaconomyNumber = row.MaconomyNumber,
                 Summary = summary
             };
 
-            await reader.CloseAsync();
-
-            viewModel.CurrentUserEngagementRole = currentUserId.HasValue
-                ? await GetEngagementRoleAsync(connection, viewModel.ClientId, currentUserId.Value) ?? ""
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            review.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(review.ClientId, currentUser.Id) ?? ""
                 : "";
-            viewModel.Signoffs = await GetRunSignoffsAsync(connection, runId, currentUserId);
-            viewModel.HasDataAnalystSignoff = viewModel.Signoffs.Any(s =>
-                string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
 
-            return viewModel;
+            review.Signoffs = await _systemDb.GetRuleRunSignoffsAsync(runId, currentUser?.Id);
+            review.HasDataAnalystSignoff = review.Signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+
+            return review;
         }
 
         public async Task<Rule39WorkspaceSaveResult> SaveWorkspaceAsync(Rule39ValidationRequest request, string reviewerEmail, string? reviewerName = null)
         {
             try
             {
-                if (request.RunId is null || request.RunId <= 0)
+                if (!request.RunId.HasValue || request.RunId.Value <= 0)
                     return new Rule39WorkspaceSaveResult { Success = false, Error = "Run the validation first so the workspace can be saved." };
 
-                await using var connection = await OpenSystemConnectionAsync();
-                var clientId = await GetClientIdForRunAsync(connection, request.RunId.Value);
+                var clientId = await _systemDb.GetClientIdForRunAsync(request.RunId.Value);
                 if (!clientId.HasValue || clientId.Value != request.ClientId)
                     return new Rule39WorkspaceSaveResult { Success = false, Error = "The saved workspace could not be found for this engagement." };
 
-                await EnsureClientNotArchivedAsync(connection, request.ClientId);
-                await MarkPreviousRunsHistoricalAsync(connection, request.ClientId, 39);
+                await _systemDb.EnsureClientNotArchivedAsync(request.ClientId);
+                var clearedSignoffs = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(request.RunId.Value);
 
-                var clearedSignoffs = await ClearSignoffsAndFlagForReviewAsync(connection, request.RunId.Value);
-                var previousHash = await GetValidationRecordHashAsync(connection, request.RunId.Value);
-                await using var command = connection.CreateConfiguredCommand();
-                command.CommandText = @"
-UPDATE dbo.ValidationRuns
-SET HemisServer = @HemisServer,
-    AuditDatabase = @AuditDatabase,
-    StudTable = @StudTable,
-    DeceasedTable = @NalTable,
-    StudColumn = @StudQualRefColumn,
-    DeceasedColumn = @StudFirstTimeColumn,
-    LastEditedByUserName = @LastEditedByUserName,
-    LastEditedAt = GETDATE(),
-    WorkspaceSavedAt = GETDATE(),
-    PreviousHash = @PreviousHash,
-    RecordHash = @RecordHash,
-    Status = 'Needs Review',
-    IsCurrent = 1
-WHERE RunID = @RunID AND ClientID = @ClientID;";
-                command.Parameters.AddWithValue("@RunID", request.RunId.Value);
-                command.Parameters.AddWithValue("@ClientID", request.ClientId);
-                command.Parameters.AddWithValue("@HemisServer", request.Server);
-                command.Parameters.AddWithValue("@AuditDatabase", request.Database);
-                command.Parameters.AddWithValue("@StudTable", request.StudTable);
-                command.Parameters.AddWithValue("@NalTable", request.NalTable);
-                command.Parameters.AddWithValue("@StudQualRefColumn", request.StudQualRefColumn);
-                command.Parameters.AddWithValue("@StudFirstTimeColumn", request.StudFirstTimeColumn);
-                command.Parameters.AddWithValue("@LastEditedByUserName", (object?)reviewerName ?? DBNull.Value);
-                command.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-                command.Parameters.AddWithValue("@RecordHash", ComputeHash($"WorkspaceSave|Rule39|{request.RunId.Value}|{request.ClientId}|{request.Server}|{request.Database}|{request.StudTable}|{request.QualTable}|{request.NalTable}|{(reviewerName ?? reviewerEmail)}|{DateTime.UtcNow:o}|{previousHash}"));
-                await command.ExecuteNonQueryAsync();
+                await _systemDb.SaveRuleWorkspaceFieldsAsync(new SaveRuleWorkspaceFieldsRequest
+                {
+                    RunId = request.RunId.Value,
+                    ClientId = request.ClientId,
+                    StudTable = request.StudTable,
+                    DeceasedTable = request.NalTable,
+                    StudColumn = request.StudQualRefColumn,
+                    DeceasedColumn = request.StudFirstTimeColumn
+                }, reviewerName ?? reviewerEmail);
 
                 var workspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail);
                 return new Rule39WorkspaceSaveResult
@@ -412,39 +339,21 @@ WHERE RunID = @RunID AND ClientID = @ClientID;";
         {
             try
             {
-                await using var connection = await OpenSystemConnectionAsync();
-                var clientId = await GetClientIdForRunAsync(connection, runId);
+                var clientId = await _systemDb.GetClientIdForRunAsync(runId);
                 if (!clientId.HasValue)
                     return new Rule39WorkspaceSaveResult { Success = false, Error = "Saved workspace was not found." };
 
-                await EnsureClientNotArchivedAsync(connection, clientId.Value);
-                await MarkPreviousRunsHistoricalAsync(connection, clientId.Value, 39);
-
-                var clearedSignoffs = await ClearSignoffsAndFlagForReviewAsync(connection, runId);
-                var previousHash = await GetValidationRecordHashAsync(connection, runId);
-
-                await using var markEdit = connection.CreateConfiguredCommand();
-                markEdit.CommandText = @"
-UPDATE dbo.ValidationRuns
-SET LastEditedByUserName = @LastEditedByUserName,
-    LastEditedAt = GETDATE(),
-    WorkspaceSavedAt = NULL,
-    PreviousHash = @PreviousHash,
-    RecordHash = @RecordHash,
-    Status = 'Needs Review',
-    IsCurrent = 1
-WHERE RunID = @RunID;";
-                markEdit.Parameters.AddWithValue("@RunID", runId);
-                markEdit.Parameters.AddWithValue("@LastEditedByUserName", (object?)reviewerName ?? DBNull.Value);
-                markEdit.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-                markEdit.Parameters.AddWithValue("@RecordHash", ComputeHash($"BeginWorkspaceEdit|Rule39|{runId}|{(reviewerName ?? reviewerEmail)}|{DateTime.UtcNow:o}|{previousHash}"));
-                await markEdit.ExecuteNonQueryAsync();
+                await _systemDb.EnsureClientNotArchivedAsync(clientId.Value);
+                var clearedSignoffs = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(runId);
+                await _systemDb.MarkRuleWorkspaceEditStartedAsync(runId, reviewerName ?? reviewerEmail);
 
                 var workspace = await GetCurrentWorkspaceStateAsync(clientId.Value, reviewerEmail);
                 return new Rule39WorkspaceSaveResult
                 {
                     Success = true,
-                    Message = clearedSignoffs > 0 ? "Editing has begun. Existing signoffs were removed." : "Editing has begun. Save the workspace when you are ready.",
+                    Message = clearedSignoffs > 0
+                        ? "Editing has begun. Existing signoffs were removed."
+                        : "Editing has begun. Save the workspace when you are ready.",
                     SignoffsCleared = clearedSignoffs > 0,
                     ClearedSignoffCount = clearedSignoffs,
                     Workspace = workspace
@@ -458,406 +367,295 @@ WHERE RunID = @RunID;";
 
         public async Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var reviewerId = await GetSystemUserIdByEmailAsync(connection, reviewerEmail);
-            if (!reviewerId.HasValue)
-                throw new InvalidOperationException("Reviewer could not be resolved in the system database.");
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
+                ?? throw new InvalidOperationException("The reviewer could not be resolved in the system database.");
 
-            var clientId = await GetClientIdForRunAsync(connection, runId);
-            if (!clientId.HasValue)
-                throw new InvalidOperationException("Validation run was not found.");
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
+                ?? throw new InvalidOperationException("The selected Rule 39 run could not be found.");
 
-            await EnsureClientNotArchivedAsync(connection, clientId.Value);
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
 
-            if (!await IsWorkspaceSavedAsync(connection, runId))
+            if (!await _systemDb.RuleWorkspaceReadyForSignoffAsync(runId))
                 throw new InvalidOperationException("The data analyst must save the workspace before signoff is available.");
 
-            var engagementRole = await GetEngagementRoleAsync(connection, clientId.Value, reviewerId.Value);
-            if (!CanSignOffAsRole(engagementRole))
-                throw new InvalidOperationException("Only assigned data analysts, managers, and directors can sign off a validation run.");
+            var signoffRole = await _systemDb.GetRawEngagementRoleAsync(clientId, reviewer.Id);
+            if (!CanSignOffAsRole(signoffRole))
+                throw new InvalidOperationException("Only the assigned data analyst, manager, or director can sign off a Rule 39 run.");
 
-            if (!string.Equals(engagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase) &&
-                !await HasSignoffRoleAsync(connection, runId, "DataAnalyst"))
+            if (!string.Equals(signoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase) &&
+                !await _systemDb.HasRuleSignoffRoleAsync(runId, "DataAnalyst"))
             {
                 throw new InvalidOperationException("The assigned data analyst must sign off before this review can be completed.");
             }
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-IF EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND ReviewerID = @ReviewerID)
-BEGIN
-    UPDATE dbo.ReviewSignoffs SET SignoffRole = @SignoffRole, ReviewType = 'Final', Comment = @Comment, SignedOffAt = GETDATE()
-    WHERE RunID = @RunID AND ReviewerID = @ReviewerID;
-END
-ELSE
-BEGIN
-    INSERT INTO dbo.ReviewSignoffs (ClientID, RunID, ReviewerID, SignoffRole, ReviewType, Comment, SignedOffAt)
-    VALUES (@ClientID, @RunID, @ReviewerID, @SignoffRole, 'Final', @Comment, GETDATE());
-END";
-            command.Parameters.AddWithValue("@ClientID", clientId.Value);
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@ReviewerID", reviewerId.Value);
-            command.Parameters.AddWithValue("@SignoffRole", engagementRole!);
-            command.Parameters.AddWithValue("@Comment", string.IsNullOrWhiteSpace(comment) ? DBNull.Value : comment.Trim());
-            await command.ExecuteNonQueryAsync();
-
-            await UpdateRunStatusFromSignoffsAsync(connection, runId);
+            await _systemDb.AddOrUpdateRuleSignoffAsync(runId, clientId, reviewer.Id, signoffRole!, comment);
         }
 
         public async Task RemoveSignoffAsync(int runId, string reviewerEmail)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var reviewerId = await GetSystemUserIdByEmailAsync(connection, reviewerEmail);
-            if (!reviewerId.HasValue)
-                throw new InvalidOperationException("Reviewer could not be resolved in the system database.");
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
+                ?? throw new InvalidOperationException("The reviewer could not be resolved in the system database.");
 
-            var clientId = await GetClientIdForRunAsync(connection, runId);
-            if (!clientId.HasValue)
-                throw new InvalidOperationException("Validation run was not found.");
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
+                ?? throw new InvalidOperationException("The selected Rule 39 run could not be found.");
 
-            await EnsureClientNotArchivedAsync(connection, clientId.Value);
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
 
-            var engagementRole = await GetEngagementRoleAsync(connection, clientId.Value, reviewerId.Value);
-            if (!HemisAudit.Helpers.ValidationRunAccessPolicy.CanAssignedUserRemoveSignoff(engagementRole))
+            var engagementRole = await _systemDb.GetRawEngagementRoleAsync(clientId, reviewer.Id);
+            if (!ValidationRunAccessPolicy.CanAssignedUserRemoveSignoff(engagementRole))
                 throw new InvalidOperationException("Only the assigned data analyst, manager, or director can remove signoff from this run.");
 
-            var removal = await ReviewSignoffSqlHelper.RemoveRoleSignoffWithVersioningAsync(connection, runId, engagementRole!, reviewerEmail);
-            if (removal.RemovedCount <= 0)
-                return;
+            await _systemDb.RemoveRuleSignoffByReviewerAsync(runId, reviewer.Id);
         }
 
-        public string GenerateSql(Rule39ValidationRequest request)
+        public async Task<string> GenerateSqlAsync(Rule39ValidationRequest request)
         {
-            var st  = Sanitise(request.StudTable);
-            var qt  = Sanitise(request.QualTable);
-            var nt  = Sanitise(request.NalTable);
-            var sc  = Sanitise(request.StudQualRefColumn);
-            var s10 = Sanitise(request.StudFirstTimeColumn);
-            var qc  = Sanitise(request.QualCodeColumn);
-            var qn  = Sanitise(request.QualNameColumn);
-            var nr  = Sanitise(request.NalRefColumn);
-            var nn  = Sanitise(request.NalNameColumn);
-            var na  = Sanitise(request.NalAlignedColumn);
-            var nc  = Sanitise(request.NalCategoryColumn);
-            var ftv = request.StudFirstTimeValue.Replace("'", "''");
-            var catv = request.NalCategoryValue.Replace("'", "''");
+            var cfg = await ResolveColumnConfigAsync(request);
 
-            var optionalStudCols = BuildOptionalStudColsSql(request, "");
+            var sql = $@"-- HEMIS RULE 39: FIRST-TIME ENTERING STUDENTS VS NON-ALIGNED QUALIFICATIONS
+-- Source: this engagement's own uploaded tables (schema engagement_{{ClientId}}), not a live SQL Server.
+-- STUD Table: ""{request.StudTable}""  |  Filter: ""{cfg.StudFirstTimeColumn}"" = '{cfg.StudFirstTimeValue}'
+-- QUAL Table: ""{request.QualTable}""  |  Join: STUD.""{cfg.StudQualRefColumn}"" = QUAL.""{cfg.QualCodeColumn}""
+-- NAL Table : ""{request.NalTable}""  |  Filter: ""{cfg.NalCategoryColumn}"" = '{cfg.NalCategoryValue}'
+-- Join key  : QUAL.""{cfg.QualCodeColumn}"" (or STUD.""{cfg.StudQualRefColumn}"" if unmatched) = NAL.""{cfg.NalRefColumn}""
 
-            return $@"-- ================================================================
--- HEMIS RULE 39: First-Time Entering Students vs Non-Aligned Qualifications
--- ================================================================
--- Database : {request.Database}
--- STUD Table: [{st}]  |  Filter: [{s10}] = '{ftv}'
--- QUAL Table: [{qt}]  |  Join: STUD.[{sc}] = QUAL.[{qc}]
--- NAL Table : [{nt}]  |  Filter: [{nc}] = '{catv}'
--- Join key  : QUAL.[{qc}] = NAL.[{nr}]
--- ================================================================
+{BuildRule39PrepSql("{schema}", request.StudTable, request.QualTable, request.NalTable, cfg)}
 
-IF OBJECT_ID('tempdb..#FTE_Stud')   IS NOT NULL DROP TABLE #FTE_Stud;
-IF OBJECT_ID('tempdb..#QUAL_Map')   IS NOT NULL DROP TABLE #QUAL_Map;
-IF OBJECT_ID('tempdb..#NAL_Cat')    IS NOT NULL DROP TABLE #NAL_Cat;
+-- Full population (FLAGGED + CLEAR)
+SELECT * FROM rule39_population ORDER BY row_number;
 
--- Step 1: First-Time Entering students (Procedure 5.3)
+-- Summary
 SELECT
-    [{sc}] AS STUD_QualRef,
-    {optionalStudCols}[{s10}] AS STUD_010
-INTO #FTE_Stud
-FROM [{st}]
-WHERE UPPER(LTRIM(RTRIM(CAST([{s10}] AS nvarchar(50))))) = UPPER('{ftv}');
+    COUNT(*) AS total_fte,
+    COUNT(*) FILTER (WHERE result = 'FLAGGED') AS flagged,
+    COUNT(*) FILTER (WHERE result = 'CLEAR') AS clear,
+    ROUND(COUNT(*) FILTER (WHERE result = 'FLAGGED') * 100.0 / NULLIF(COUNT(*), 0), 2) AS exception_rate_pct
+FROM rule39_population;";
 
-SELECT COUNT(*) AS FTE_Count FROM #FTE_Stud;
-
--- Step 2: Qualification lookup for names (QUAL._001 -> QUAL._003)
-SELECT
-    [{qc}] AS QUAL_Code,
-    [{qn}] AS QUAL_Name
-INTO #QUAL_Map
-FROM [{qt}];
-
-SELECT COUNT(*) AS QUAL_Count FROM #QUAL_Map;
-
--- Step 3: Category '{catv}' Non-Aligned Qualifications (Procedure 5.3.1)
-SELECT [{nr}] AS NAL_QualRef, [{nn}] AS NAL_QualName, [{na}] AS NAL_AlignedName, [{nc}] AS NAL_Category
-INTO #NAL_Cat
-FROM [{nt}]
-WHERE UPPER(LTRIM(RTRIM(CAST([{nc}] AS nvarchar(50))))) = UPPER('{catv}');
-
-SELECT COUNT(*) AS NAL_Category_Count FROM #NAL_Cat;
-
--- Step 4: Cross-match and flag (Procedure 5.3.2)
-SELECT
-    ROW_NUMBER() OVER (ORDER BY s.STUD_QualRef, q.QUAL_Name) AS Row_No,
-    s.STUD_QualRef,
-    s.Stud007Value,
-    s.Stud008Value,
-    s.STUD_010,
-    s.Stud012Value,
-    s.Stud026Value,
-    q.QUAL_Code,
-    q.QUAL_Name,
-    n.NAL_QualName,
-    n.NAL_AlignedName,
-    n.NAL_Category,
-    CASE WHEN n.NAL_QualRef IS NOT NULL THEN 'FLAGGED' ELSE 'CLEAR' END AS Result,
-    CASE WHEN n.NAL_QualRef IS NOT NULL
-         THEN N'Qualification ' + CAST(COALESCE(NULLIF(CAST(q.QUAL_Code AS nvarchar(255)), ''), CAST(s.STUD_QualRef AS nvarchar(255))) AS nvarchar(255)) +
-              N' (' + ISNULL(CAST(q.QUAL_Name AS nvarchar(500)), N'Unknown qualification') + N')' +
-              N' found in Category {catv} Non-Aligned list: ' + ISNULL(n.NAL_QualName, '')
-         ELSE NULL
-    END AS Exception_Reason
-FROM #FTE_Stud s
-LEFT JOIN #QUAL_Map q
-    ON UPPER(LTRIM(RTRIM(CAST(s.STUD_QualRef AS nvarchar(255)))))
-     = UPPER(LTRIM(RTRIM(CAST(q.QUAL_Code AS nvarchar(255)))))
-LEFT JOIN #NAL_Cat n
-    ON UPPER(COALESCE(NULLIF(LTRIM(RTRIM(CAST(q.QUAL_Code AS nvarchar(255)))), ''), LTRIM(RTRIM(CAST(s.STUD_QualRef AS nvarchar(255))))))
-     = UPPER(LTRIM(RTRIM(CAST(n.NAL_QualRef AS nvarchar(255)))));
-
--- Step 5: Summary
-SELECT
-    COUNT(*) AS Total_FTE,
-    SUM(CASE WHEN n.NAL_QualRef IS NOT NULL THEN 1 ELSE 0 END) AS FLAGGED,
-    SUM(CASE WHEN n.NAL_QualRef IS NULL THEN 1 ELSE 0 END) AS CLEAR,
-    CAST(SUM(CASE WHEN n.NAL_QualRef IS NOT NULL THEN 1 ELSE 0 END)
-         * 100.0 / NULLIF(COUNT(*), 0) AS DECIMAL(5,2)) AS Exception_Rate_Pct
-FROM #FTE_Stud s
-LEFT JOIN #QUAL_Map q
-    ON UPPER(LTRIM(RTRIM(CAST(s.STUD_QualRef AS nvarchar(255)))))
-     = UPPER(LTRIM(RTRIM(CAST(q.QUAL_Code AS nvarchar(255)))))
-LEFT JOIN #NAL_Cat n
-    ON UPPER(COALESCE(NULLIF(LTRIM(RTRIM(CAST(q.QUAL_Code AS nvarchar(255)))), ''), LTRIM(RTRIM(CAST(s.STUD_QualRef AS nvarchar(255))))))
-     = UPPER(LTRIM(RTRIM(CAST(n.NAL_QualRef AS nvarchar(255)))));
-
-DROP TABLE #FTE_Stud; DROP TABLE #QUAL_Map; DROP TABLE #NAL_Cat;
--- ================================================================
--- END RULE 39
--- ================================================================".Trim();
+            return sql.Trim();
         }
 
-        // ── Analysis ─────────────────────────────────────────────────────────
+        // ── Analysis ─────────────────────────────────────────────────────────────────────
 
         private async Task<Rule39ValidationSummary> AnalyseAsync(Rule39ValidationRequest request)
         {
-            var connStr = BuildConnectionString(request.Server, request.Database, request.Driver);
-            await using var conn = new SqlConnection(connStr);
-            await conn.OpenAsync();
+            var cfg = await ResolveColumnConfigAsync(request);
+            await EnsureRule39IndexesAsync(request.ClientId, request.StudTable, request.QualTable, request.NalTable, cfg);
 
-            var st  = Sanitise(request.StudTable);
-            var qt  = Sanitise(request.QualTable);
-            var nt  = Sanitise(request.NalTable);
-            var sc  = Sanitise(request.StudQualRefColumn);
-            var s10 = Sanitise(request.StudFirstTimeColumn);
-            var qc  = Sanitise(request.QualCodeColumn);
-            var qn  = Sanitise(request.QualNameColumn);
-            var nr  = Sanitise(request.NalRefColumn);
-            var nn  = Sanitise(request.NalNameColumn);
-            var na  = Sanitise(request.NalAlignedColumn);
-            var nc  = Sanitise(request.NalCategoryColumn);
-            var ftv = request.StudFirstTimeValue.Replace("'", "''");
-            var catv = request.NalCategoryValue.Replace("'", "''");
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
 
-            var studTotal    = await CountAsync(conn, $"SELECT COUNT(*) FROM [{st}];");
-            var studFiltered = await CountAsync(conn,
-                $"SELECT COUNT(*) FROM [{st}] WHERE UPPER(LTRIM(RTRIM(CAST([{s10}] AS nvarchar(50))))) = UPPER('{ftv}');");
-            var qualTotal    = await CountAsync(conn, $"SELECT COUNT(*) FROM [{qt}];");
-            var nalCategory  = await CountAsync(conn,
-                $"SELECT COUNT(*) FROM [{nt}] WHERE UPPER(LTRIM(RTRIM(CAST([{nc}] AS nvarchar(50))))) = UPPER('{catv}');");
+            var studTotal = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.StudTable}\";");
+            var qualTotal = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.QualTable}\";");
+            var nalCategoryCount = await CountAsync(connection,
+                $"SELECT COUNT(*) FROM \"{schema}\".\"{request.NalTable}\" WHERE UPPER(TRIM(CAST(\"{cfg.NalCategoryColumn}\" AS text))) = '{EscapeSqlString(cfg.NalCategoryValue.ToUpperInvariant())}';");
 
-            var optionalStudCols = BuildOptionalStudColsSql(request, "s");
-            var optionalNalCols = BuildOptionalNalColsSql(request, "n");
-
-            var sql = $@"
-SELECT
-    ROW_NUMBER() OVER (ORDER BY s.[{sc}], q.[{qn}]) AS RowNumber,
-    CAST(s.[{sc}] AS nvarchar(255)) AS StudQualRef,
-    {optionalStudCols}
-    CAST(s.[{s10}] AS nvarchar(50)) AS Stud010Value,
-    CAST(q.[{qc}] AS nvarchar(255)) AS QualCodeValue,
-    CAST(q.[{qn}] AS nvarchar(500)) AS QualNameValue,
-    CAST(n.[{nn}] AS nvarchar(500)) AS NalQualName,
-    CAST(n.[{na}] AS nvarchar(500)) AS NalAlignedName,
-    CAST(n.[{nc}] AS nvarchar(50)) AS NalCategory,
-    {optionalNalCols}
-    CASE WHEN n.[{nr}] IS NOT NULL THEN 'FLAGGED' ELSE 'CLEAR' END AS Result
-FROM [{st}] s
-LEFT JOIN [{qt}] q
-    ON UPPER(LTRIM(RTRIM(CAST(s.[{sc}] AS nvarchar(255)))))
-     = UPPER(LTRIM(RTRIM(CAST(q.[{qc}] AS nvarchar(255)))))
-LEFT JOIN [{nt}] n
-    ON UPPER(COALESCE(NULLIF(LTRIM(RTRIM(CAST(q.[{qc}] AS nvarchar(255)))), ''), LTRIM(RTRIM(CAST(s.[{sc}] AS nvarchar(255))))))
-     = UPPER(LTRIM(RTRIM(CAST(n.[{nr}] AS nvarchar(255)))))
-    AND UPPER(LTRIM(RTRIM(CAST(n.[{nc}] AS nvarchar(50))))) = UPPER('{catv}')
-WHERE UPPER(LTRIM(RTRIM(CAST(s.[{s10}] AS nvarchar(50))))) = UPPER('{ftv}')
-ORDER BY CASE WHEN n.[{nr}] IS NOT NULL THEN 0 ELSE 1 END, s.[{sc}], q.[{qn}];";
-
-            await using var cmd = conn.CreateConfiguredCommand();
-            cmd.CommandTimeout = SqlCommandTimeoutSeconds;
-            cmd.CommandText = sql;
-
-            await using var reader = await cmd.ExecuteReaderAsync();
-            var allRows = new List<Rule39ValidationRowViewModel>();
-            var rowNum = 0;
-
-            while (await reader.ReadAsync())
+            await using (var prepCommand = connection.CreateCommand())
             {
-                rowNum++;
-                // ordinals: 0=RowNumber,1=StudQualRef,2=Stud007Value,3=Stud008Value,4=Stud012Value,5=Stud026Value,
-                //           6=Stud010Value,7=QualCodeValue,8=QualNameValue,9=NalQualName,10=NalAlignedName,11=NalCategory,
-                //           12=NalHeqsfRef,13=NalSaqaId,14=NalNqf,15=NalCredits,16=NalOutcome,17=Result
-                var result = reader.IsDBNull(17) ? "CLEAR" : reader.GetString(17);
-                var qualRef = reader.IsDBNull(1) ? "" : reader.GetString(1);
-                var qualCode = reader.IsDBNull(7) ? "" : reader.GetString(7);
-                var qualName = reader.IsDBNull(8) ? null : reader.GetString(8);
-                var nalName = reader.IsDBNull(9) ? null : reader.GetString(9);
-                var cat     = reader.IsDBNull(11) ? null : reader.GetString(11);
-
-                allRows.Add(new Rule39ValidationRowViewModel
-                {
-                    RowNumber    = rowNum,
-                    StudQualRef  = qualRef,
-                    Stud007Value = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                    Stud008Value = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                    Stud012Value = reader.IsDBNull(4) ? "" : reader.GetString(4),
-                    Stud026Value = reader.IsDBNull(5) ? "" : reader.GetString(5),
-                    Stud010Value = reader.IsDBNull(6) ? "" : reader.GetString(6),
-                    QualCodeValue = qualCode,
-                    QualNameValue = qualName ?? "",
-                    NalQualName  = nalName,
-                    NalAlignedName = reader.IsDBNull(10) ? null : reader.GetString(10),
-                    NalCategory  = cat,
-                    NalHeqsfRef  = ReadOptional(reader, 12),
-                    NalSaqaId    = ReadOptional(reader, 13),
-                    NalNqf       = ReadOptional(reader, 14),
-                    NalCredits   = ReadOptional(reader, 15),
-                    NalOutcome   = ReadOptional(reader, 16),
-                    Result       = result,
-                    ExceptionReason = string.Equals(result, "FLAGGED", StringComparison.OrdinalIgnoreCase)
-                        ? $"Qualification '{(string.IsNullOrWhiteSpace(qualCode) ? qualRef : qualCode)}' ({(string.IsNullOrWhiteSpace(qualName) ? "Unknown qualification" : qualName)}) found in Category '{cat}' Non-Aligned list: '{nalName}'"
-                        : null
-                });
+                prepCommand.CommandText = BuildRule39PrepSql(schema, request.StudTable, request.QualTable, request.NalTable, cfg);
+                await prepCommand.ExecuteNonQueryAsync();
             }
 
-            var flaggedRows  = allRows.Where(r => string.Equals(r.Result, "FLAGGED", StringComparison.OrdinalIgnoreCase)).ToList();
-            var clearSample  = allRows.Where(r => string.Equals(r.Result, "CLEAR", StringComparison.OrdinalIgnoreCase)).ToList();
-            var flaggedCount = flaggedRows.Count;
-            var totalFte     = studFiltered;
-            var clearCount   = totalFte - flaggedCount;
-            var rate         = totalFte == 0 ? 0m : Math.Round((decimal)flaggedCount / totalFte * 100m, 2);
+            var studFiltered = await CountAsync(connection, "SELECT COUNT(*) FROM rule39_population;");
+            var (flaggedCount, clearCount) = await GetResultCountsAsync(connection);
+            var flaggedRows = await LoadRowsWhereAsync(connection, "FLAGGED", MaxFlaggedRows);
+            var clearRows = await LoadRowsWhereAsync(connection, "CLEAR", ClearSampleSize);
+
+            var rate = studFiltered == 0 ? 0m : Math.Round((decimal)flaggedCount / studFiltered * 100m, 2);
 
             return new Rule39ValidationSummary
             {
                 Success = true,
-                TotalValidated = totalFte,
+                TotalValidated = studFiltered,
                 FlaggedCount = flaggedCount,
-                ClearCount = clearCount < 0 ? 0 : clearCount,
+                ClearCount = clearCount,
                 ExceptionRate = rate,
                 Status = flaggedCount == 0 ? "PASS" : "FAIL",
                 Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                Database = request.Database,
                 StudTable = request.StudTable,
                 QualTable = request.QualTable,
                 NalTable = request.NalTable,
-                StudQualRefColumn = request.StudQualRefColumn,
-                Stud007Column = request.Stud007Column,
-                Stud008Column = request.Stud008Column,
-                StudFirstTimeColumn = request.StudFirstTimeColumn,
-                Stud012Column = request.Stud012Column,
-                Stud026Column = request.Stud026Column,
-                StudFirstTimeValue = request.StudFirstTimeValue,
-                QualCodeColumn = request.QualCodeColumn,
-                QualNameColumn = request.QualNameColumn,
-                NalRefColumn = request.NalRefColumn,
-                NalNameColumn = request.NalNameColumn,
-                NalAlignedColumn = request.NalAlignedColumn,
-                NalCategoryColumn = request.NalCategoryColumn,
-                NalCategoryValue = request.NalCategoryValue,
-                NalHeqsfRefColumn = request.NalHeqsfRefColumn,
-                NalSaqaIdColumn = request.NalSaqaIdColumn,
-                NalNqfColumn = request.NalNqfColumn,
-                NalCreditsColumn = request.NalCreditsColumn,
-                NalOutcomeColumn = request.NalOutcomeColumn,
+                StudQualRefColumn = cfg.StudQualRefColumn,
+                Stud007Column = cfg.Stud007Column ?? "",
+                Stud008Column = cfg.Stud008Column ?? "",
+                StudFirstTimeColumn = cfg.StudFirstTimeColumn,
+                Stud012Column = cfg.Stud012Column ?? "",
+                Stud026Column = cfg.Stud026Column ?? "",
+                StudFirstTimeValue = cfg.StudFirstTimeValue,
+                QualCodeColumn = cfg.QualCodeColumn,
+                QualNameColumn = cfg.QualNameColumn,
+                NalRefColumn = cfg.NalRefColumn,
+                NalNameColumn = cfg.NalNameColumn,
+                NalAlignedColumn = cfg.NalAlignedColumn ?? "",
+                NalCategoryColumn = cfg.NalCategoryColumn,
+                NalCategoryValue = cfg.NalCategoryValue,
+                NalHeqsfRefColumn = cfg.NalHeqsfRefColumn ?? "",
+                NalSaqaIdColumn = cfg.NalSaqaIdColumn ?? "",
+                NalNqfColumn = cfg.NalNqfColumn ?? "",
+                NalCreditsColumn = cfg.NalCreditsColumn ?? "",
+                NalOutcomeColumn = cfg.NalOutcomeColumn ?? "",
                 StudTotalCount = studTotal,
                 QualTotalCount = qualTotal,
-                NalCategoryCount = nalCategory,
+                NalCategoryCount = nalCategoryCount,
                 ClientId = request.ClientId,
                 FlaggedRows = flaggedRows,
-                ClearSampleRows = clearSample
+                ClearSampleRows = clearRows,
+                Warning = BuildScaleWarning(flaggedCount, flaggedRows.Count, clearCount, clearRows.Count)
             };
         }
 
-        private static string BuildOptionalStudColsSql(Rule39ValidationRequest request, string alias)
+        private static string? BuildScaleWarning(int flaggedCount, int flaggedLoaded, int clearCount, int clearLoaded)
         {
-            string Build(string? columnName, string targetAlias)
-            {
-                if (string.IsNullOrWhiteSpace(columnName))
-                    return $"CAST(NULL AS nvarchar(255)) AS {targetAlias}";
+            if (flaggedCount > flaggedLoaded)
+                return $"{flaggedCount:N0} FLAGGED rows were found; only the first {flaggedLoaded:N0} are stored and shown to keep the app responsive. All totals above are exact — the FLAGGED rows shown are complete up to this cap.";
+            if (clearCount > clearLoaded)
+                return $"CLEAR rows are stored as a representative sample ({clearLoaded:N0} of {clearCount:N0}). FLAGGED rows (the actionable exceptions) are complete. All totals above are exact.";
+            return null;
+        }
 
-                var source = string.IsNullOrWhiteSpace(alias)
-                    ? $"[{Sanitise(columnName)}]"
-                    : $"{alias}.[{Sanitise(columnName)}]";
-                return $"CAST({source} AS nvarchar(255)) AS {targetAlias}";
+        private static string BuildRule39PrepSql(string schema, string studTable, string qualTable, string nalTable, Rule39ColumnConfig cfg)
+        {
+            string OptStud(string? col) => col == null ? "NULL::text" : $@"CAST(s.""{col}"" AS text)";
+            string OptNal(string? col) => col == null ? "NULL::text" : $@"CAST(""{col}"" AS text)";
+
+            var ftv = EscapeSqlString(cfg.StudFirstTimeValue.ToUpperInvariant());
+            var catv = EscapeSqlString(cfg.NalCategoryValue.ToUpperInvariant());
+
+            return $@"
+DROP TABLE IF EXISTS rule39_qual;
+CREATE TEMP TABLE rule39_qual AS
+SELECT DISTINCT ON (norm_code) norm_code, qual_code, qual_name FROM (
+    SELECT
+        UPPER(TRIM(CAST(""{cfg.QualCodeColumn}"" AS text))) AS norm_code,
+        CAST(""{cfg.QualCodeColumn}"" AS text) AS qual_code,
+        CAST(""{cfg.QualNameColumn}"" AS text) AS qual_name
+    FROM ""{schema}"".""{qualTable}""
+    WHERE ""{cfg.QualCodeColumn}"" IS NOT NULL
+) x
+ORDER BY norm_code;
+CREATE INDEX ON rule39_qual(norm_code);
+ANALYZE rule39_qual;
+
+DROP TABLE IF EXISTS rule39_nal;
+CREATE TEMP TABLE rule39_nal AS
+SELECT DISTINCT ON (norm_ref) norm_ref, nal_name, nal_aligned, nal_category, nal_heqsf, nal_saqa, nal_nqf, nal_credits, nal_outcome FROM (
+    SELECT
+        UPPER(TRIM(CAST(""{cfg.NalRefColumn}"" AS text))) AS norm_ref,
+        CAST(""{cfg.NalNameColumn}"" AS text) AS nal_name,
+        {OptNal(cfg.NalAlignedColumn)} AS nal_aligned,
+        CAST(""{cfg.NalCategoryColumn}"" AS text) AS nal_category,
+        {OptNal(cfg.NalHeqsfRefColumn)} AS nal_heqsf,
+        {OptNal(cfg.NalSaqaIdColumn)} AS nal_saqa,
+        {OptNal(cfg.NalNqfColumn)} AS nal_nqf,
+        {OptNal(cfg.NalCreditsColumn)} AS nal_credits,
+        {OptNal(cfg.NalOutcomeColumn)} AS nal_outcome
+    FROM ""{schema}"".""{nalTable}""
+    WHERE ""{cfg.NalRefColumn}"" IS NOT NULL
+      AND UPPER(TRIM(CAST(""{cfg.NalCategoryColumn}"" AS text))) = '{catv}'
+) y
+ORDER BY norm_ref;
+CREATE INDEX ON rule39_nal(norm_ref);
+ANALYZE rule39_nal;
+
+DROP TABLE IF EXISTS rule39_population;
+CREATE TEMP TABLE rule39_population AS
+SELECT
+    ROW_NUMBER() OVER (ORDER BY UPPER(TRIM(CAST(s.""{cfg.StudQualRefColumn}"" AS text))), q.qual_name) AS row_number,
+    CAST(s.""{cfg.StudQualRefColumn}"" AS text) AS stud_qual_ref,
+    {OptStud(cfg.Stud007Column)} AS stud_007,
+    {OptStud(cfg.Stud008Column)} AS stud_008,
+    CAST(s.""{cfg.StudFirstTimeColumn}"" AS text) AS stud_010,
+    {OptStud(cfg.Stud012Column)} AS stud_012,
+    {OptStud(cfg.Stud026Column)} AS stud_026,
+    q.qual_code AS qual_code,
+    q.qual_name AS qual_name,
+    n.nal_name AS nal_name,
+    n.nal_aligned AS nal_aligned,
+    n.nal_category AS nal_category,
+    n.nal_heqsf AS nal_heqsf,
+    n.nal_saqa AS nal_saqa,
+    n.nal_nqf AS nal_nqf,
+    n.nal_credits AS nal_credits,
+    n.nal_outcome AS nal_outcome,
+    CASE WHEN n.norm_ref IS NOT NULL THEN 'FLAGGED' ELSE 'CLEAR' END AS result
+FROM ""{schema}"".""{studTable}"" s
+LEFT JOIN rule39_qual q ON UPPER(TRIM(CAST(s.""{cfg.StudQualRefColumn}"" AS text))) = q.norm_code
+LEFT JOIN rule39_nal n ON COALESCE(q.norm_code, UPPER(TRIM(CAST(s.""{cfg.StudQualRefColumn}"" AS text)))) = n.norm_ref
+WHERE UPPER(TRIM(CAST(s.""{cfg.StudFirstTimeColumn}"" AS text))) = '{ftv}';
+
+CREATE INDEX ON rule39_population(result);
+ANALYZE rule39_population;";
+        }
+
+        private static async Task<(int Flagged, int Clear)> GetResultCountsAsync(NpgsqlConnection connection)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = @"
+SELECT
+    COUNT(*) FILTER (WHERE result = 'FLAGGED'),
+    COUNT(*) FILTER (WHERE result = 'CLEAR')
+FROM rule39_population;";
+            await using var reader = await command.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+                return (GetInt(reader, 0), GetInt(reader, 1));
+            return (0, 0);
+        }
+
+        private static async Task<List<Rule39ValidationRowViewModel>> LoadRowsWhereAsync(NpgsqlConnection connection, string result, int limit)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT * FROM rule39_population WHERE result = @result ORDER BY row_number LIMIT @limit;";
+            command.Parameters.AddWithValue("result", result);
+            command.Parameters.AddWithValue("limit", limit);
+
+            await using var reader = await command.ExecuteReaderAsync();
+            var rows = new List<Rule39ValidationRowViewModel>();
+            while (await reader.ReadAsync())
+            {
+                var qualRef = GetString(reader, "stud_qual_ref");
+                var qualCode = GetString(reader, "qual_code");
+                var qualName = GetString(reader, "qual_name");
+                var nalName = GetString(reader, "nal_name");
+                var cat = GetString(reader, "nal_category");
+                var res = GetString(reader, "result") ?? "CLEAR";
+
+                rows.Add(new Rule39ValidationRowViewModel
+                {
+                    RowNumber = Convert.ToInt32(reader.GetValue(reader.GetOrdinal("row_number"))),
+                    StudQualRef = qualRef ?? "",
+                    Stud007Value = GetString(reader, "stud_007") ?? "",
+                    Stud008Value = GetString(reader, "stud_008") ?? "",
+                    Stud010Value = GetString(reader, "stud_010") ?? "",
+                    Stud012Value = GetString(reader, "stud_012") ?? "",
+                    Stud026Value = GetString(reader, "stud_026") ?? "",
+                    QualCodeValue = qualCode ?? "",
+                    QualNameValue = qualName ?? "",
+                    NalQualName = nalName,
+                    NalAlignedName = GetString(reader, "nal_aligned"),
+                    NalCategory = cat,
+                    NalHeqsfRef = GetString(reader, "nal_heqsf"),
+                    NalSaqaId = GetString(reader, "nal_saqa"),
+                    NalNqf = GetString(reader, "nal_nqf"),
+                    NalCredits = GetString(reader, "nal_credits"),
+                    NalOutcome = GetString(reader, "nal_outcome"),
+                    Result = res,
+                    ExceptionReason = string.Equals(res, "FLAGGED", StringComparison.OrdinalIgnoreCase)
+                        ? $"Qualification '{(string.IsNullOrWhiteSpace(qualCode) ? qualRef : qualCode)}' ({(string.IsNullOrWhiteSpace(qualName) ? "Unknown qualification" : qualName)}) found in Category '{cat}' Non-Aligned list: '{nalName}'"
+                        : null
+                });
             }
-
-            return string.Join(",\n    ", new[]
-            {
-                Build(request.Stud007Column, "Stud007Value"),
-                Build(request.Stud008Column, "Stud008Value"),
-                Build(request.Stud012Column, "Stud012Value"),
-                Build(request.Stud026Column, "Stud026Value")
-            }) + ",\n    ";
+            return rows;
         }
 
-        private static string BuildOptionalNalColsSql(Rule39ValidationRequest request, string alias)
+        private static void ApplyBrowserPreview(Rule39ValidationSummary summary)
         {
-            var parts = new List<string>();
-            if (!string.IsNullOrWhiteSpace(request.NalHeqsfRefColumn))
-                parts.Add($"CAST({alias}.[{Sanitise(request.NalHeqsfRefColumn)}] AS nvarchar(255)) AS NalHeqsfRef");
-            else
-                parts.Add("CAST(NULL AS nvarchar(255)) AS NalHeqsfRef");
-
-            if (!string.IsNullOrWhiteSpace(request.NalSaqaIdColumn))
-                parts.Add($"CAST({alias}.[{Sanitise(request.NalSaqaIdColumn)}] AS nvarchar(255)) AS NalSaqaId");
-            else
-                parts.Add("CAST(NULL AS nvarchar(255)) AS NalSaqaId");
-
-            if (!string.IsNullOrWhiteSpace(request.NalNqfColumn))
-                parts.Add($"CAST({alias}.[{Sanitise(request.NalNqfColumn)}] AS nvarchar(50)) AS NalNqf");
-            else
-                parts.Add("CAST(NULL AS nvarchar(50)) AS NalNqf");
-
-            if (!string.IsNullOrWhiteSpace(request.NalCreditsColumn))
-                parts.Add($"CAST({alias}.[{Sanitise(request.NalCreditsColumn)}] AS nvarchar(50)) AS NalCredits");
-            else
-                parts.Add("CAST(NULL AS nvarchar(50)) AS NalCredits");
-
-            if (!string.IsNullOrWhiteSpace(request.NalOutcomeColumn))
-                parts.Add($"CAST({alias}.[{Sanitise(request.NalOutcomeColumn)}] AS nvarchar(255)) AS NalOutcome");
-            else
-                parts.Add("CAST(NULL AS nvarchar(255)) AS NalOutcome");
-
-            return string.Join(",\n    ", parts) + ",";
-        }
-
-        private static string? ReadOptional(SqlDataReader reader, int ordinal)
-        {
-            if (ordinal >= reader.FieldCount || reader.IsDBNull(ordinal)) return null;
-            var v = reader.GetString(ordinal).Trim();
-            return string.IsNullOrEmpty(v) ? null : v;
-        }
-
-        private static void ApplyBrowserPreview(Rule39ValidationSummary? summary)
-        {
-            if (summary == null)
-                return;
-
             var flaggedRows = summary.FlaggedRows ?? new List<Rule39ValidationRowViewModel>();
             var clearRows = summary.ClearSampleRows ?? new List<Rule39ValidationRowViewModel>();
 
             if (flaggedRows.Count <= BrowserPreviewPerResultLimit && clearRows.Count <= BrowserPreviewPerResultLimit)
             {
                 summary.IsPreviewOnly = false;
-                summary.PreviewLimit = BrowserPreviewPerResultLimit;
+                summary.PreviewLimit = 0;
                 return;
             }
 
@@ -867,341 +665,162 @@ ORDER BY CASE WHEN n.[{nr}] IS NOT NULL THEN 0 ELSE 1 END, s.[{sc}], q.[{qn}];";
             summary.PreviewLimit = BrowserPreviewPerResultLimit;
         }
 
-        // ── Save / Load ───────────────────────────────────────────────────────
+        // ── Save / Load ──────────────────────────────────────────────────────────────────
 
         private async Task<int> SaveValidationRunAsync(Rule39ValidationRequest request, Rule39ValidationSummary summary, string? userEmail, string? userName)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            await EnsureClientNotArchivedAsync(connection, request.ClientId);
-            await MarkPreviousRunsHistoricalAsync(connection, request.ClientId, 39);
+            await _systemDb.MarkPreviousRuleRunsHistoricalAsync(request.ClientId, 39);
 
-            var systemUserId = await GetSystemUserIdByEmailAsync(connection, userEmail);
-            if (!systemUserId.HasValue)
-                throw new InvalidOperationException("The current analyst could not be resolved in the system database.");
-
-            var previousHash = await GetLatestValidationHashAsync(connection, request.ClientId, 39);
-
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-INSERT INTO dbo.ValidationRuns
-(
-    ClientID, UserID, RuleNumber, RuleName, Status, TotalRecords, PassCount, FailCount, ExceptionRate, RunTimestamp,
-    HemisServer, AuditDatabase, StudTable, DeceasedTable, StudColumn, DeceasedColumn,
-    ExceptionsJSON, ResultsJSON, RunByUserName, LastEditedByUserName, LastEditedAt, PreviousHash, RecordHash, IsCurrent
-)
-VALUES
-(
-    @ClientID, @UserID, 39, 'First-Time Entering vs Non-Aligned', @Status, @TotalRecords, @PassCount, @FailCount, @ExceptionRate, GETDATE(),
-    @HemisServer, @AuditDatabase, @StudTable, @NalTable, @StudQualRefColumn, @StudFirstTimeColumn,
-    @ExceptionsJSON, @ResultsJSON, @RunByUserName, NULL, NULL, @PreviousHash, NULL, 1
-);
-SELECT CAST(SCOPE_IDENTITY() AS int);";
-            command.Parameters.AddWithValue("@ClientID", request.ClientId);
-            command.Parameters.AddWithValue("@UserID", systemUserId.Value);
-            command.Parameters.AddWithValue("@Status", summary.Status);
-            command.Parameters.AddWithValue("@TotalRecords", summary.TotalValidated);
-            command.Parameters.AddWithValue("@PassCount", summary.ClearCount);
-            command.Parameters.AddWithValue("@FailCount", summary.FlaggedCount);
-            command.Parameters.AddWithValue("@ExceptionRate", summary.ExceptionRate);
-            command.Parameters.AddWithValue("@HemisServer", request.Server);
-            command.Parameters.AddWithValue("@AuditDatabase", request.Database);
-            command.Parameters.AddWithValue("@StudTable", request.StudTable);
-            command.Parameters.AddWithValue("@NalTable", request.NalTable);
-            command.Parameters.AddWithValue("@StudQualRefColumn", request.StudQualRefColumn);
-            command.Parameters.AddWithValue("@StudFirstTimeColumn", request.StudFirstTimeColumn);
-            command.Parameters.AddWithValue("@ExceptionsJSON", ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary.FlaggedRows)));
-            command.Parameters.AddWithValue("@ResultsJSON", ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary)));
-            command.Parameters.AddWithValue("@RunByUserName", (object?)userName ?? (object?)userEmail ?? DBNull.Value);
-            command.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-
-            var runId = Convert.ToInt32(await command.ExecuteScalarAsync());
-            summary.SavedRunId = runId;
-
-            await using var hashCmd = connection.CreateConfiguredCommand();
-            hashCmd.CommandText = "UPDATE dbo.ValidationRuns SET RecordHash = @RecordHash WHERE RunID = @RunID;";
-            hashCmd.Parameters.AddWithValue("@RunID", runId);
-            hashCmd.Parameters.AddWithValue("@RecordHash", ComputeHash($"ValidationRun|Rule39|{runId}|{request.ClientId}|{systemUserId.Value}|{summary.Status}|{summary.TotalValidated}|{summary.FlaggedCount}|{summary.ExceptionRate}|{summary.Timestamp}|{previousHash}"));
-            await hashCmd.ExecuteNonQueryAsync();
+            var runId = await _systemDb.SaveValidationRunAsync(new SaveValidationRunRequest
+            {
+                ClientId = request.ClientId,
+                RuleNumber = 39,
+                RuleName = "First-Time Entering vs Non-Aligned Qualifications",
+                Status = summary.Status,
+                TotalRecords = summary.TotalValidated,
+                PassCount = summary.ClearCount,
+                FailCount = summary.FlaggedCount,
+                ExceptionRate = summary.ExceptionRate,
+                StudTable = request.StudTable,
+                DeceasedTable = request.NalTable,
+                StudColumn = summary.StudQualRefColumn,
+                DeceasedColumn = summary.StudFirstTimeColumn,
+                ExceptionsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary.FlaggedRows)),
+                ResultsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary))
+            }, userEmail, userName);
 
             return runId;
         }
 
-        private static Rule39ValidationSummary CloneSummary(Rule39ValidationSummary src)
+        // ── Column configuration resolution (degrades optional display columns to NULL when
+        //    the uploaded table doesn't have them, instead of hard-failing the whole rule) ────
+
+        private sealed class Rule39ColumnConfig
         {
-            var json = JsonConvert.SerializeObject(src);
-            return JsonConvert.DeserializeObject<Rule39ValidationSummary>(json) ?? new Rule39ValidationSummary();
+            public string StudQualRefColumn = "_001";
+            public string StudFirstTimeColumn = "_010";
+            public string StudFirstTimeValue = "F";
+            public string? Stud007Column;
+            public string? Stud008Column;
+            public string? Stud012Column;
+            public string? Stud026Column;
+            public string QualCodeColumn = "_001";
+            public string QualNameColumn = "_003";
+            public string NalRefColumn = "";
+            public string NalNameColumn = "";
+            public string? NalAlignedColumn;
+            public string NalCategoryColumn = "";
+            public string NalCategoryValue = "C";
+            public string? NalHeqsfRefColumn;
+            public string? NalSaqaIdColumn;
+            public string? NalNqfColumn;
+            public string? NalCreditsColumn;
+            public string? NalOutcomeColumn;
         }
 
-        // ── System DB helpers ─────────────────────────────────────────────────
-
-        private async Task<int> ClearSignoffsAndFlagForReviewAsync(SqlConnection connection, int runId)
+        private async Task<Rule39ColumnConfig> ResolveColumnConfigAsync(Rule39ValidationRequest request)
         {
-            await using var countCmd = connection.CreateConfiguredCommand();
-            countCmd.CommandText = "SELECT COUNT(1) FROM dbo.ReviewSignoffs WHERE RunID = @RunID;";
-            countCmd.Parameters.AddWithValue("@RunID", runId);
-            var count = Convert.ToInt32(await countCmd.ExecuteScalarAsync());
-
-            await using var deleteCmd = connection.CreateConfiguredCommand();
-            deleteCmd.CommandText = "DELETE FROM dbo.ReviewSignoffs WHERE RunID = @RunID;";
-            deleteCmd.Parameters.AddWithValue("@RunID", runId);
-            await deleteCmd.ExecuteNonQueryAsync();
-
-            await SetRunStatusAsync(connection, runId, "Needs Review");
-            return count;
-        }
-
-        private async Task UpdateRunStatusFromSignoffsAsync(SqlConnection connection, int runId)
-        {
-            var hasAll = await HasAllRequiredSignoffsAsync(connection, runId);
-            await SetRunStatusAsync(connection, runId, hasAll ? "Reviewed and Completed" : "Needs Review");
-        }
-
-        private async Task<bool> HasAllRequiredSignoffsAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT
-    CASE WHEN EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND SignoffRole = 'DataAnalyst') THEN 1 ELSE 0 END,
-    CASE WHEN EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND SignoffRole = 'Manager') THEN 1 ELSE 0 END,
-    CASE WHEN EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND SignoffRole = 'Director') THEN 1 ELSE 0 END;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync()) return false;
-            return reader.GetInt32(0) == 1 && reader.GetInt32(1) == 1 && reader.GetInt32(2) == 1;
-        }
-
-        private async Task SetRunStatusAsync(SqlConnection connection, int runId, string status)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "UPDATE dbo.ValidationRuns SET Status = @Status WHERE RunID = @RunID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@Status", status);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private async Task MarkPreviousRunsHistoricalAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "UPDATE dbo.ValidationRuns SET IsCurrent = 0 WHERE ClientID = @ClientID AND RuleNumber = @RuleNumber AND IsCurrent = 1;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private async Task<List<RunSignoffViewModel>> GetRunSignoffsAsync(SqlConnection connection, int runId, int? currentUserId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT rs.SignoffID, ISNULL(rs.SignoffRole,'') AS SignoffRole,
-       LTRIM(RTRIM(ISNULL(u.FirstName,'')+' '+ISNULL(u.LastName,''))) AS ReviewerName,
-       ISNULL(u.Email,'') AS ReviewerEmail, ISNULL(rs.Comment,'') AS Comment, rs.SignedOffAt,
-       CASE WHEN @CurrentUserID IS NOT NULL AND rs.ReviewerID = @CurrentUserID THEN CAST(1 AS BIT) ELSE CAST(0 AS BIT) END AS IsCurrentUser
-FROM dbo.ReviewSignoffs rs
-INNER JOIN dbo.Users u ON u.UserID = rs.ReviewerID
-WHERE rs.RunID = @RunID
-ORDER BY CASE ISNULL(rs.SignoffRole,'') WHEN 'DataAnalyst' THEN 1 WHEN 'Manager' THEN 2 WHEN 'Director' THEN 3 ELSE 4 END, rs.SignedOffAt DESC;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@CurrentUserID", currentUserId.HasValue ? currentUserId.Value : DBNull.Value);
-            await using var reader = await command.ExecuteReaderAsync();
-            var signoffs = new List<RunSignoffViewModel>();
-            while (await reader.ReadAsync())
+            var cfg = new Rule39ColumnConfig
             {
-                signoffs.Add(new RunSignoffViewModel
-                {
-                    Id = reader.GetInt32(0),
-                    SignoffRole = reader.IsDBNull(1) ? "" : reader.GetString(1),
-                    ReviewerName = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                    ReviewerEmail = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                    Comment = reader.IsDBNull(4) ? "" : reader.GetString(4),
-                    SignedOffAt = reader.IsDBNull(5) ? DateTime.UtcNow : reader.GetDateTime(5),
-                    IsCurrentUser = !reader.IsDBNull(6) && reader.GetBoolean(6)
-                });
-            }
-            return signoffs;
-        }
-
-        private async Task<int?> GetSystemUserIdByEmailAsync(SqlConnection connection, string? email)
-        {
-            if (string.IsNullOrWhiteSpace(email)) return null;
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 UserID FROM dbo.Users WHERE Email = @Email;";
-            command.Parameters.AddWithValue("@Email", email);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToInt32(value);
-        }
-
-        private async Task<string?> GetEngagementRoleAsync(SqlConnection connection, int clientId, int userId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 EngagementRole FROM dbo.UserClientAssignments WHERE ClientID = @ClientID AND UserID = @UserID;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@UserID", userId);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToString(value);
-        }
-
-        private static async Task<bool> IsWorkspaceSavedAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT CASE WHEN EXISTS (
-    SELECT 1 FROM dbo.ValidationRuns WHERE RunID = @RunID
-    AND (WorkspaceSavedAt IS NOT NULL OR EXISTS (
-        SELECT 1 FROM dbo.ReviewSignoffs rs WHERE rs.RunID = ValidationRuns.RunID AND rs.SignoffRole = 'DataAnalyst'))
-) THEN 1 ELSE 0 END;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            return Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
-        }
-
-        private async Task<bool> HasSignoffRoleAsync(SqlConnection connection, int runId, string signoffRole)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT CASE WHEN EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND SignoffRole = @SignoffRole) THEN 1 ELSE 0 END;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@SignoffRole", signoffRole);
-            return Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
-        }
-
-        private async Task<string?> GetValidationRecordHashAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 RecordHash FROM dbo.ValidationRuns WHERE RunID = @RunID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToString(value);
-        }
-
-        private async Task<string?> GetLatestValidationHashAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 RecordHash FROM dbo.ValidationRuns WHERE ClientID = @ClientID AND RuleNumber = @RuleNumber AND RecordHash IS NOT NULL ORDER BY RunTimestamp DESC, RunID DESC;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToString(value);
-        }
-
-        private async Task EnsureClientNotArchivedAsync(SqlConnection connection, int clientId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 Status FROM dbo.Clients WHERE ClientID = @ClientID;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            var status = Convert.ToString(await command.ExecuteScalarAsync());
-            if (string.Equals(status, "Archived", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Archived engagements are read-only.");
-        }
-
-        private static async Task<int?> GetClientIdForRunAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 ClientID FROM dbo.ValidationRuns WHERE RunID = @RunID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToInt32(value);
-        }
-
-        private async Task<SqlConnection> OpenSystemConnectionAsync()
-        {
-            var server   = _configuration["SystemDatabase:Server"] ?? @"(localdb)\MSSQLLocalDB";
-            var database = _configuration["SystemDatabase:Name"] ?? "HEMISBaseSystem";
-            var trust    = _configuration.GetValue("SystemDatabase:TrustServerCertificate", true);
-
-            var builder = new SqlConnectionStringBuilder
-            {
-                DataSource = server, InitialCatalog = database,
-                IntegratedSecurity = true, TrustServerCertificate = trust,
-                Encrypt = false, ConnectTimeout = 180
+                StudQualRefColumn = Default(request.StudQualRefColumn, "_001"),
+                StudFirstTimeColumn = Default(request.StudFirstTimeColumn, "_010"),
+                StudFirstTimeValue = Default(request.StudFirstTimeValue, "F"),
+                Stud007Column = NullIfBlank(request.Stud007Column),
+                Stud008Column = NullIfBlank(request.Stud008Column),
+                Stud012Column = NullIfBlank(request.Stud012Column),
+                Stud026Column = NullIfBlank(request.Stud026Column),
+                QualCodeColumn = Default(request.QualCodeColumn, "_001"),
+                QualNameColumn = Default(request.QualNameColumn, "_003"),
+                NalRefColumn = request.NalRefColumn,
+                NalNameColumn = request.NalNameColumn,
+                NalAlignedColumn = NullIfBlank(request.NalAlignedColumn),
+                NalCategoryColumn = request.NalCategoryColumn,
+                NalCategoryValue = Default(request.NalCategoryValue, "C"),
+                NalHeqsfRefColumn = NullIfBlank(request.NalHeqsfRefColumn),
+                NalSaqaIdColumn = NullIfBlank(request.NalSaqaIdColumn),
+                NalNqfColumn = NullIfBlank(request.NalNqfColumn),
+                NalCreditsColumn = NullIfBlank(request.NalCreditsColumn),
+                NalOutcomeColumn = NullIfBlank(request.NalOutcomeColumn)
             };
 
-            var connection = new SqlConnection(builder.ConnectionString);
-            await connection.OpenAsync();
-            return connection;
+            var studColumns = await _datasets.GetValidatedColumnsAsync(request.ClientId, request.StudTable);
+            var qualColumns = await _datasets.GetValidatedColumnsAsync(request.ClientId, request.QualTable);
+            var nalColumns = await _datasets.GetValidatedColumnsAsync(request.ClientId, request.NalTable);
+            EnsureHasColumns(request.StudTable, studColumns, cfg.StudQualRefColumn, cfg.StudFirstTimeColumn);
+            EnsureHasColumns(request.QualTable, qualColumns, cfg.QualCodeColumn, cfg.QualNameColumn);
+            EnsureHasColumns(request.NalTable, nalColumns, cfg.NalRefColumn, cfg.NalNameColumn, cfg.NalCategoryColumn);
+
+            var studSet = new HashSet<string>(studColumns, StringComparer.OrdinalIgnoreCase);
+            var nalSet = new HashSet<string>(nalColumns, StringComparer.OrdinalIgnoreCase);
+            if (cfg.Stud007Column != null && !studSet.Contains(cfg.Stud007Column)) cfg.Stud007Column = null;
+            if (cfg.Stud008Column != null && !studSet.Contains(cfg.Stud008Column)) cfg.Stud008Column = null;
+            if (cfg.Stud012Column != null && !studSet.Contains(cfg.Stud012Column)) cfg.Stud012Column = null;
+            if (cfg.Stud026Column != null && !studSet.Contains(cfg.Stud026Column)) cfg.Stud026Column = null;
+            if (cfg.NalAlignedColumn != null && !nalSet.Contains(cfg.NalAlignedColumn)) cfg.NalAlignedColumn = null;
+            if (cfg.NalHeqsfRefColumn != null && !nalSet.Contains(cfg.NalHeqsfRefColumn)) cfg.NalHeqsfRefColumn = null;
+            if (cfg.NalSaqaIdColumn != null && !nalSet.Contains(cfg.NalSaqaIdColumn)) cfg.NalSaqaIdColumn = null;
+            if (cfg.NalNqfColumn != null && !nalSet.Contains(cfg.NalNqfColumn)) cfg.NalNqfColumn = null;
+            if (cfg.NalCreditsColumn != null && !nalSet.Contains(cfg.NalCreditsColumn)) cfg.NalCreditsColumn = null;
+            if (cfg.NalOutcomeColumn != null && !nalSet.Contains(cfg.NalOutcomeColumn)) cfg.NalOutcomeColumn = null;
+
+            return cfg;
         }
 
-        private async Task<List<string>> GetTableColumnsAsync(string server, string database, string driver, string tableName)
+        private static void EnsureHasColumns(string tableName, IReadOnlyCollection<string> availableColumns, params string[] requiredColumns)
         {
-            ValidateObjectName(tableName);
-            await using var conn = new SqlConnection(BuildConnectionString(server, database, driver));
-            await conn.OpenAsync();
-            await using var cmd = conn.CreateConfiguredCommand();
-            cmd.CommandText = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @TableName ORDER BY ORDINAL_POSITION;";
-            cmd.Parameters.AddWithValue("@TableName", Sanitise(tableName));
-            await using var reader = await cmd.ExecuteReaderAsync();
-            var columns = new List<string>();
-            while (await reader.ReadAsync())
-                if (!reader.IsDBNull(0)) columns.Add(reader.GetString(0));
-            return columns;
+            var missing = requiredColumns.Where(required => !availableColumns.Contains(required, StringComparer.OrdinalIgnoreCase)).ToList();
+            if (missing.Count > 0)
+                throw new InvalidOperationException($"Table {tableName} is missing required column(s): {string.Join(", ", missing)}.");
         }
 
-        private static string BuildConnectionString(string server, string database, string driver) =>
-            $"Server={server};Database={database};Trusted_Connection=True;TrustServerCertificate=True;Encrypt=False;Connection Timeout=180;";
-
-        private static string Sanitise(string name) =>
-            name.Replace("]", "").Replace("[", "").Replace("'", "").Replace(";", "").Trim();
-
-        private static async Task<int> CountAsync(SqlConnection connection, string sql)
+        private async Task EnsureRule39IndexesAsync(int clientId, string studTable, string qualTable, string nalTable, Rule39ColumnConfig cfg)
         {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandTimeout = SqlCommandTimeoutSeconds;
+            await _datasets.EnsureJoinIndexAsync(clientId, studTable, cfg.StudQualRefColumn);
+            await _datasets.EnsureJoinIndexAsync(clientId, studTable, cfg.StudFirstTimeColumn);
+            await _datasets.EnsureJoinIndexAsync(clientId, qualTable, cfg.QualCodeColumn);
+            await _datasets.EnsureJoinIndexAsync(clientId, nalTable, cfg.NalRefColumn);
+            await _datasets.EnsureJoinIndexAsync(clientId, nalTable, cfg.NalCategoryColumn);
+        }
+
+        // ── Helpers ──────────────────────────────────────────────────────────────────────
+
+        private static string Default(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+        private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
+        private static string? GetString(System.Data.Common.DbDataReader reader, string columnName)
+        {
+            var ordinal = reader.GetOrdinal(columnName);
+            if (reader.IsDBNull(ordinal)) return null;
+            var value = Convert.ToString(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
+            return string.IsNullOrEmpty(value) ? null : value;
+        }
+
+        private static int GetInt(System.Data.Common.DbDataReader reader, int ordinal) =>
+            reader.IsDBNull(ordinal) ? 0 : Convert.ToInt32(reader.GetValue(ordinal));
+
+        private static async Task<int> CountAsync(NpgsqlConnection connection, string sql)
+        {
+            await using var command = connection.CreateCommand();
             command.CommandText = sql;
             return Convert.ToInt32(await command.ExecuteScalarAsync());
         }
 
-        private static void ValidateObjectName(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-                throw new InvalidOperationException("Table or column name is required.");
-            foreach (var bad in new[] { ";", "'", "\"", "--", "/*", "*/" })
-                if (value.Contains(bad, StringComparison.Ordinal))
-                    throw new InvalidOperationException("Unsafe table or column name was provided.");
-        }
+        private static string EscapeSqlString(string? value) => (value ?? "").Replace("'", "''");
 
-        private static void ValidateObjectNames(Rule39VerifyRequest r)
+        private static string? FindFirst(IEnumerable<string> values, IEnumerable<string> preferredExact, IEnumerable<string> preferredContains)
         {
-            ValidateObjectName(r.StudTable); ValidateObjectName(r.QualTable); ValidateObjectName(r.NalTable);
-            ValidateObjectName(r.StudQualRefColumn); ValidateObjectName(r.StudFirstTimeColumn);
-            ValidateObjectName(r.QualCodeColumn); ValidateObjectName(r.QualNameColumn);
-            ValidateObjectName(r.NalCategoryColumn);
-        }
-
-        private static void ValidateObjectNames(Rule39ValidationRequest r)
-        {
-            ValidateObjectName(r.StudTable); ValidateObjectName(r.QualTable); ValidateObjectName(r.NalTable);
-            ValidateObjectName(r.StudQualRefColumn); ValidateObjectName(r.StudFirstTimeColumn);
-            ValidateObjectName(r.QualCodeColumn); ValidateObjectName(r.QualNameColumn);
-            ValidateObjectName(r.NalRefColumn); ValidateObjectName(r.NalNameColumn);
-            ValidateObjectName(r.NalCategoryColumn);
-            if (!string.IsNullOrWhiteSpace(r.Stud007Column))      ValidateObjectName(r.Stud007Column);
-            if (!string.IsNullOrWhiteSpace(r.Stud008Column))      ValidateObjectName(r.Stud008Column);
-            if (!string.IsNullOrWhiteSpace(r.Stud012Column))      ValidateObjectName(r.Stud012Column);
-            if (!string.IsNullOrWhiteSpace(r.Stud026Column))      ValidateObjectName(r.Stud026Column);
-            if (!string.IsNullOrWhiteSpace(r.NalAlignedColumn))  ValidateObjectName(r.NalAlignedColumn);
-            if (!string.IsNullOrWhiteSpace(r.NalHeqsfRefColumn)) ValidateObjectName(r.NalHeqsfRefColumn);
-            if (!string.IsNullOrWhiteSpace(r.NalSaqaIdColumn))   ValidateObjectName(r.NalSaqaIdColumn);
-            if (!string.IsNullOrWhiteSpace(r.NalNqfColumn))      ValidateObjectName(r.NalNqfColumn);
-            if (!string.IsNullOrWhiteSpace(r.NalCreditsColumn))  ValidateObjectName(r.NalCreditsColumn);
-            if (!string.IsNullOrWhiteSpace(r.NalOutcomeColumn))  ValidateObjectName(r.NalOutcomeColumn);
-        }
-
-        private static string? FindFirst(IEnumerable<string> values, string[] exactMatches, string[] containsMatches)
-        {
-            foreach (var exact in exactMatches)
+            var list = values.ToList();
+            foreach (var exact in preferredExact)
             {
-                var match = values.FirstOrDefault(v => v.Equals(exact, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrWhiteSpace(match)) return match;
+                var match = list.FirstOrDefault(value => value.Equals(exact, StringComparison.OrdinalIgnoreCase));
+                if (match != null) return match;
             }
-            foreach (var fragment in containsMatches)
+            foreach (var contains in preferredContains)
             {
-                var match = values.FirstOrDefault(v => v.Contains(fragment, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrWhiteSpace(match)) return match;
+                var match = list.FirstOrDefault(value => value.Contains(contains, StringComparison.OrdinalIgnoreCase));
+                if (match != null) return match;
             }
-            return values.FirstOrDefault();
-        }
-
-        private static string ComputeHash(string input)
-        {
-            using var sha = SHA256.Create();
-            return Convert.ToHexString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(input)));
+            return list.FirstOrDefault();
         }
 
         private static Rule39ValidationSummary? DeserializeSummary(string? json)
@@ -1209,7 +828,8 @@ SELECT CASE WHEN EXISTS (
             if (string.IsNullOrWhiteSpace(json)) return null;
             try
             {
-                return JsonConvert.DeserializeObject<Rule39ValidationSummary>(ValidationPayloadCodec.Decode(json));
+                var decoded = ValidationPayloadCodec.Decode(json);
+                return JsonConvert.DeserializeObject<Rule39ValidationSummary>(decoded);
             }
             catch { return null; }
         }
@@ -1218,5 +838,26 @@ SELECT CASE WHEN EXISTS (
             string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(role, "Manager", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(role, "Director", StringComparison.OrdinalIgnoreCase);
+
+        private async Task<(NpgsqlConnection Connection, string Schema)> OpenEngagementConnectionAsync(int clientId)
+        {
+            var database = await _datasets.GetDatabaseAsync(clientId)
+                ?? throw new InvalidOperationException("Create a database for this engagement before running this rule.");
+
+            var connectionString = HemisAudit.Data.PostgresConnectionStringHelper.WithResiliencyDefaults(
+                _configuration.GetConnectionString("Postgres")
+                    ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured."),
+                commandTimeoutSeconds: 0);
+
+            var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync();
+            await using (var setTimeout = connection.CreateCommand())
+            {
+                setTimeout.CommandText = "SET statement_timeout = 0;";
+                await setTimeout.ExecuteNonQueryAsync();
+            }
+            var schema = string.IsNullOrWhiteSpace(database.SchemaName) ? $"engagement_{clientId}" : database.SchemaName;
+            return (connection, schema);
+        }
     }
 }

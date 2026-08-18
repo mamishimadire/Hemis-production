@@ -4,9 +4,7 @@ namespace HemisAudit.ViewModels
 {
     public class Rule17GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
     }
 
@@ -21,9 +19,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule17FilterValueRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public string FilterColumn { get; set; } = "";
     }
@@ -45,9 +41,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule17VerifyRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public string FilterColumn { get; set; } = "";
         public string FilterValue { get; set; } = "";
@@ -71,15 +65,13 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string TableName { get; set; } = "dbo_STUD";
-        public string QualTable { get; set; } = "dbo_QUAL";
-        public string QualJoinCol { get; set; } = "_001";
-        public string QualNameCol { get; set; } = "_003";
-        public string FilterColumn { get; set; } = "_025";
-        public string FilterValue { get; set; } = "F";
+        public string TableName { get; set; } = "";
+        public string StudJoinCol { get; set; } = "";
+        public string QualTable { get; set; } = "";
+        public string QualJoinCol { get; set; } = "";
+        public string QualNameCol { get; set; } = "";
+        public string FilterColumn { get; set; } = "";
+        public string FilterValue { get; set; } = "";
         public string BreakdownColumn { get; set; } = "";
         public int SampleSize { get; set; } = 1;
         public bool ShowAllRecords { get; set; } = true;
@@ -112,11 +104,11 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string TableName { get; set; } = "";
+        public string StudJoinCol { get; set; } = "";
         public string QualTable { get; set; } = "";
-        public string QualJoinCol { get; set; } = "_001";
-        public string QualNameCol { get; set; } = "_003";
+        public string QualJoinCol { get; set; } = "";
+        public string QualNameCol { get; set; } = "";
         public string FilterColumn { get; set; } = "";
         public string FilterValue { get; set; } = "";
         public string BreakdownColumn { get; set; } = "";
@@ -138,7 +130,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule17ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -156,15 +147,13 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string TableName { get; set; } = "dbo_STUD";
-        public string QualTable { get; set; } = "dbo_QUAL";
-        public string QualJoinCol { get; set; } = "_001";
-        public string QualNameCol { get; set; } = "_003";
-        public string FilterColumn { get; set; } = "_025";
-        public string FilterValue { get; set; } = "F";
+        public string TableName { get; set; } = "";
+        public string StudJoinCol { get; set; } = "";
+        public string QualTable { get; set; } = "";
+        public string QualJoinCol { get; set; } = "";
+        public string QualNameCol { get; set; } = "";
+        public string FilterColumn { get; set; } = "";
+        public string FilterValue { get; set; } = "";
         public string BreakdownColumn { get; set; } = "";
         public int SampleSize { get; set; } = 1;
         public bool ShowAllRecords { get; set; } = true;
@@ -209,5 +198,3 @@ namespace HemisAudit.ViewModels
         public string? Error { get; set; }
     }
 }
-
-

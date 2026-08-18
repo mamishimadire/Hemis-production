@@ -1,7 +1,7 @@
 namespace HemisAudit.ViewModels
 {
     // ═══════════════════════════════════════════════════════════════════════════
-    // RULE 41 – Student ASCII Agreement
+    // RULE 41 – Student ASCII Agreement (shared type family: 41, 45, 47, 48, 60)
     //
     // Reconciliation: dbo_STUD  vs  MT-Audit-prod-std
     //   Join key   : _007 (dbo_STUD) ↔ IAGSTNO (MT-Audit-prod-std)
@@ -12,14 +12,14 @@ namespace HemisAudit.ViewModels
     public class Rule41ColumnPair
     {
         public string StudCol  { get; set; } = "";
-        public string AuditCol { get; set; } = "";
+        public string H16Col { get; set; } = "";
         public string Label    { get; set; } = "";
     }
 
     public class Rule41FieldValue
     {
         public string StudValue  { get; set; } = "—";
-        public string AuditValue { get; set; } = "—";
+        public string H16Value { get; set; } = "—";
         public string Match      { get; set; } = "AGREE"; // AGREE | DISAGREE | MISSING
     }
 
@@ -35,9 +35,14 @@ namespace HemisAudit.ViewModels
     public class Rule41ReconciliationSummary
     {
         public string StudTable  { get; set; } = "";
-        public string AuditTable { get; set; } = "";
+        public string H16Table { get; set; } = "";
         public string StudKey    { get; set; } = "_007";
-        public string AuditKey   { get; set; } = "IAGSTNO";
+        public string H16Key   { get; set; } = "IAGSTNO";
+        // Optional second join-key column. When set, rows are matched on (StudKey, StudSecondaryKey)
+        // <-> (H16Key, H16SecondaryKey) as a composite key — needed when the primary key alone
+        // (e.g. student number) repeats, such as one row per qualification for the same student.
+        public string? StudSecondaryKey  { get; set; }
+        public string? H16SecondaryKey { get; set; }
         public List<Rule41ColumnPair> Pairs { get; set; } = new();
         public int TotalCount    { get; set; }
         public int AgreeCount    { get; set; }
@@ -52,13 +57,12 @@ namespace HemisAudit.ViewModels
     {
         public int    ClientId   { get; set; }
         public int?   RunId      { get; set; }
-        public string Server     { get; set; } = "";
-        public string Database   { get; set; } = "";
-        public string Driver     { get; set; } = "ODBC Driver 17 for SQL Server";
         public string StudTable  { get; set; } = "dbo_STUD";
-        public string AuditTable { get; set; } = "MT-Audit-prod-std";
+        public string H16Table { get; set; } = "MT-Audit-prod-std";
         public string StudKey    { get; set; } = "_007";
-        public string AuditKey   { get; set; } = "IAGSTNO";
+        public string H16Key   { get; set; } = "IAGSTNO";
+        public string? StudSecondaryKey  { get; set; }
+        public string? H16SecondaryKey { get; set; }
         public List<Rule41ColumnPair> Pairs { get; set; } = new();
     }
 
@@ -70,37 +74,36 @@ namespace HemisAudit.ViewModels
         public int    ClientId   { get; set; }
         public string Status     { get; set; } = "";
         public string Timestamp  { get; set; } = "";
-        public string Server     { get; set; } = "";
-        public string Database   { get; set; } = "";
         public string StudTable  { get; set; } = "dbo_STUD";
-        public string AuditTable { get; set; } = "MT-Audit-prod-std";
+        public string H16Table { get; set; } = "MT-Audit-prod-std";
         public string StudKey    { get; set; } = "_007";
-        public string AuditKey   { get; set; } = "IAGSTNO";
+        public string H16Key   { get; set; } = "IAGSTNO";
         public int TotalCount    { get; set; }
         public int AgreeCount    { get; set; }
         public int DisagreeCount { get; set; }
         public int MissingCount  { get; set; }
         public decimal ExceptionRate { get; set; }
         public Rule41ReconciliationSummary Reconc { get; set; } = new();
+        public string? Warning { get; set; }
     }
 
     public class Rule41VerifyResult
     {
         public bool   Success    { get; set; }
         public int    StudCount  { get; set; }
-        public int    AuditCount { get; set; }
+        public int    H16Count { get; set; }
         public string? Error     { get; set; }
     }
 
     public class Rule41VerifyRequest
     {
-        public string Server     { get; set; } = "";
-        public string Database   { get; set; } = "";
-        public string Driver     { get; set; } = "ODBC Driver 17 for SQL Server";
+        public int    ClientId   { get; set; }
         public string StudTable  { get; set; } = "dbo_STUD";
-        public string AuditTable { get; set; } = "MT-Audit-prod-std";
+        public string H16Table { get; set; } = "MT-Audit-prod-std";
         public string StudKey    { get; set; } = "_007";
-        public string AuditKey   { get; set; } = "IAGSTNO";
+        public string H16Key   { get; set; } = "IAGSTNO";
+        public string? StudSecondaryKey  { get; set; }
+        public string? H16SecondaryKey { get; set; }
     }
 
     public class Rule41TableDiscoveryResult
@@ -108,7 +111,7 @@ namespace HemisAudit.ViewModels
         public bool   Success         { get; set; }
         public List<string> Tables    { get; set; } = new();
         public string? AutoStudTable  { get; set; }
-        public string? AutoAuditTable { get; set; }
+        public string? AutoH16Table { get; set; }
         public string? Error          { get; set; }
     }
 
@@ -134,13 +137,12 @@ namespace HemisAudit.ViewModels
     {
         public int    ClientId   { get; set; }
         public int?   RunId      { get; set; }
-        public string Server     { get; set; } = "";
-        public string Database   { get; set; } = "";
-        public string Driver     { get; set; } = "ODBC Driver 17 for SQL Server";
         public string StudTable  { get; set; } = "dbo_STUD";
-        public string AuditTable { get; set; } = "MT-Audit-prod-std";
+        public string H16Table { get; set; } = "MT-Audit-prod-std";
         public string StudKey    { get; set; } = "_007";
-        public string AuditKey   { get; set; } = "IAGSTNO";
+        public string H16Key   { get; set; } = "IAGSTNO";
+        public string? StudSecondaryKey  { get; set; }
+        public string? H16SecondaryKey { get; set; }
         public string CurrentStatus              { get; set; } = "";
         public bool   HasDataAnalystSignoff      { get; set; }
         public bool   CurrentUserHasSignedOff    { get; set; }
@@ -160,7 +162,6 @@ namespace HemisAudit.ViewModels
         public bool   IsCurrentRun  { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer   { get; set; } = "";
         public string CurrentUserEngagementRole  { get; set; } = "";
         public bool   HasDataAnalystSignoff      { get; set; }
         public bool   CurrentUserHasSignedOff    { get; set; }
@@ -189,13 +190,5 @@ namespace HemisAudit.ViewModels
         public int    ClientId { get; set; }
         public int?   RunId    { get; set; }
         public string Comment  { get; set; } = "";
-    }
-
-    public class Rule41GetColumnsRequest
-    {
-        public string Server    { get; set; } = "";
-        public string Database  { get; set; } = "";
-        public string Driver    { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string TableName { get; set; } = "";
     }
 }

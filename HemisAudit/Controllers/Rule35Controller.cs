@@ -153,7 +153,6 @@ namespace HemisAudit.Controllers
                 review.GeneratedSql = await _rule35.GenerateSqlAsync(new Rule35ValidationRequest
                 {
                     ClientId = review.ClientId,
-                    Database = review.Summary.Database,
                     TableName = review.Summary.TableName,
                     DuplicateColumn = review.Summary.DuplicateColumn
                 });
@@ -167,16 +166,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule35.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule35.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule35.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule35GetColumnsRequest model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule35.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName)));
+            Json(await RequireDataAnalystAsync(async () => await _rule35.GetColumnsAsync(model.ClientId, model.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTable([FromBody] Rule35VerifyRequest request) =>
@@ -592,7 +587,6 @@ namespace HemisAudit.Controllers
             var request = new Rule35ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
                 TableName = review.Summary.TableName,
                 DuplicateColumn = review.Summary.DuplicateColumn
             };

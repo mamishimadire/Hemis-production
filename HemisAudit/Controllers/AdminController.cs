@@ -46,7 +46,8 @@ namespace HemisAudit.Controllers
         [Authorize(Roles = "Admin")]
         public async Task<IActionResult> Users()
         {
-            var users = await _users.Users.ToListAsync();
+            var admin = await _users.GetUserAsync(User);
+            var users = await _users.Users.Where(u => u.FirmId == admin!.FirmId).ToListAsync();
             var list  = new List<UserListViewModel>();
 
             foreach (var u in users.OrderBy(u => u.LastName))
@@ -95,6 +96,21 @@ namespace HemisAudit.Controllers
             ViewBag.Roles = new[] { "Admin","Director","Manager","DataAnalyst","Trainee" };
             if (!ModelState.IsValid) return View(model);
 
+            var admin = await _users.GetUserAsync(User);
+            if (admin?.FirmId == null)
+            {
+                ModelState.AddModelError("", "Your account has no firm — contact your service provider.");
+                return View(model);
+            }
+
+            var license = await _db.FirmLicenses.FirstOrDefaultAsync(l => l.FirmId == admin.FirmId);
+            var seatsUsed = await _users.Users.CountAsync(u => u.FirmId == admin.FirmId && u.IsActive);
+            if (license == null || seatsUsed >= license.SeatCount)
+            {
+                ModelState.AddModelError("", "Your firm has reached its seat limit. Contact your service provider to increase it.");
+                return View(model);
+            }
+
             if (await _users.FindByEmailAsync(model.Email) != null)
             {
                 ModelState.AddModelError("Email", "A user with this email already exists.");
@@ -119,10 +135,12 @@ namespace HemisAudit.Controllers
                 Email          = model.Email,
                 FirstName      = model.FirstName,
                 LastName       = model.LastName,
-                EmployeeCode   = model.EmployeeCode,
+                EmployeeCode   = model.EmployeeCode ?? "",
                 EmailConfirmed = true,
                 IsActive       = true,
-                PasswordSetDate = DateTime.UtcNow
+                PasswordSetDate = DateTime.UtcNow,
+                FirmId         = admin.FirmId,
+                MustChangePassword = true
             };
 
             var policyErrors = _passwordPolicy.ValidatePassword(user, model.Password);
@@ -173,9 +191,8 @@ namespace HemisAudit.Controllers
                 return View(model);
             }
 
-            var admin = await _users.GetUserAsync(User);
             await _audit.LogAsync("create_user", $"Created user {user.Email} with role {model.Role}",
-                admin?.Id, admin?.Email);
+                admin.Id, admin.Email);
 
             TempData["Success"] = $"Team member {user.FullName} added successfully.";
             return RedirectToAction(nameof(Users));
@@ -332,12 +349,6 @@ namespace HemisAudit.Controllers
 
             await _systemDb.DeleteUserMirrorAsync(user, admin, adminRole);
 
-            var sqliteAssignments = await _db.ClientUsers.Where(cu => cu.UserId == user.Id).ToListAsync();
-            if (sqliteAssignments.Count > 0)
-                _db.ClientUsers.RemoveRange(sqliteAssignments);
-
-            await _db.SaveChangesAsync();
-
             var deleteResult = await _users.DeleteAsync(user);
             if (!deleteResult.Succeeded)
             {
@@ -378,6 +389,7 @@ namespace HemisAudit.Controllers
                 {
                     refreshed.PasswordSetDate = DateTime.UtcNow;
                     refreshed.PasswordChangedAt = DateTime.UtcNow;
+                    refreshed.MustChangePassword = true;
                     refreshed.PasswordHistory = _passwordPolicy.BuildPasswordHistory(refreshed.PasswordHistory, refreshed.PasswordHash ?? string.Empty);
                     await _users.UpdateAsync(refreshed);
                     await _users.SetLockoutEndDateAsync(refreshed, null);
@@ -449,7 +461,17 @@ namespace HemisAudit.Controllers
 
             try
             {
-                var clientId = await _systemDb.CreateClientAsync(model, creator!, role);
+                var firmId = creator!.FirmId ?? throw new InvalidOperationException("User has no firm.");
+
+                var license = await _db.FirmLicenses.FirstOrDefaultAsync(l => l.FirmId == firmId);
+                var engagementsUsed = await _systemDb.GetClientCountAsync(creator, role, scope: "active");
+                if (license == null || engagementsUsed >= license.EngagementLimit)
+                {
+                    ModelState.AddModelError("", "Your firm has reached its engagement limit. Contact your service provider to increase it.");
+                    return View(model);
+                }
+
+                var clientId = await _systemDb.CreateClientAsync(model, creator!, role, firmId);
                 await _audit.LogAsync("create_client", $"Created client: {model.EngagementName} ({model.MaconomyNumber})",
                     creator?.Id, creator?.Email);
                 TempData["Success"] = role == "Admin"
@@ -523,7 +545,7 @@ namespace HemisAudit.Controllers
 
             if (isAdmin && !detail.IsArchived)
             {
-                var allUsers = await _users.Users.ToListAsync();
+                var allUsers = await _users.Users.Where(u => u.FirmId == currentUser!.FirmId).ToListAsync();
                 var assignedIds = detail.AssignedUsers.Select(cu => cu.UserId).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 detail.AvailableUsers = allUsers
                     .Where(u => u.IsActive && !assignedIds.Contains(u.Id))
@@ -702,19 +724,6 @@ namespace HemisAudit.Controllers
 
             await _systemDb.DeleteClientAsync(id);
 
-            var sqliteRuns = await _db.ValidationRuns.Where(v => v.ClientId == id).ToListAsync();
-            if (sqliteRuns.Count > 0)
-                _db.ValidationRuns.RemoveRange(sqliteRuns);
-
-            var sqliteAssignments = await _db.ClientUsers.Where(cu => cu.ClientId == id).ToListAsync();
-            if (sqliteAssignments.Count > 0)
-                _db.ClientUsers.RemoveRange(sqliteAssignments);
-
-            var sqliteClient = await _db.Clients.FirstOrDefaultAsync(c => c.Id == id);
-            if (sqliteClient != null)
-                _db.Clients.Remove(sqliteClient);
-
-            await _db.SaveChangesAsync();
             await _audit.LogAsync("delete_client", $"Deleted engagement {id}", admin.Id, admin.Email);
             TempData["Success"] = "Engagement deleted.";
             return RedirectToAction(nameof(Clients));

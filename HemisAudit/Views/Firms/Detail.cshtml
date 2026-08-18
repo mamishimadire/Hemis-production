@@ -1,0 +1,240 @@
+@model HemisAudit.ViewModels.FirmDetailViewModel
+@{ ViewData["Title"] = Model.Name; Layout = "~/Views/Shared/_Layout.cshtml"; }
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert--success" style="margin-bottom:16px">✅ @TempData["Success"]</div>
+}
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">❌ @TempData["Error"]</div>
+}
+@if (TempData["GeneratedCredentialsEmail"] != null && TempData["GeneratedCredentialsPassword"] != null)
+{
+    <div class="alert alert--info" style="margin-bottom:16px">
+        <strong>First login for @TempData["GeneratedCredentialsEmail"]:</strong>
+        <code style="font-size:15px;font-weight:700">@TempData["GeneratedCredentialsPassword"]</code>
+        — share this securely with the client now; it will not be shown again.
+    </div>
+}
+
+<div class="page-header">
+    <div>
+        <h1>@Model.Name</h1>
+        <p>Created @Model.CreatedAt.ToString("dd MMM yyyy")</p>
+    </div>
+    <a asp-action="Index" class="btn btn-secondary">← Back</a>
+</div>
+
+<div class="card" style="margin-bottom:20px">
+    <h3 style="margin-bottom:8px">Client Code</h3>
+    <p style="color:var(--text-muted);margin-bottom:10px">
+        Give this code to the firm — their users enter it on the Client login tab, alongside their own email and password.
+    </p>
+    <div class="field-group" style="max-width:220px">
+        <input type="text" readonly value="@Model.FirmCode" style="font-family:var(--mono);font-size:18px;font-weight:700;text-align:center" />
+    </div>
+</div>
+
+<div class="card" style="margin-bottom:20px">
+    <h3 style="margin-bottom:12px">Contacts</h3>
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead><tr><th></th><th>Name</th><th>Email</th></tr></thead>
+            <tbody>
+                <tr><td style="font-weight:600">Primary</td><td>@Model.PrimaryContactName</td><td>@Model.PrimaryContactEmail</td></tr>
+                @if (!string.IsNullOrWhiteSpace(Model.BillingContactName) || !string.IsNullOrWhiteSpace(Model.BillingContactEmail))
+                {
+                    <tr><td style="font-weight:600">Billing</td><td>@Model.BillingContactName</td><td>@Model.BillingContactEmail</td></tr>
+                }
+                @if (!string.IsNullOrWhiteSpace(Model.AdminContactName) || !string.IsNullOrWhiteSpace(Model.AdminContactEmail))
+                {
+                    <tr><td style="font-weight:600">Administrative</td><td>@Model.AdminContactName</td><td>@Model.AdminContactEmail</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom:20px">
+    <h3 style="margin-bottom:12px">License</h3>
+    <form asp-action="EditLicense" method="post">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="FirmId" value="@Model.Id" />
+
+        <div class="form-grid">
+            <div class="field-group">
+                <label>Seat Count</label>
+                <input name="SeatCount" type="number" min="1" value="@Model.SeatCount" />
+                <div class="preview-note">@Model.SeatsUsed in use</div>
+            </div>
+            <div class="field-group">
+                <label>Engagement Limit</label>
+                <input name="EngagementLimit" type="number" min="1" value="@Model.EngagementLimit" />
+            </div>
+            <div class="field-group">
+                <label>Access Expires</label>
+                <input name="ExpiresAt" type="date" value="@Model.ExpiresAt.ToString("yyyy-MM-dd")" />
+            </div>
+        </div>
+
+        <div class="action-bar" style="margin-top:16px">
+            <button type="submit" class="btn btn-primary">Save License</button>
+            <span class="badge @(Model.Status == "Active" ? "badge--pass" : "badge--fail")" style="margin-left:8px">@Model.Status</span>
+        </div>
+    </form>
+
+    <div style="margin-top:16px;display:flex;gap:10px">
+        @if (Model.Status == "Active")
+        {
+            <form asp-action="Suspend" asp-route-id="@Model.Id" method="post">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="btn btn-warning"
+                        onclick="return confirm('Suspend access for @Model.Name? All of their users will be signed out and blocked until reactivated.')">
+                    Suspend Access
+                </button>
+            </form>
+        }
+        else
+        {
+            <form asp-action="Reactivate" asp-route-id="@Model.Id" method="post">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="btn btn-success">Reactivate Access</button>
+            </form>
+        }
+    </div>
+</div>
+
+<div class="card">
+    <h3 style="margin-bottom:12px">Users (@Model.Users.Count)</h3>
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+                @if (Model.Users.Count == 0)
+                {
+                    <tr><td colspan="5" class="empty-state">No users yet.</td></tr>
+                }
+                @foreach (var u in Model.Users)
+                {
+                    <tr>
+                        <td>@u.FullName</td>
+                        <td>@u.Email</td>
+                        <td><span class="badge badge--role">@u.Role</span></td>
+                        <td><span class="badge @(u.IsActive ? "badge--pass" : "badge--fail")">@(u.IsActive ? "Active" : "Inactive")</span></td>
+                        <td>
+                            <form asp-action="ResetUserPassword" method="post" style="display:inline">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="firmId" value="@Model.Id" />
+                                <input type="hidden" name="userId" value="@u.Id" />
+                                <button type="submit" class="btn btn-sm btn-warning"
+                                        onclick="return confirm('Reset the password for @u.Email? A new temporary password will be generated and they will be forced to set their own on next login.')">
+                                    Reset Password
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card" style="margin-top:20px;border:1px solid var(--danger,#c62828)">
+    <h3 style="margin-bottom:8px;color:var(--danger,#c62828)">Danger Zone</h3>
+    <p style="color:var(--text-muted);margin-bottom:12px">
+        Removes this firm, its license, and all @Model.Users.Count user(s). Move it to the recycle bin
+        to keep it recoverable, or delete it permanently right away. The firm must have zero
+        engagements before it can be removed.
+    </p>
+    <button type="button" class="btn btn-danger" onclick="openDeleteChoiceModal()">Delete Firm</button>
+</div>
+
+<form id="softDeleteForm" asp-action="SoftDelete" asp-route-id="@Model.Id" method="post">
+    @Html.AntiForgeryToken()
+</form>
+<form id="permanentDeleteForm" asp-action="Delete" asp-route-id="@Model.Id" asp-route-returnTo="detail" method="post">
+    @Html.AntiForgeryToken()
+</form>
+
+<!-- Step 1: choose how to delete -->
+<div id="deleteChoiceModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+        <h3>Delete @Model.Name?</h3>
+        <p style="color:var(--text-muted);margin:8px 0 20px">
+            Choose how this firm should be removed. Moving it to the recycle bin is reversible —
+            deleting it permanently is not.
+        </p>
+        <div style="display:flex;flex-direction:column;gap:10px">
+            <button type="button" class="btn btn-warning" style="width:100%;justify-content:center" onclick="submitSoftDelete()">
+                🗑️ Move to Recycle Bin
+            </button>
+            <button type="button" class="btn btn-danger" style="width:100%;justify-content:center" onclick="switchToPermanentModal()">
+                ⚠️ Delete Permanently
+            </button>
+            <button type="button" class="btn btn-secondary" style="width:100%;justify-content:center" onclick="closeDeleteChoiceModal()">
+                Cancel
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Step 2 (permanent path only): type-to-confirm -->
+<div id="permanentDeleteModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+        <h3 style="color:var(--red-bright)">Permanently delete @Model.Name?</h3>
+        <p style="color:var(--text-muted);margin:8px 0 16px">
+            This immediately removes the firm, its license and all of its users. This skips the
+            recycle bin and cannot be undone.
+        </p>
+        <label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px">Type the firm name to confirm</label>
+        <input type="text" id="permanentDeleteConfirmInput" autocomplete="off" style="margin-bottom:18px" />
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+            <button type="button" class="btn btn-secondary" onclick="closePermanentDeleteModal()">Cancel</button>
+            <button type="button" class="btn btn-danger" id="permanentDeleteConfirmBtn" disabled onclick="submitPermanentDelete()">Delete Permanently</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    var expectedFirmName = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Name));
+
+    function openDeleteChoiceModal() {
+        document.getElementById('deleteChoiceModal').style.display = 'flex';
+    }
+    function closeDeleteChoiceModal() {
+        document.getElementById('deleteChoiceModal').style.display = 'none';
+    }
+    function submitSoftDelete() {
+        document.getElementById('softDeleteForm').submit();
+    }
+    function switchToPermanentModal() {
+        closeDeleteChoiceModal();
+        var input = document.getElementById('permanentDeleteConfirmInput');
+        input.value = '';
+        document.getElementById('permanentDeleteConfirmBtn').disabled = true;
+        document.getElementById('permanentDeleteModal').style.display = 'flex';
+    }
+    function closePermanentDeleteModal() {
+        document.getElementById('permanentDeleteModal').style.display = 'none';
+    }
+    function submitPermanentDelete() {
+        document.getElementById('permanentDeleteForm').submit();
+    }
+
+    document.getElementById('permanentDeleteConfirmInput').addEventListener('input', function () {
+        document.getElementById('permanentDeleteConfirmBtn').disabled = this.value !== expectedFirmName;
+    });
+    document.querySelectorAll('.modal-overlay').forEach(function (overlay) {
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) overlay.style.display = 'none';
+        });
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal-overlay').forEach(function (o) { o.style.display = 'none'; });
+        }
+    });
+</script>

@@ -28,9 +28,6 @@ namespace HemisAudit.ViewModels
     {
         public int    ClientId   { get; set; }
         public int?   RunId      { get; set; }
-        public string Server     { get; set; } = "";
-        public string Database   { get; set; } = "";
-        public string Driver     { get; set; } = "ODBC Driver 17 for SQL Server";
         public string StudTable  { get; set; } = "dbo_STUD";
         public string QualTable  { get; set; } = "dbo_QUAL";
         public string PqmTable   { get; set; } = "PQM";
@@ -64,7 +61,6 @@ namespace HemisAudit.ViewModels
         public int?    SavedRunId      { get; set; }
         public int     ClientId        { get; set; }
         public string  Timestamp       { get; set; } = "";
-        public string  Database        { get; set; } = "";
         public string  StudTable       { get; set; } = "dbo_STUD";
         public string  QualTable       { get; set; } = "dbo_QUAL";
         public string  PqmTable        { get; set; } = "PQM";
@@ -77,23 +73,8 @@ namespace HemisAudit.ViewModels
         public int     MissingPqmCount { get; set; }
         public decimal ExceptionRate   { get; set; }
         public string  Status          { get; set; } = "";
-        public bool    IsPreviewOnly   { get; set; }
-        public int     PreviewLimit    { get; set; }
         public List<Rule61ReviewRow> PassRows     { get; set; } = new();
         public List<Rule61ReviewRow> FailRows     { get; set; } = new();
-    }
-
-    public class Rule61VerifyRequest
-    {
-        public string Server    { get; set; } = "";
-        public string Database  { get; set; } = "";
-        public string Driver    { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string StudTable { get; set; } = "dbo_STUD";
-        public string QualTable { get; set; } = "dbo_QUAL";
-        public string PqmTable  { get; set; } = "PQM";
-        public string StudStatusValue { get; set; } = "N"; // comma-separated STUD._010 values (e.g. N, E)
-        public string PgTypesText { get; set; } = "07, 27, 28, 49, 72, 73, 08, 30, 50, 74, 75";
-        public Rule61ColumnMapping ColumnMapping { get; set; } = new();
     }
 
     public class Rule61VerifyResult
@@ -114,10 +95,18 @@ namespace HemisAudit.ViewModels
         public string? Error         { get; set; }
     }
 
+    public class Rule61GetColumnsRequest
+    {
+        public int    ClientId  { get; set; }
+        public string TableName { get; set; } = "";
+        public string TableRole { get; set; } = "";
+    }
+
     public class Rule61ColumnDiscoveryResult
     {
         public bool   Success       { get; set; }
         public List<string> Columns { get; set; } = new();
+        public string? AutoSelected { get; set; }
         public string? Error        { get; set; }
     }
 
@@ -136,13 +125,10 @@ namespace HemisAudit.ViewModels
         public int    ClientId    { get; set; }
         public int?   RunId       { get; set; }
         public bool   ResultsVisible { get; set; }
-        public string Server      { get; set; } = "";
-        public string Database    { get; set; } = "";
-        public string Driver      { get; set; } = "ODBC Driver 17 for SQL Server";
         public string StudTable   { get; set; } = "dbo_STUD";
         public string QualTable   { get; set; } = "dbo_QUAL";
         public string PqmTable    { get; set; } = "PQM";
-public string StudStatusValue { get; set; } = "N"; // comma-separated STUD._010 values (e.g. N, E)
+        public string StudStatusValue { get; set; } = "N"; // comma-separated STUD._010 values (e.g. N, E)
         public string PgTypesText { get; set; } = "07, 27, 28, 49, 72, 73, 08, 30, 50, 74, 75";
         public Rule61ColumnMapping ColumnMapping { get; set; } = new();
         public string CurrentUserEngagementRole  { get; set; } = "";
@@ -163,7 +149,6 @@ public string StudStatusValue { get; set; } = "N"; // comma-separated STUD._010 
         public bool   IsCurrentRun   { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer   { get; set; } = "";
         public string? GeneratedSql  { get; set; }
         public Rule61ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -194,13 +179,5 @@ public string StudStatusValue { get; set; } = "N"; // comma-separated STUD._010 
         public int    ClientId { get; set; }
         public int?   RunId    { get; set; }
         public string Comment  { get; set; } = "";
-    }
-
-    public class Rule61GetColumnsRequest
-    {
-        public string Server    { get; set; } = "";
-        public string Database  { get; set; } = "";
-        public string Driver    { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string TableName { get; set; } = "";
     }
 }

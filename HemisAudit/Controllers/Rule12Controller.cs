@@ -187,8 +187,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = await _rule12.GenerateSqlAsync(new Rule12ValidationRequest
             {
                 ClientId         = review.ClientId,
-                Server           = review.SourceServer,
-                Database         = review.Summary.Database,
                 CregTable        = review.Summary.CregTable,
                 QualTable        = review.Summary.QualTable,
                 CresTable        = review.Summary.CresTable,
@@ -212,17 +210,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule12.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule12.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule12.GetTablesAsync(model.Server, model.Database, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] Rule12VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                await _rule12.GetColumnsAsync(request.Server, request.Database, request.Driver, request.CregTable)));
+        public async Task<IActionResult> GetColumns([FromBody] Rule16ColumnsRequest request) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule12.GetColumnsAsync(request.ClientId, request.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule12VerifyRequest request) =>
@@ -668,15 +661,7 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var request = new Rule12ValidationRequest
-            {
-                ClientId = review.ClientId,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
-                StudTable = review.Summary.StudTable,
-                BridgeTable = review.Summary.BridgeTable,
-                CrseTable = review.Summary.CrseTable
-            };
+            var request = BuildSavedRunExportRequest(review);
 
             var bytes = _export.ExportSql(await _rule12.GenerateSqlAsync(request));
             return File(bytes, "application/sql", $"Rule12_Course_Selection_{runId}.sql");
@@ -804,15 +789,16 @@ namespace HemisAudit.Controllers
 
             if (forceFullPopulationScan)
             {
-                // Fast path: request already carries all connection config — do ONE live scan, no stored-run lookup.
-                if (!string.IsNullOrWhiteSpace(request.Server) &&
-                    !string.IsNullOrWhiteSpace(request.Database) &&
-                    !string.IsNullOrWhiteSpace(request.CregTable))
+                // Fast path: request already carries enough config — do ONE live scan, no stored-run lookup.
+                if (request.ClientId > 0 &&
+                    !string.IsNullOrWhiteSpace(request.CregTable) &&
+                    !string.IsNullOrWhiteSpace(request.QualTable) &&
+                    !string.IsNullOrWhiteSpace(request.CresTable))
                 {
                     return await EnsureFullPopulationForExportAsync(null, request);
                 }
 
-                // Fallback: recover connection config from the saved run (server may not be in the form).
+                // Fallback: recover the table configuration from the saved run.
                 int? lookupRunId = request.RunId is int r && r > 0 ? r : null;
                 if (lookupRunId == null && request.ClientId > 0)
                 {
@@ -825,7 +811,7 @@ namespace HemisAudit.Controllers
                     if (review != null)
                     {
                         var savedConfig = BuildSavedRunExportRequest(review);
-                        if (!string.IsNullOrWhiteSpace(savedConfig.Server))
+                        if (!string.IsNullOrWhiteSpace(savedConfig.CregTable))
                             return await EnsureFullPopulationForExportAsync(null, savedConfig);
                     }
                 }
@@ -851,9 +837,10 @@ namespace HemisAudit.Controllers
                 }
             }
 
-            if (!string.IsNullOrWhiteSpace(request.Server) &&
-                !string.IsNullOrWhiteSpace(request.Database) &&
-                !string.IsNullOrWhiteSpace(request.CregTable))
+            if (request.ClientId > 0 &&
+                !string.IsNullOrWhiteSpace(request.CregTable) &&
+                !string.IsNullOrWhiteSpace(request.QualTable) &&
+                !string.IsNullOrWhiteSpace(request.CresTable))
             {
                 return await EnsureFullPopulationForExportAsync(null, request);
             }
@@ -871,9 +858,10 @@ namespace HemisAudit.Controllers
                 return summary!;
             }
 
-            if (string.IsNullOrWhiteSpace(request.Server) ||
-                string.IsNullOrWhiteSpace(request.Database) ||
-                string.IsNullOrWhiteSpace(request.CregTable))
+            if (request.ClientId <= 0 ||
+                string.IsNullOrWhiteSpace(request.CregTable) ||
+                string.IsNullOrWhiteSpace(request.QualTable) ||
+                string.IsNullOrWhiteSpace(request.CresTable))
             {
                 throw new InvalidOperationException("The full Rule 12 dashboard population could not be prepared for export. Reload the saved run or workspace and try again.");
             }
@@ -889,8 +877,6 @@ namespace HemisAudit.Controllers
             {
                 ClientId = review.ClientId,
                 RunId = review.RunId,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
                 CregTable = review.Summary.CregTable,
                 QualTable = review.Summary.QualTable,
                 CresTable = review.Summary.CresTable,

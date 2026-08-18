@@ -89,25 +89,18 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model)
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model)
         {
-            var result = await RequireDataAnalystAsync(async () => await _rule40.GetDatabasesAsync(model.Server, model.Driver));
+            var result = await RequireDataAnalystAsync(async () => await _rule40.GetTablesAsync(model.ClientId));
             return Json(result);
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model)
-        {
-            var result = await RequireDataAnalystAsync(async () => await _rule40.GetTablesAsync(model.Server, model.Database, model.Driver));
-            return Json(result);
-        }
-
-        [HttpPost]
-        public async Task<IActionResult> GetTableColumns([FromBody] Rule40GetColumnsRequest request)
+        public async Task<IActionResult> GetTableColumns([FromBody] Rule16ColumnsRequest request)
         {
             var result = await RequireDataAnalystAsync(async () =>
             {
-                var columns = await _rule40.GetTableColumnsAsync(request.Server, request.Database, request.Driver, request.TableName);
+                var columns = await _rule40.GetTableColumnsAsync(request.ClientId, request.TableName);
                 return new { success = true, columns } as object;
             });
             return Json(result);
@@ -271,7 +264,7 @@ namespace HemisAudit.Controllers
             var summary = await _rule40.GetFullSummaryByRunIdAsync(runId);
             if (summary == null || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
                 return NotFound();
-            var req   = new Rule40ValidationRequest { ValpacTable = summary.ValpacTable, AsciiTable = summary.AsciiTable, Database = summary.Database, Server = summary.Server };
+            var req   = new Rule40ValidationRequest { ValpacTable = summary.ValpacTable, AsciiTable = summary.AsciiTable, ValpacKeyCol = summary.ValpacKeyCol, AsciiKeyCol = summary.AsciiKeyCol, Pairs = summary.Pairs };
             var bytes = System.Text.Encoding.UTF8.GetBytes(_rule40.GenerateSql(req));
             return File(bytes, "application/sql", $"Rule40_PROF_Agreement_Run_{runId}.sql");
         }
@@ -291,8 +284,7 @@ namespace HemisAudit.Controllers
             r++;
             ws.Cell(r, 1).Value = "VALPAC Table";  ws.Cell(r, 2).Value = summary.ValpacTable;
             ws.Cell(r, 3).Value = "ASCII Table";    ws.Cell(r, 4).Value = summary.AsciiTable;   r++;
-            ws.Cell(r, 1).Value = "Database";       ws.Cell(r, 2).Value = summary.Database;
-            ws.Cell(r, 3).Value = "Timestamp";      ws.Cell(r, 4).Value = summary.Timestamp;    r++;
+            ws.Cell(r, 1).Value = "Timestamp";      ws.Cell(r, 2).Value = summary.Timestamp;    r++;
             ws.Cell(r, 1).Value = "Total";          ws.Cell(r, 2).Value = summary.TotalCount;
             ws.Cell(r, 3).Value = "Agree";          ws.Cell(r, 4).Value = summary.AgreeCount;
             ws.Cell(r, 5).Value = "Disagree";       ws.Cell(r, 6).Value = summary.DisagreeCount; r++;
@@ -358,7 +350,7 @@ namespace HemisAudit.Controllers
 
             sw.WriteLine("HEMIS RULE 40 - PROF VALPAC vs ASCII Staff Agreement");
             sw.WriteLine($"\"VALPAC Table\",\"{summary.ValpacTable}\",\"ASCII Table\",\"{summary.AsciiTable}\"");
-            sw.WriteLine($"\"Database\",\"{summary.Database}\",\"Timestamp\",\"{summary.Timestamp}\"");
+            sw.WriteLine($"\"Timestamp\",\"{summary.Timestamp}\"");
             sw.WriteLine($"\"Total\",{summary.TotalCount},\"Agree\",{summary.AgreeCount},\"Disagree\",{summary.DisagreeCount},\"Missing in ASCII\",{summary.MissingInAsciiCount},\"Missing in VALPAC\",{summary.MissingInValpacCount},\"Exception Rate\",\"{summary.ExceptionRate:0.00}%\",\"Status\",\"{summary.Status}\"");
             sw.WriteLine();
 

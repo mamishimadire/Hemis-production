@@ -151,7 +151,7 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = await _rule24.GenerateSqlAsync(new Rule24ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
+                StudTable = review.Summary.StudTable,
                 QualTable = review.Summary.QualTable,
                 AuditTable = review.Summary.AuditTable,
                 H16Table = review.Summary.H16Table,
@@ -167,16 +167,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule24.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule24.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule24.GetTablesAsync(model.Server, model.Database, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetAuditColumns([FromBody] Rule24AuditColumnRequest model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule24.GetAuditColumnsAsync(model.Server, model.Database, model.Driver, model.AuditTable)));
+        public async Task<IActionResult> GetAuditColumns([FromBody] Rule16ColumnsRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule24.GetAuditColumnsAsync(model.ClientId, model.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule24VerifyRequest request) =>
@@ -597,7 +593,7 @@ namespace HemisAudit.Controllers
             var request = new Rule24ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
+                StudTable = review.Summary.StudTable,
                 QualTable = review.Summary.QualTable,
                 AuditTable = review.Summary.AuditTable,
                 H16Table = review.Summary.H16Table,

@@ -10,11 +10,17 @@ namespace HemisAudit.ViewModels
     // ═══════════════════════════════════════════════════════════════════════════
     public class LoginViewModel
     {
+        // ServiceProvider | Client
+        public string LoginMode { get; set; } = "Client";
+
         [Required, EmailAddress]
         public string Email { get; set; } = "";
 
         [Required, DataType(DataType.Password)]
         public string Password { get; set; } = "";
+
+        // Required only when LoginMode == "Client" — the firm's sequential access code.
+        public string? ClientCode { get; set; }
 
         public bool RememberMe { get; set; }
     }
@@ -152,7 +158,7 @@ namespace HemisAudit.ViewModels
         public string Email { get; set; } = "";
 
         [MaxLength(20)]
-        public string EmployeeCode { get; set; } = "";
+        public string? EmployeeCode { get; set; }
 
         [Required]
         public string Role { get; set; } = "DataAnalyst";
@@ -178,7 +184,7 @@ namespace HemisAudit.ViewModels
         public string Email { get; set; } = "";
 
         [MaxLength(20)]
-        public string EmployeeCode { get; set; } = "";
+        public string? EmployeeCode { get; set; }
 
         [Phone]
         public string? PhoneNumber { get; set; }
@@ -441,6 +447,80 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentUser { get; set; }
     }
 
+    // Shared, rule-agnostic row shape for a "ValidationRuns" record. The six generic
+    // Hemis/Audit/Stud/Deceased columns are repurposed by each rule to hold whatever
+    // table/column metadata that rule actually needs — each Rule*Service maps these
+    // generic slots to its own typed workspace fields, exactly as it already did when
+    // querying SQL Server directly.
+    public class RuleValidationRunRow
+    {
+        public int RunId { get; set; }
+        public int ClientId { get; set; }
+        public int RuleNumber { get; set; }
+        public bool IsCurrent { get; set; }
+        public string HemisServer { get; set; } = "";
+        public string AuditDatabase { get; set; } = "";
+        public string StudTable { get; set; } = "";
+        public string DeceasedTable { get; set; } = "";
+        public string StudColumn { get; set; } = "";
+        public string DeceasedColumn { get; set; } = "";
+        public string Status { get; set; } = "";
+        public string? LastEditedByUserName { get; set; }
+        public DateTime? LastEditedAt { get; set; }
+        public string? ResultsJSON { get; set; }
+        public string? ExceptionsJSON { get; set; }
+        public string EngagementName { get; set; } = "";
+        public string MaconomyNumber { get; set; } = "";
+    }
+
+    public class SaveRuleWorkspaceFieldsRequest
+    {
+        public int RunId { get; set; }
+        public int ClientId { get; set; }
+        public string HemisServer { get; set; } = "";
+        public string AuditDatabase { get; set; } = "";
+        public string StudTable { get; set; } = "";
+        public string DeceasedTable { get; set; } = "";
+        public string StudColumn { get; set; } = "";
+        public string DeceasedColumn { get; set; } = "";
+    }
+
+    public class SaveValidationRunRequest
+    {
+        public int ClientId { get; set; }
+        public int RuleNumber { get; set; }
+        public string RuleName { get; set; } = "";
+        public string Status { get; set; } = "";
+        public int TotalRecords { get; set; }
+        public int PassCount { get; set; }
+        public int FailCount { get; set; }
+        public decimal ExceptionRate { get; set; }
+        public string HemisServer { get; set; } = "";
+        public string AuditDatabase { get; set; } = "";
+        public string StudTable { get; set; } = "";
+        public string DeceasedTable { get; set; } = "";
+        public string StudColumn { get; set; } = "";
+        public string DeceasedColumn { get; set; } = "";
+        public string ExceptionsJSON { get; set; } = "";
+        public string ResultsJSON { get; set; } = "";
+    }
+
+    public class RuleWorkspaceMutationResult
+    {
+        public bool Success { get; set; }
+        public string? Error { get; set; }
+        public int ClearedSignoffCount { get; set; }
+    }
+
+    public class RuleSignoffRemovalResult
+    {
+        public int RemovedCount { get; set; }
+        public string? SignoffRole { get; set; }
+        public bool HistoricalSnapshotPreserved { get; set; }
+        public int HistoricalRunId { get; set; }
+        public int? NewCurrentRunId { get; set; }
+    }
+
     public class Rule36RunReviewViewModel
     {
         public int RunId { get; set; }
@@ -448,9 +528,8 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
-        public ValidationSummary Summary { get; set; } = new();
+        public Rule36ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
         public string CurrentUserEngagementRole { get; set; } = "";
         public bool HasDataAnalystSignoff { get; set; }
@@ -466,9 +545,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string StudTable { get; set; } = "";
         public string DeceasedTable { get; set; } = "";
         public string StudColumn { get; set; } = "";
@@ -481,7 +557,7 @@ namespace HemisAudit.ViewModels
         public string? LastEditedByUserName { get; set; }
         public DateTime? LastEditedAt { get; set; }
         public bool IsWorkspaceSaved { get; set; }
-        public ValidationSummary? Summary { get; set; }
+        public Rule36ValidationSummary? Summary { get; set; }
     }
 
     public class Rule36RunSignoffInputModel
@@ -605,6 +681,13 @@ namespace HemisAudit.ViewModels
         public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
     }
 
+    // POST body for rules reading from an engagement's uploaded Supabase data instead of a live
+    // SQL Server connection — there's no server/database/driver to pick, just the engagement.
+    public class EngagementTableListRequest
+    {
+        public int ClientId { get; set; }
+    }
+
     public class DatabaseListResult
     {
         public bool Success { get; set; }
@@ -650,50 +733,6 @@ namespace HemisAudit.ViewModels
         public string? Error { get; set; }
     }
 
-    public class ValidationRequest
-    {
-        public int ClientId { get; set; }
-        public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
-        public string StudTable { get; set; } = "";
-        public string DeceasedTable { get; set; } = "";
-        public string StudColumn { get; set; } = "";
-        public string DeceasedColumn { get; set; } = "";
-    }
-
-    public class ValidationSummary
-    {
-        public bool Success { get; set; }
-        public int TotalValidated { get; set; }
-        public int PassCount { get; set; }
-        public int FailCount { get; set; }
-        public decimal ExceptionRate { get; set; }
-        public string Status { get; set; } = "";
-        public string Timestamp { get; set; } = "";
-        public string StudTable { get; set; } = "";
-        public string DeceasedTable { get; set; } = "";
-        public string StudColumn { get; set; } = "";
-        public string DeceasedColumn { get; set; } = "";
-        public string Database { get; set; } = "";
-        public int ClientId { get; set; }
-        public int? SavedRunId { get; set; }
-        public List<ValidationRowRecord> ValidationRows { get; set; } = new();
-        public List<ExceptionRecord> Exceptions { get; set; } = new();
-        public string? Error { get; set; }
-    }
-
-    public class WorkspaceSaveResult
-    {
-        public bool Success { get; set; }
-        public string Message { get; set; } = "";
-        public bool SignoffsCleared { get; set; }
-        public int? ClearedSignoffCount { get; set; }
-        public Rule36WorkspaceStateViewModel? Workspace { get; set; }
-        public string? Error { get; set; }
-    }
-
     public class AuditLogRowViewModel
     {
         public int LogId { get; set; }
@@ -711,7 +750,7 @@ namespace HemisAudit.ViewModels
 
     public class MessageRecipientOptionViewModel
     {
-        public int UserId { get; set; }
+        public string UserId { get; set; } = "";
         public string FullName { get; set; } = "";
         public string Email { get; set; } = "";
         public string Role { get; set; } = "";
@@ -807,7 +846,7 @@ namespace HemisAudit.ViewModels
         [MaxLength(255)]
         public string Subject { get; set; } = "";
         public string Body { get; set; } = "";
-        public List<int> RecipientIds { get; set; } = new();
+        public List<string> RecipientIds { get; set; } = new();
         public string RecipientIdsCsv { get; set; } = "";
         public int? ReplyToMessageId { get; set; }
         public List<IFormFile> Attachments { get; set; } = new();
@@ -853,27 +892,9 @@ namespace HemisAudit.ViewModels
         public int? EditingMessageId { get; set; }
     }
 
-    public class ValidationRowRecord
-    {
-        public int ValidationNumber { get; set; }
-        public string ValidationResult { get; set; } = "";
-        public string? ExceptionReason { get; set; }
-        public string StudentId { get; set; } = "";
-        public Dictionary<string, string?> AdditionalColumns { get; set; } = new();
-    }
-
-    public class ExceptionRecord
-    {
-        public int ValidationNumber { get; set; }
-        public string StudentId { get; set; } = "";
-        public string ExceptionReason { get; set; } = "";
-        public string ValidationResult { get; set; } = "";
-        public Dictionary<string, string?> AdditionalColumns { get; set; } = new();
-    }
-
     public class ExportRequest
     {
-        public ValidationSummary Summary { get; set; } = new();
+        public Rule36ValidationSummary Summary { get; set; } = new();
         public string Format { get; set; } = "excel";
     }
 

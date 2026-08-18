@@ -11,15 +11,15 @@ namespace HemisAudit.Controllers
     [Authorize]
     public class Rule68Controller : Controller
     {
-        private readonly IRule68Service _Rule68;
+        private readonly IRule68Service _rule68;
         private readonly IExportService _export;
         private readonly IAuditLogService _audit;
         private readonly UserManager<ApplicationUser> _users;
         private readonly ISystemDatabaseService _systemDb;
 
-        public Rule68Controller(IRule68Service Rule68, IExportService export, IAuditLogService audit, UserManager<ApplicationUser> users, ISystemDatabaseService systemDb)
+        public Rule68Controller(IRule68Service rule68, IExportService export, IAuditLogService audit, UserManager<ApplicationUser> users, ISystemDatabaseService systemDb)
         {
-            _Rule68 = Rule68; _export = export; _audit = audit; _users = users; _systemDb = systemDb;
+            _rule68 = rule68; _export = export; _audit = audit; _users = users; _systemDb = systemDb;
         }
 
         public async Task<IActionResult> Index(int clientId = 0)
@@ -71,7 +71,7 @@ namespace HemisAudit.Controllers
                 return Json(new { success = false, error = "You cannot access this engagement." });
             }
 
-            var workspace = await _Rule68.GetCurrentWorkspaceStateAsync(clientId, user?.Email);
+            var workspace = await _rule68.GetCurrentWorkspaceStateAsync(clientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
             if (workspace != null && !resultsVisible) workspace.Summary = null;
@@ -86,7 +86,7 @@ namespace HemisAudit.Controllers
             var role = await GetCurrentSystemRoleAsync(user);
             await _systemDb.NormalizeCompletedRunStatusesAsync();
 
-            var review = await _Rule68.GetSavedRunAsync(id, user?.Email);
+            var review = await _rule68.GetSavedRunAsync(id, user?.Email);
             if (review == null) return NotFound();
 
             if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
@@ -115,79 +115,20 @@ namespace HemisAudit.Controllers
                 (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
 
-            review.GeneratedSql = await _Rule68.GenerateSqlAsync(new Rule68ValidationRequest
-            {
-                ClientId       = review.ClientId,
-                Server         = review.SourceServer,
-                Database       = review.Summary.Database,
-                StudTable      = review.Summary.StudTable,
-                CregTable      = review.Summary.CregTable,
-                QualTable      = review.Summary.QualTable,
-                CredTable      = review.Summary.CredTable,
-                CrseTable      = review.Summary.CrseTable,
-                DetailTable    = review.Summary.DetailTable,
-                CregStudNoCol  = review.Summary.CregStudNoCol,
-                CregQualCol    = review.Summary.CregQualCol,
-                CregCourseCol  = review.Summary.CregCourseCol,
-                QualQualCol    = review.Summary.QualQualCol,
-                QualNameCol    = review.Summary.QualNameCol,
-                CredCourseCol  = review.Summary.CredCourseCol,
-                CredCreditsCol = review.Summary.CredCreditsCol,
-                CrseCourseCol  = review.Summary.CrseCourseCol,
-                CrseNameCol    = review.Summary.CrseNameCol,
-                DetailErrorTypeCol   = review.Summary.DetailErrorTypeCol,
-                DetailErrorCol       = review.Summary.DetailErrorCol,
-                DetailErrorTypeValue = review.Summary.DetailErrorTypeValue,
-                DetailExclusionCodes = review.Summary.DetailExclusionCodes,
-                DetailElementInfoCol = review.Summary.DetailElementInfoCol
-            });
-
             return View(review);
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _Rule68.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule68.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _Rule68.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetColumns([FromBody] Rule68GetColumnsRequest request) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule68.GetColumnsAsync(request.ClientId, request.TableName, request.TableRole)));
 
         [HttpPost]
-        public async Task<IActionResult> GetCregColumns([FromBody] Rule68VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                await _Rule68.GetColumnsAsync(request.Server, request.Database, request.Driver, request.CregTable)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetStudColumns([FromBody] Rule68VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                await _Rule68.GetColumnsAsync(request.Server, request.Database, request.Driver, request.StudTable)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetQualColumns([FromBody] Rule68VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                await _Rule68.GetColumnsAsync(request.Server, request.Database, request.Driver, request.QualTable)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetCredColumns([FromBody] Rule68VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                await _Rule68.GetColumnsAsync(request.Server, request.Database, request.Driver, request.CredTable)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetCrseColumns([FromBody] Rule68VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                await _Rule68.GetColumnsAsync(request.Server, request.Database, request.Driver, request.CrseTable)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetDetailColumns([FromBody] Rule68VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                string.IsNullOrWhiteSpace(request.DetailTable)
-                    ? new ColumnListResult { Success = true, Columns = new List<string>() }
-                    : await _Rule68.GetColumnsAsync(request.Server, request.Database, request.Driver, request.DetailTable)));
-
-        [HttpPost]
-        public async Task<IActionResult> VerifyTables([FromBody] Rule68VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () => await _Rule68.VerifyTablesAsync(request)));
+        public async Task<IActionResult> VerifyTables([FromBody] Rule68ValidationRequest request) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule68.VerifyTablesAsync(request)));
 
         [HttpPost]
         public async Task<IActionResult> RunValidation([FromBody] Rule68ValidationRequest request)
@@ -206,7 +147,7 @@ namespace HemisAudit.Controllers
             {
                 var result = await svc.RunValidationAsync(request, user?.Email, user?.FullName ?? user?.Email);
                 if (result.Success)
-                    await auditSvc.LogAsync("run_validation", $"Rule 68 on client {request.ClientId}: {result.Status} ({result.FailCount} fail rows).", user?.Id, user?.Email);
+                    await auditSvc.LogAsync("run_validation", $"Rule 68 on client {request.ClientId}: {result.Status} ({result.FailCount} fail rows), run {result.SavedRunId}.", user?.Id, user?.Email);
                 return result;
             }
 
@@ -217,7 +158,7 @@ namespace HemisAudit.Controllers
                     async (sp, ct) => await Execute(sp.GetRequiredService<IRule68Service>(), sp.GetRequiredService<IAuditLogService>()));
             }
 
-            return Json(await Execute(_Rule68, _audit));
+            return Json(await Execute(_rule68, _audit));
         }
 
         [HttpPost]
@@ -228,7 +169,7 @@ namespace HemisAudit.Controllers
             if (!await CanEditWorkspaceAsync(request.ClientId, user, role)) return Json(new Rule68WorkspaceSaveResult { Success = false, Error = "Only the assigned data analyst can edit a saved workspace." });
             if (!request.RunId.HasValue || request.RunId.Value <= 0) return Json(new Rule68WorkspaceSaveResult { Success = false, Error = "Select a saved run before editing." });
 
-            var result = await _Rule68.BeginWorkspaceEditAsync(request.RunId.Value, user!.Email!, user.FullName);
+            var result = await _rule68.BeginWorkspaceEditAsync(request.RunId.Value, user!.Email!, user.FullName);
             if (result.Success) await _audit.LogAsync("workspace_edit_started", $"DataAnalyst started editing Rule 68 run {request.RunId.Value}.", user?.Id, user?.Email);
             return Json(result);
         }
@@ -240,7 +181,7 @@ namespace HemisAudit.Controllers
             var role = await GetCurrentSystemRoleAsync(user);
             if (!await CanEditWorkspaceAsync(request.ClientId, user, role)) return Json(new Rule68WorkspaceSaveResult { Success = false, Error = "Only the assigned data analyst can save a workspace." });
 
-            var result = await _Rule68.SaveWorkspaceAsync(request, user!.Email!, user.FullName);
+            var result = await _rule68.SaveWorkspaceAsync(request, user!.Email!, user.FullName);
             if (result.Success) await _audit.LogAsync("save_validation_workspace", $"DataAnalyst saved Rule 68 workspace for client {request.ClientId}. Run: {result.Workspace?.RunId}", user?.Id, user?.Email);
             return Json(result);
         }
@@ -255,7 +196,7 @@ namespace HemisAudit.Controllers
             if (!await ValidationRunAccessPolicy.CanAssignedUserRemoveOwnSignoffAsync(_systemDb, model.ClientId, user, role)) return Json(new { success = false, error = "Only the assigned data analyst, manager, or director can sign off." });
             if (!model.RunId.HasValue || model.RunId.Value <= 0) return Json(new { success = false, error = "Run the validation first." });
 
-            var review = await _Rule68.GetSavedRunAsync(model.RunId.Value, user?.Email);
+            var review = await _rule68.GetSavedRunAsync(model.RunId.Value, user?.Email);
             if (review == null || review.ClientId != model.ClientId) return Json(new { success = false, error = "The saved validation run could not be found." });
             if (!review.IsCurrentRun) return Json(new { success = false, error = "History results are read-only." });
 
@@ -266,12 +207,12 @@ namespace HemisAudit.Controllers
 
             try
             {
-                await _Rule68.AddOrUpdateSignoffAsync(model.RunId.Value, user!.Email!, model.Comment);
+                await _rule68.AddOrUpdateSignoffAsync(model.RunId.Value, user!.Email!, model.Comment);
                 await _audit.LogAsync("signoff_validation_run", $"Rule 68 signoff saved for run {model.RunId.Value}", user.Id, user.Email);
             }
             catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
 
-            var workspace = await _Rule68.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email, includeSummary: false);
+            var workspace = await _rule68.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
             return Json(new { success = true, message = "Signoff saved.", resultsVisible, workspace });
@@ -286,7 +227,7 @@ namespace HemisAudit.Controllers
             if (model.ClientId <= 0 || !model.RunId.HasValue || model.RunId.Value <= 0) return Json(new { success = false, error = "Select a saved run before removing signoff." });
             if (!await ValidationRunAccessPolicy.CanAssignedUserRemoveOwnSignoffAsync(_systemDb, model.ClientId, user, role)) return Json(new { success = false, error = "Only the assigned data analyst, manager, or director can remove signoff." });
 
-            var review = await _Rule68.GetSavedRunAsync(model.RunId.Value, user?.Email);
+            var review = await _rule68.GetSavedRunAsync(model.RunId.Value, user?.Email);
             if (review == null || review.ClientId != model.ClientId) return Json(new { success = false, error = "The saved validation run could not be found." });
             if (!review.IsCurrentRun) return Json(new { success = false, error = "History results are read-only." });
 
@@ -294,10 +235,10 @@ namespace HemisAudit.Controllers
             if (clientDetail?.IsArchived == true) return Json(new { success = false, error = "Archived engagements are read-only." });
             if (!review.CurrentUserHasSignedOff) return Json(new { success = false, error = "There is no signoff to remove." });
 
-            try { await _Rule68.RemoveSignoffAsync(model.RunId.Value, user!.Email!); }
+            try { await _rule68.RemoveSignoffAsync(model.RunId.Value, user!.Email!); }
             catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
 
-            var workspace = await _Rule68.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email, includeSummary: false);
+            var workspace = await _rule68.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
             await _audit.LogAsync("remove_validation_signoff", $"{review.CurrentUserEngagementRole} removed signoff for Rule 68 run {model.RunId.Value}", user?.Id, user?.Email);
@@ -305,160 +246,108 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GenerateSql([FromBody] Rule68ValidationRequest request)
-        {
-            var user = await _users.GetUserAsync(User);
-            var role = await GetCurrentSystemRoleAsync(user);
-            if (request.ClientId > 0 && !await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
-                return Json(new Rule68SqlResult { Success = false, Error = "You cannot access this engagement." });
-            return Json(await RequireDataAnalystAsync(async () => new Rule68SqlResult { Success = true, Sql = await _Rule68.GenerateSqlAsync(request) }));
-        }
-
-        [HttpPost, ValidateAntiForgeryToken]
-        public async Task<IActionResult> AddSignoff(Rule68RunSignoffInputModel model)
-        {
-            var user = await _users.GetUserAsync(User);
-            var role = await GetCurrentSystemRoleAsync(user);
-            var review = await _Rule68.GetSavedRunAsync(model.RunId, user?.Email);
-            if (review == null) return NotFound();
-
-            var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
-            if (clientDetail?.IsArchived == true) { TempData["Error"] = "Archived engagements are read-only."; return RedirectToAction(nameof(Run), new { id = model.RunId }); }
-            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role)) { TempData["Error"] = "You do not have access."; return RedirectToAction("Index", "Dashboard"); }
-            if (!CanViewSavedRun(review, role)) { TempData["Error"] = "Only analyst-signed results are available."; return RedirectToAction("Index", "Dashboard"); }
-            if (!review.IsCurrentRun) { TempData["Error"] = "History results are read-only."; return RedirectToAction(nameof(Run), new { id = model.RunId }); }
-            if (!review.CanCurrentUserSignOff) { TempData["Error"] = "Only the assigned data analyst, manager, or director can sign off."; return RedirectToAction(nameof(Run), new { id = model.RunId }); }
-            if (!ValidationRunAccessPolicy.CanCompleteReviewSignoff(role, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff))
-            { TempData["Error"] = "The data analyst must sign off first."; return RedirectToAction(nameof(Run), new { id = model.RunId }); }
-
-            await _Rule68.AddOrUpdateSignoffAsync(model.RunId, user!.Email!, model.Comment);
-            await _audit.LogAsync("signoff_validation_run", $"{review.CurrentUserEngagementRole} signed off Rule 68 run {model.RunId}", user.Id, user.Email);
-            TempData["Success"] = "Signoff saved.";
-            return RedirectToAction(nameof(Run), new { id = model.RunId });
-        }
-
-        [HttpPost, ValidateAntiForgeryToken]
-        public async Task<IActionResult> RemoveSignoff(int runId)
-        {
-            var user = await _users.GetUserAsync(User);
-            var role = await GetCurrentSystemRoleAsync(user);
-            var review = await _Rule68.GetSavedRunAsync(runId, user?.Email);
-            if (review == null) return NotFound();
-
-            var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
-            if (clientDetail?.IsArchived == true) { TempData["Error"] = "Archived engagements are read-only."; return RedirectToAction(nameof(Run), new { id = runId }); }
-            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role)) { TempData["Error"] = "You do not have access."; return RedirectToAction("Index", "Dashboard"); }
-            if (!review.IsCurrentRun) { TempData["Error"] = "History results are read-only."; return RedirectToAction(nameof(Run), new { id = runId }); }
-            if (!review.CurrentUserHasSignedOff) { TempData["Error"] = "No signoff to remove."; return RedirectToAction(nameof(Run), new { id = runId }); }
-
-            await _Rule68.RemoveSignoffAsync(runId, user!.Email!);
-            await _audit.LogAsync("remove_validation_signoff", $"{review.CurrentUserEngagementRole} removed signoff for Rule 68 run {runId}", user?.Id, user?.Email);
-            TempData["Success"] = "Signoff removed.";
-            return RedirectToAction(nameof(Run), new { id = runId });
-        }
+        public IActionResult GenerateSql([FromBody] Rule68ValidationRequest request) =>
+            Json(new Rule68SqlResult { Success = true, Sql = _rule68.GenerateSql(request) });
 
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
-            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
+            var review = await LoadAuthorizedSavedRunAsync(runId);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            return File(_export.ExportRule68Excel(review.Summary), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule68_CreditOverload_Run_{runId}.xlsx");
+            var fullSummary = await _rule68.GetStoredSummaryAsync(runId) ?? review.Summary;
+            return File(_export.ExportRule68Excel(fullSummary), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule68_Credit_Overload_Run_{runId}.xlsx");
         }
 
         [HttpGet]
         public async Task<IActionResult> DownloadSavedCsv(int runId)
         {
-            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
+            var review = await LoadAuthorizedSavedRunAsync(runId);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            return File(_export.ExportRule68Csv(review.Summary), "text/csv", $"Rule68_CreditOverload_Run_{runId}.csv");
+            var fullSummary = await _rule68.GetStoredSummaryAsync(runId) ?? review.Summary;
+            return File(_export.ExportRule68Csv(fullSummary), "text/csv", $"Rule68_Credit_Overload_Run_{runId}.csv");
         }
 
         [HttpGet]
         public async Task<IActionResult> DownloadSavedSql(int runId)
         {
-            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
+            var review = await LoadAuthorizedSavedRunAsync(runId);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var sql = await _Rule68.GenerateSqlAsync(new Rule68ValidationRequest
+            var sql = _rule68.GenerateSql(new Rule68ValidationRequest
             {
-                ClientId       = review.ClientId,
-                Server         = review.SourceServer,
-                Database       = review.Summary.Database,
-                StudTable      = review.Summary.StudTable,
-                CregTable      = review.Summary.CregTable,
-                QualTable      = review.Summary.QualTable,
-                CredTable      = review.Summary.CredTable,
-                CrseTable      = review.Summary.CrseTable,
-                DetailTable    = review.Summary.DetailTable,
-                CregStudNoCol  = review.Summary.CregStudNoCol,
-                CregQualCol    = review.Summary.CregQualCol,
-                CregCourseCol  = review.Summary.CregCourseCol,
-                QualQualCol    = review.Summary.QualQualCol,
-                QualNameCol    = review.Summary.QualNameCol,
-                CredCourseCol  = review.Summary.CredCourseCol,
+                ClientId = review.ClientId,
+                StudTable = review.Summary.StudTable,
+                CregTable = review.Summary.CregTable,
+                QualTable = review.Summary.QualTable,
+                CredTable = review.Summary.CredTable,
+                CrseTable = review.Summary.CrseTable,
+                DetailTable = review.Summary.DetailTable,
+                CregStudNoCol = review.Summary.CregStudNoCol,
+                CregQualCol = review.Summary.CregQualCol,
+                CregCourseCol = review.Summary.CregCourseCol,
+                QualQualCol = review.Summary.QualQualCol,
+                QualNameCol = review.Summary.QualNameCol,
+                CredQualCol = review.Summary.CredQualCol,
+                CredCourseCol = review.Summary.CredCourseCol,
                 CredCreditsCol = review.Summary.CredCreditsCol,
-                CrseCourseCol  = review.Summary.CrseCourseCol,
-                CrseNameCol    = review.Summary.CrseNameCol,
-                DetailErrorTypeCol   = review.Summary.DetailErrorTypeCol,
-                DetailErrorCol       = review.Summary.DetailErrorCol,
+                CrseCourseCol = review.Summary.CrseCourseCol,
+                CrseNameCol = review.Summary.CrseNameCol,
+                MaxTotalCredits = review.Summary.MaxTotalCredits,
+                DetailErrorTypeCol = review.Summary.DetailErrorTypeCol,
+                DetailErrorCol = review.Summary.DetailErrorCol,
                 DetailErrorTypeValue = review.Summary.DetailErrorTypeValue,
                 DetailExclusionCodes = review.Summary.DetailExclusionCodes,
                 DetailElementInfoCol = review.Summary.DetailElementInfoCol
             });
-            return File(_export.ExportSql(sql), "application/sql", $"Rule68_CreditOverload_{runId}.sql");
+            return File(_export.ExportSql(sql), "application/sql", $"Rule68_Credit_Overload_Run_{runId}.sql");
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule68ValidationSummary summary)
         {
             var resolved = await ResolveExportSummaryAsync(summary);
-            return File(_export.ExportRule68Excel(resolved), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule68_CreditOverload_{Ts()}.xlsx");
+            return File(_export.ExportRule68Excel(resolved), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule68_Credit_Overload_{Ts()}.xlsx");
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule68ValidationSummary summary)
         {
             var resolved = await ResolveExportSummaryAsync(summary);
-            return File(_export.ExportRule68Csv(resolved), "text/csv", $"Rule68_CreditOverload_{Ts()}.csv");
+            return File(_export.ExportRule68Csv(resolved), "text/csv", $"Rule68_Credit_Overload_{Ts()}.csv");
         }
 
         [HttpPost]
-        public async Task<IActionResult> DownloadSql([FromBody] Rule68ValidationRequest request)
-        {
-            var user = await _users.GetUserAsync(User);
-            var role = await GetCurrentSystemRoleAsync(user);
-            if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase)) return Json(new { success = false, error = "Only the assigned data analyst can download the SQL script." });
-            return File(_export.ExportSql(await _Rule68.GenerateSqlAsync(request)), "application/sql", $"Rule68_CreditOverload_{Ts()}.sql");
-        }
+        public IActionResult DownloadSql([FromBody] Rule68ValidationRequest request) =>
+            File(_export.ExportSql(_rule68.GenerateSql(request)), "application/sql", $"Rule68_Credit_Overload_{Ts()}.sql");
 
         // ─── Private helpers ──────────────────────────────────────────────────
 
-        private async Task<Rule68RunReviewViewModel?> LoadAuthorizedSavedRunAsync(int runId, bool requireDownloadAccess)
+        private async Task<Rule68RunReviewViewModel?> LoadAuthorizedSavedRunAsync(int runId)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
-            var review = await _Rule68.GetSavedRunAsync(runId, user?.Email, includeFullResults: requireDownloadAccess);
+            var review = await _rule68.GetSavedRunAsync(runId, user?.Email);
             if (review == null) { TempData["Error"] = "Saved validation run was not found."; return null; }
             if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role)) { TempData["Error"] = "You do not have access."; return null; }
             if (!CanViewSavedRun(review, role)) { TempData["Error"] = "Only analyst-signed results are available."; return null; }
-            if (requireDownloadAccess && !CanDownloadSavedRun(review, role)) { TempData["Error"] = "The data analyst must sign off first."; return null; }
+            if (!CanDownloadSavedRun(review, role)) { TempData["Error"] = "The data analyst must sign off first."; return null; }
             return review;
         }
 
         private async Task<Rule68ValidationSummary> ResolveExportSummaryAsync(Rule68ValidationSummary summary)
         {
-            var user = await _users.GetUserAsync(User);
             if (summary.SavedRunId is int savedRunId && savedRunId > 0)
             {
-                var review = await _Rule68.GetSavedRunAsync(savedRunId, user?.Email, includeFullResults: true);
-                if (review?.Summary != null) return review.Summary;
+                var stored = await _rule68.GetStoredSummaryAsync(savedRunId);
+                if (stored != null) return stored;
             }
             if (summary.ClientId > 0)
             {
-                var workspace = await _Rule68.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email, includeSummary: false);
+                var user = await _users.GetUserAsync(User);
+                var workspace = await _rule68.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email);
                 if (workspace?.RunId is int workspaceRunId && workspaceRunId > 0)
                 {
-                    var review = await _Rule68.GetSavedRunAsync(workspaceRunId, user?.Email, includeFullResults: true);
-                    if (review?.Summary != null) return review.Summary;
+                    var stored = await _rule68.GetStoredSummaryAsync(workspaceRunId);
+                    if (stored != null) return stored;
                 }
             }
             return summary;

@@ -1,0 +1,94 @@
+@model HemisAudit.ViewModels.CreateFirmViewModel
+@{ ViewData["Title"] = "Client Onboarding"; Layout = "~/Views/Shared/_Layout.cshtml"; }
+
+<div class="page-header">
+    <h1>Client Onboarding</h1>
+    <a asp-action="Index" class="btn btn-secondary">← Back</a>
+</div>
+
+@if (!ViewData.ModelState.IsValid)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">
+        @foreach (var err in ViewData.ModelState.Values.SelectMany(v => v.Errors))
+        {
+            <div>@err.ErrorMessage</div>
+        }
+    </div>
+}
+
+<div class="card" style="max-width:720px;padding:0;overflow:hidden">
+    <div style="position:relative;height:150px;background:url('/images/boardroom.png') center/cover no-repeat">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg, rgba(10,20,32,.15), rgba(10,20,32,.75))"></div>
+        <div style="position:absolute;left:24px;bottom:16px;color:#fff">
+            <h2 style="margin:0;font-size:24px;font-weight:800">Client Onboarding</h2>
+            <p style="margin:2px 0 0;opacity:.9;font-size:13px">Grant a new audit firm access to the system</p>
+        </div>
+    </div>
+
+    <form asp-action="Create" method="post" style="padding:24px">
+        @Html.AntiForgeryToken()
+
+        <div class="field-group" style="margin-bottom:20px">
+            <label asp-for="FirmName">Client name *</label>
+            <input asp-for="FirmName" placeholder="e.g. Example Audit Partners Inc." />
+            <span asp-validation-for="FirmName" class="field-error"></span>
+        </div>
+
+        <h3 style="margin-bottom:12px">Contacts</h3>
+        <div class="table-wrapper" style="margin-bottom:20px">
+            <table class="data-table">
+                <thead>
+                    <tr><th></th><th>Name</th><th>Email</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td style="white-space:nowrap;font-weight:600">Primary contact *</td>
+                        <td><input asp-for="PrimaryContactName" placeholder="Full name" /></td>
+                        <td><input asp-for="PrimaryContactEmail" type="email" placeholder="name@theirfirm.com" /></td>
+                    </tr>
+                    <tr>
+                        <td style="white-space:nowrap;font-weight:600">Billing contact</td>
+                        <td><input asp-for="BillingContactName" placeholder="Full name" /></td>
+                        <td><input asp-for="BillingContactEmail" type="email" placeholder="name@theirfirm.com" /></td>
+                    </tr>
+                    <tr>
+                        <td style="white-space:nowrap;font-weight:600">Administrative contact</td>
+                        <td><input asp-for="AdminContactName" placeholder="Full name" /></td>
+                        <td><input asp-for="AdminContactEmail" type="email" placeholder="name@theirfirm.com" /></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <span asp-validation-for="PrimaryContactName" class="field-error"></span>
+        <span asp-validation-for="PrimaryContactEmail" class="field-error"></span>
+
+        <h3 style="margin-bottom:12px">License</h3>
+        <div class="form-grid">
+            <div class="field-group">
+                <label asp-for="SeatCount">Seat Count (max users) *</label>
+                <input asp-for="SeatCount" type="number" min="1" />
+                <span asp-validation-for="SeatCount" class="field-error"></span>
+            </div>
+            <div class="field-group">
+                <label asp-for="EngagementLimit">Engagement Limit *</label>
+                <input asp-for="EngagementLimit" type="number" min="1" />
+                <span asp-validation-for="EngagementLimit" class="field-error"></span>
+            </div>
+        </div>
+        <div class="field-group" style="margin-top:14px">
+            <label asp-for="ExpiresAt">Access Expires *</label>
+            <input asp-for="ExpiresAt" type="date" />
+            <span asp-validation-for="ExpiresAt" class="field-error"></span>
+        </div>
+
+        <div class="info-box info-box--red" style="margin-top:16px">
+            The primary contact becomes the firm's first <strong>Admin</strong> login. A temporary password
+            is generated automatically and shown once you submit — the firm's own Admin then adds their team.
+        </div>
+
+        <div class="action-bar" style="margin-top:20px">
+            <button type="submit" class="btn btn-success">✓ Onboard Client</button>
+            <a asp-action="Index" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>

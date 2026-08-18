@@ -141,7 +141,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = _rule11.GenerateSql(new Rule11ValidationRequest
             {
                 ClientId        = review.ClientId,
-                Database        = review.Summary.Database,
                 QualTable       = review.Summary.QualTable,
                 QualIdCol       = review.Summary.QualIdCol,
                 QualNameCol     = review.Summary.QualNameCol,
@@ -161,22 +160,18 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule11.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule11.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule11.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule11GetColumnsRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule11.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName, model.TableRole)));
+                await _rule11.GetColumnsAsync(model.ClientId, model.TableName, model.TableRole)));
 
         [HttpPost]
         public async Task<IActionResult> GetFilterValues([FromBody] Rule11FilterValueRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule11.GetFilterValuesAsync(model.Server, model.Database, model.Driver, model.QualTable, model.ApprovalColumn)));
+                await _rule11.GetFilterValuesAsync(model.ClientId, model.QualTable, model.ApprovalColumn)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule11VerifyRequest request) =>
@@ -528,7 +523,6 @@ namespace HemisAudit.Controllers
             var request = new Rule11ValidationRequest
             {
                 ClientId        = review.ClientId,
-                Database        = review.Summary.Database,
                 QualTable       = review.Summary.QualTable,
                 QualIdCol       = review.Summary.QualIdCol,
                 QualNameCol     = review.Summary.QualNameCol,

@@ -49,31 +49,14 @@
         <div class="accordion-stack">
             <div class="accordion-item">
                 <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
-                    <span class="acc-icon">DB</span><span>Database Connection</span><span class="acc-chevron">v</span>
+                    <span class="acc-icon">DB</span><span>Engagement Dataset</span><span class="acc-chevron">v</span>
                 </button>
                 <div class="accordion-body" id="body-connection">
-                    <div class="form-grid">
-                        <div class="field-group">
-                            <label for="server">Server Name</label>
-                            <input id="server" type="text" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                        </div>
-                        <div class="field-group">
-                            <label for="driver">Driver</label>
-                            <select id="driver">
-                                <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                                <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                                <option value="SQL Server">SQL Server</option>
-                            </select>
-                        </div>
-                        <div class="field-group">
-                            <label for="database">Database</label>
-                            <select id="database"></select>
-                        </div>
+                    <div id="connectionOutput" class="status-output"><div class="alert alert--info">Select an engagement above to load its uploaded tables.</div></div>
+                    <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
+                        <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                        <button type="button" class="btn btn-primary" id="refreshTablesBtn">Refresh Tables</button>
                     </div>
-                    <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                        <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
-                    </div>
-                    <div id="connectionOutput" class="status-output"></div>
                 </div>
             </div>
 
@@ -92,15 +75,15 @@
                     <div class="form-grid">
                         <div class="field-group">
                             <label for="studTable">STUD Table</label>
-                            <select id="studTable"></select>
+                            <select id="studTable" onchange="loadCols('stud',this.value)"></select>
                         </div>
                         <div class="field-group">
                             <label for="cregTable">CREG Table</label>
-                            <select id="cregTable"></select>
+                            <select id="cregTable" onchange="loadCols('creg',this.value)"></select>
                         </div>
                         <div class="field-group">
                             <label for="prodTable">STUD PRODUCTION Table</label>
-                            <select id="prodTable"></select>
+                            <select id="prodTable" onchange="loadCols('prod',this.value)"></select>
                         </div>
                     </div>
                     <div id="configOutput" class="status-output"></div>
@@ -113,7 +96,7 @@
                 </button>
                 <div class="accordion-body" id="body-colmap" style="display:none">
                     <div class="alert alert--info" style="margin-bottom:12px">
-                        Map your database columns to the student number and compare value fields Rule 64 uses. Defaults match the standard HEMIS layout.
+                        Map your uploaded table's column names to the student number and compare value fields Rule 64 uses. Defaults match the standard HEMIS layout. Select tables above to auto-populate column lists.
                     </div>
                     <div style="font-weight:700;font-size:13px;text-transform:uppercase;color:#555;margin-bottom:8px">STUD Table</div>
                     <div class="form-grid">
@@ -199,6 +182,7 @@
             <button type="button" class="btn btn-info" id="verifyBtn">Verify Tables</button>
             <button type="button" class="btn btn-success" id="runBtn">Run Rule 64</button>
             <button type="button" class="btn btn-primary" id="sqlBtn">Generate SQL</button>
+            <button type="button" class="btn btn-warning" id="downloadAllBtn" disabled>Download All</button>
         </div>
     }
 
@@ -265,9 +249,7 @@ window.toggleAccordion = function (section) {
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'),
-        driver: document.getElementById('driver'),
-        database: document.getElementById('database'),
+        datasetsLink: document.getElementById('datasetsLink'),
         studTable: document.getElementById('studTable'),
         cregTable: document.getElementById('cregTable'),
         prodTable: document.getElementById('prodTable'),
@@ -277,6 +259,7 @@ window.toggleAccordion = function (section) {
         flaggedPane: document.querySelector('[data-tab-panel="flagged"]'),
         clearPane: document.querySelector('[data-tab-panel="clear"]'),
         sqlText: document.getElementById('sqlText'),
+        downloadAllBtn: document.getElementById('downloadAllBtn'),
         workspaceInfo: document.getElementById('workspaceInfo'),
         workspaceRunState: document.getElementById('workspaceRunState'),
         workspaceRunLabel: document.getElementById('workspaceRunLabel'),
@@ -321,83 +304,120 @@ window.toggleAccordion = function (section) {
 
     function populateSelect(selectEl, items, selected) {
         if (!selectEl) return;
-        selectEl.innerHTML = '';
-        items.forEach(item => {
+        selectEl.innerHTML = '<option value="">Select table</option>';
+        (items || []).forEach(item => {
             const option = document.createElement('option');
             option.value = item;
             option.textContent = item;
             if (selected && selected === item) option.selected = true;
             selectEl.appendChild(option);
         });
+        if (selected && !(items || []).includes(selected)) {
+            const option = document.createElement('option');
+            option.value = selected; option.textContent = selected; option.selected = true;
+            selectEl.appendChild(option);
+        }
     }
 
-    function populateColumnSelect(selectEl, columns, current, defaultValue) {
+    // Never invent an option for a column that doesn't actually exist in the uploaded table - if
+    // neither the backend's fuzzy match nor the hardcoded default is a real column, leave the
+    // field visibly blank so the analyst notices and picks the correct one, instead of silently
+    // mapping to an arbitrary or non-existent column.
+    function populateColumnSelect(selectEl, columns, selected, defaultValue) {
         if (!selectEl) return;
-        const selected = current || selectEl.value || defaultValue;
-        const values = [...new Set([defaultValue, ...(columns || [])])].filter(Boolean);
-        selectEl.innerHTML = '';
-        values.forEach(value => {
+        const cols = columns || [];
+        const val = (selected && cols.includes(selected)) ? selected
+            : ((defaultValue && cols.includes(defaultValue)) ? defaultValue : '');
+        selectEl.innerHTML = '<option value="">Select column</option>';
+        cols.forEach(c => {
             const option = document.createElement('option');
-            option.value = value;
-            option.textContent = value;
-            if (value === selected) option.selected = true;
+            option.value = c;
+            option.textContent = c;
+            if (c === val) option.selected = true;
             selectEl.appendChild(option);
         });
-        if (!values.includes(selected)) {
-            const option = document.createElement('option');
-            option.value = selected;
-            option.textContent = selected;
-            option.selected = true;
-            selectEl.insertBefore(option, selectEl.firstChild);
-        }
+        if (!val) selectEl.value = '';
     }
 
     function getColumnMapping() {
         return {
-            studStudentNoCol: els.cm_studStudentNoCol?.value || '_007',
-            cregStudentNoCol: els.cm_cregStudentNoCol?.value || '_007',
-            studCompareValueCol: els.cm_studCompareValueCol?.value || '_001',
-            cregCompareValueCol: els.cm_cregCompareValueCol?.value || '_001',
-            prodStudentNoCol: els.cm_prodStudentNoCol?.value || 'IAGSTNO'
+            studStudentNoCol: els.cm_studStudentNoCol?.value || '',
+            cregStudentNoCol: els.cm_cregStudentNoCol?.value || '',
+            studCompareValueCol: els.cm_studCompareValueCol?.value || '',
+            cregCompareValueCol: els.cm_cregCompareValueCol?.value || '',
+            prodStudentNoCol: els.cm_prodStudentNoCol?.value || ''
         };
     }
 
     function restoreColumnMapping(mapping) {
         if (!mapping) return;
-        const set = (el, value, fallback) => { if (el) el.value = value || fallback; };
-        set(els.cm_studStudentNoCol, mapping.studStudentNoCol, '_007');
-        set(els.cm_cregStudentNoCol, mapping.cregStudentNoCol, '_007');
-        set(els.cm_studCompareValueCol, mapping.studCompareValueCol, '_001');
-        set(els.cm_cregCompareValueCol, mapping.cregCompareValueCol, '_001');
-        set(els.cm_prodStudentNoCol, mapping.prodStudentNoCol, 'IAGSTNO');
+        const set = (el, value) => { if (el) el.value = value || ''; };
+        set(els.cm_studStudentNoCol, mapping.studStudentNoCol);
+        set(els.cm_cregStudentNoCol, mapping.cregStudentNoCol);
+        set(els.cm_studCompareValueCol, mapping.studCompareValueCol);
+        set(els.cm_cregCompareValueCol, mapping.cregCompareValueCol);
+        set(els.cm_prodStudentNoCol, mapping.prodStudentNoCol);
     }
 
-    async function loadColumnsForTable(tableName, groups) {
-        if (!tableName || !els.server?.value?.trim() || !els.database?.value) return;
-        try {
-            const data = await postJson(`${apiBase}/GetColumns`, {
-                server: els.server.value.trim(),
-                database: els.database.value,
-                driver: els.driver?.value || 'ODBC Driver 17 for SQL Server',
-                tableName
-            });
-            if (!data?.success || !Array.isArray(data.columns)) return;
-            groups.forEach(group => populateColumnSelect(group.selectEl, data.columns, null, group.defaultValue));
-        } catch {}
+    async function postJson(url, payload) {
+        return await window.fetchJsonWithProgress(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': token },
+            body: JSON.stringify(payload)
+        });
     }
+
+    // Each mapped field is auto-detected against the table's real, uploaded column names via a
+    // per-role fuzzy match on the server (GetColumnsAsync).
+    const colRoleMap = {
+        stud: [
+            [els.cm_studStudentNoCol,    'stud_student_no',    '_007'],
+            [els.cm_studCompareValueCol, 'stud_compare_value', '_001']
+        ],
+        creg: [
+            [els.cm_cregStudentNoCol,    'creg_student_no',    '_007'],
+            [els.cm_cregCompareValueCol, 'creg_compare_value', '_001']
+        ],
+        prod: [
+            [els.cm_prodStudentNoCol, 'prod_student_no', 'IAGSTNO']
+        ]
+    };
+
+    async function loadCols(role, tableName) {
+        if (!tableName || !state.clientId) return;
+        let loadedAny = false;
+        for (const [selEl, tableRole, fallback] of (colRoleMap[role] || [])) {
+            if (!selEl) continue;
+            try {
+                const data = await postJson(`${apiBase}/GetColumns`, { clientId: state.clientId, tableName, tableRole });
+                if (!data?.success || !data.columns) continue;
+                populateColumnSelect(selEl, data.columns, data.autoSelected, fallback);
+                loadedAny = true;
+            } catch (e) { /* leave this field's dropdown as-is */ }
+        }
+        if (loadedAny) els.configOutput.innerHTML = `<div class="alert alert--success">Columns loaded for ${esc(tableName)}.</div>`;
+    }
+    window.loadCols = function (role, tbl) { loadCols(role, tbl); };
 
     function getRequest() {
         return {
-            clientId: Number(els.clientId?.value || state.clientId || 0),
+            clientId: state.clientId,
             runId: state.currentRunId,
-            server: els.server?.value?.trim() || '',
-            database: els.database?.value || '',
-            driver: els.driver?.value || 'ODBC Driver 17 for SQL Server',
             studTable: els.studTable?.value || '',
             cregTable: els.cregTable?.value || '',
             prodTable: els.prodTable?.value || '',
             columnMapping: getColumnMapping()
         };
+    }
+
+    function findMissingMappedColumns(request) {
+        const required = [
+            ['studStudentNoCol', 'STUD Student No.'], ['studCompareValueCol', 'STUD Compare Value'],
+            ['cregStudentNoCol', 'CREG Student No.'], ['cregCompareValueCol', 'CREG Compare Value'],
+            ['prodStudentNoCol', 'STUD PRODUCTION Student No.']
+        ];
+        const mapping = request.columnMapping || {};
+        return required.filter(([key]) => !mapping[key]).map(([, label]) => label);
     }
 
     function setStatusBadge(status) {
@@ -433,7 +453,7 @@ window.toggleAccordion = function (section) {
         window.ruleWorkspaceUi?.setReadonlyShell('app', !canEdit || signed);
         window.ruleWorkspaceUi?.setFormSectionReadonly('.accordion-stack', !canEdit || signed);
         window.ruleWorkspaceUi?.applyStates([
-            { target: 'connectBtn', disabled: !canEdit || signed },
+            { target: 'refreshTablesBtn', disabled: !canEdit || signed },
             { target: 'verifyBtn', disabled: !canEdit || signed },
             { target: 'runBtn', disabled: !canEdit || signed },
             { target: 'sqlBtn', disabled: !canEdit || signed },
@@ -445,7 +465,8 @@ window.toggleAccordion = function (section) {
                 text: signed ? `Signed Off as ${role || currentSystemRole}` : 'Save Signoff'
             },
             { target: els.removeSignoffBtn, show: signed, display: '', disabled: !signed },
-            { target: els.workspaceSignoffComment, disabled: signed || !canSign }
+            { target: els.workspaceSignoffComment, disabled: signed || !canSign },
+            { target: els.downloadAllBtn, disabled: !state.summary }
         ]);
         window.ruleWorkspaceUi?.setButtonGroupReadonly(['.workspace-signoff-actions', '.action-bar'], signed, {
             allow: ['#downloadExcelBtn', '#downloadCsvBtn', '#downloadSqlBtn', '#removeSignoffBtn']
@@ -454,7 +475,7 @@ window.toggleAccordion = function (section) {
     }
 
     function applyWorkspaceAccessMode(canEditWorkspace) {
-        ['body-connection', 'body-config'].forEach(function(id) {
+        ['body-connection', 'body-config', 'body-colmap'].forEach(function(id) {
             var body = document.getElementById(id);
             if (!body) return;
             body.style.opacity = canEditWorkspace ? '' : '0.45';
@@ -557,12 +578,12 @@ window.toggleAccordion = function (section) {
             </div>
             <div class="card" style="padding:20px">
                 <div class="form-grid" style="margin-bottom:16px">
-                    <div><div class="stat-label">Database</div><div>${esc(summary.database)}</div></div>
                     <div><div class="stat-label">Tables</div><div>STUD: ${esc(summary.studTable)} | CREG: ${esc(summary.cregTable)} | STUD PRODUCTION: ${esc(summary.prodTable)}</div></div>
                     <div><div class="stat-label">Columns</div><div>STUD No: ${esc(mapping.studStudentNoCol || '_007')} | CREG No: ${esc(mapping.cregStudentNoCol || '_007')} | STUD Compare: ${esc(mapping.studCompareValueCol || '_001')} | CREG Compare: ${esc(mapping.cregCompareValueCol || '_001')} | PROD No: ${esc(mapping.prodStudentNoCol || 'IAGSTNO')}</div></div>
                     <div><div class="stat-label">Timestamp</div><div>${esc(summary.timestamp)}</div></div>
                     <div><div class="stat-label">Status</div><div><span class="badge ${statusClass}">${esc(summary.status)}</span></div></div>
                 </div>
+                ${summary.warning ? `<div class="alert alert--warning">${esc(summary.warning)}</div>` : ''}
                 ${summary.isPreviewOnly ? `<div class="alert alert--warning">Browser preview is limited to the first ${fmt(summary.previewLimit)} exception rows and ${fmt(summary.previewLimit)} clear rows. Download the result files for the full tested population.</div>` : ''}
             </div>
             ${renderExceptionCategories(summary)}`;
@@ -614,6 +635,8 @@ window.toggleAccordion = function (section) {
     }
 
     function applyWorkspace(workspace, resultsVisible, preserveExisting = false) {
+        if (els.datasetsLink) els.datasetsLink.href = state.clientId ? '/EngagementDatasets?clientId=' + state.clientId : '#';
+
         if (!workspace) {
             state.currentRunId = null;
             state.currentStatus = '';
@@ -629,6 +652,7 @@ window.toggleAccordion = function (section) {
             els.workspaceEditedLabel.textContent = '-';
             applySummary(null);
             updateWorkspaceButtons();
+            if (state.clientId) loadTables().catch(() => {});
             return;
         }
 
@@ -641,12 +665,6 @@ window.toggleAccordion = function (section) {
         state.hasDataAnalystSignoff = !!workspace.hasDataAnalystSignoff;
         state.resultsVisible = !!resultsVisible;
 
-        if (els.server) els.server.value = workspace.server || '';
-        if (els.driver) els.driver.value = workspace.driver || 'ODBC Driver 17 for SQL Server';
-        if (els.database) populateSelect(els.database, workspace.database ? [workspace.database] : [], workspace.database);
-        if (els.studTable) populateSelect(els.studTable, workspace.studTable ? [workspace.studTable] : [], workspace.studTable);
-        if (els.cregTable) populateSelect(els.cregTable, workspace.cregTable ? [workspace.cregTable] : [], workspace.cregTable);
-        if (els.prodTable) populateSelect(els.prodTable, workspace.prodTable ? [workspace.prodTable] : [], workspace.prodTable);
         if (workspace.columnMapping) restoreColumnMapping(workspace.columnMapping);
 
         els.workspaceRunState.textContent = workspace.runId ? `Run #${workspace.runId}` : 'No saved run loaded';
@@ -655,6 +673,12 @@ window.toggleAccordion = function (section) {
         els.workspaceEditedLabel.textContent = workspace.lastEditedAt ? new Date(workspace.lastEditedAt).toLocaleString() : '-';
         els.workspaceRoleLabel.textContent = workspace.currentUserEngagementRole || currentSystemRole || '-';
         els.workspaceSignoffComment.value = workspace.currentUserSignoffComment || '';
+
+        loadTables({
+            preferredStudTable: workspace.studTable || '',
+            preferredCregTable: workspace.cregTable || '',
+            preferredProdTable: workspace.prodTable || ''
+        }).catch(() => {});
 
         if (!resultsVisible) {
             setWorkspaceState('Saved Rule 64 results are not available for your engagement role.', 'info');
@@ -667,14 +691,6 @@ window.toggleAccordion = function (section) {
         if (workspace.summary) applySummary(workspace.summary, { fromWorkspace: true });
         else if (!preserveExisting) applySummary(null);
         else updateWorkspaceButtons();
-    }
-
-    async function postJson(url, payload) {
-        return await window.fetchJsonWithProgress(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': token },
-            body: JSON.stringify(payload)
-        });
     }
 
     async function downloadBlob(url, payload, fileName) {
@@ -723,46 +739,22 @@ window.toggleAccordion = function (section) {
         applyWorkspace(data.workspace, data.resultsVisible);
     }
 
-    async function connect() {
-        const server = els.server?.value?.trim();
-        if (!server) throw new Error('Enter the SQL Server name first.');
-        showSpinner('Loading databases...');
+    async function loadTables(opts = {}) {
+        if (!state.clientId) return;
+        showSpinner('Loading tables...');
         try {
-            const data = await postJson(`${apiBase}/GetDatabases`, { server, driver: els.driver.value });
-            if (!data.success) throw new Error(data.error || 'Failed to load databases.');
-            populateSelect(els.database, data.databases || []);
-            els.connectionOutput.innerHTML = `<div class="alert alert--success">Loaded ${(data.databases || []).length} database(s).</div>`;
-            if ((data.databases || []).length) await loadTables();
-        } finally {
-            hideSpinner();
-        }
-    }
-
-    async function loadTables() {
-        if (!els.database?.value) return;
-        const data = await postJson(`${apiBase}/GetTables`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value
-        });
-        if (!data.success) throw new Error(data.error || 'Failed to load tables.');
-        populateSelect(els.studTable, data.tables || [], data.autoStudTable);
-        populateSelect(els.cregTable, data.tables || [], data.autoCregTable);
-        populateSelect(els.prodTable, data.tables || [], data.autoProdTable);
-        els.configOutput.innerHTML = `<div class="alert alert--success">Loaded ${(data.tables || []).length} table(s).</div>`;
-        await Promise.all([
-            loadColumnsForTable(els.studTable?.value, [
-                { selectEl: els.cm_studStudentNoCol, defaultValue: '_007' },
-                { selectEl: els.cm_studCompareValueCol, defaultValue: '_001' }
-            ]),
-            loadColumnsForTable(els.cregTable?.value, [
-                { selectEl: els.cm_cregStudentNoCol, defaultValue: '_007' },
-                { selectEl: els.cm_cregCompareValueCol, defaultValue: '_001' }
-            ]),
-            loadColumnsForTable(els.prodTable?.value, [
-                { selectEl: els.cm_prodStudentNoCol, defaultValue: 'IAGSTNO' }
-            ])
-        ]);
+            const data = await postJson(`${apiBase}/GetTables`, { clientId: state.clientId });
+            if (!data.success) throw new Error(data.error || 'Could not load tables.');
+            populateSelect(els.studTable, data.tables || [], opts.preferredStudTable || data.autoStudTable);
+            populateSelect(els.cregTable, data.tables || [], opts.preferredCregTable || data.autoCregTable);
+            populateSelect(els.prodTable, data.tables || [], opts.preferredProdTable || data.autoProdTable);
+            els.connectionOutput.innerHTML = `<div class="alert alert--success">Loaded ${(data.tables || []).length} table(s) from this engagement's dataset.</div>`;
+            await Promise.all([
+                loadCols('stud', els.studTable?.value),
+                loadCols('creg', els.cregTable?.value),
+                loadCols('prod', els.prodTable?.value)
+            ]);
+        } finally { hideSpinner(); }
     }
 
     async function verifyTables() {
@@ -784,6 +776,11 @@ window.toggleAccordion = function (section) {
         const request = getRequest();
         if (!request.clientId) {
             setWorkspaceState('Select the approved engagement assigned to you before running.', 'warning');
+            return;
+        }
+        const missing = findMissingMappedColumns(request);
+        if (missing.length) {
+            setWorkspaceState(`Select a real column for: ${missing.join(', ')}. Auto-detect could not confidently match these to your uploaded data.`, 'warning');
             return;
         }
         showSpinner('Running Rule 64...');
@@ -843,7 +840,7 @@ window.toggleAccordion = function (section) {
         showSpinner('Saving signoff...');
         try {
             const data = await postJson(`${apiBase}/SignOffWorkspace`, {
-                clientId: Number(els.clientId.value || 0),
+                clientId: state.clientId,
                 runId: state.currentRunId,
                 comment: els.workspaceSignoffComment.value || ''
             });
@@ -860,7 +857,7 @@ window.toggleAccordion = function (section) {
         showSpinner('Removing signoff...');
         try {
             const data = await postJson(`${apiBase}/RemoveWorkspaceSignoff`, {
-                clientId: Number(els.clientId.value || 0),
+                clientId: state.clientId,
                 runId: state.currentRunId,
                 comment: ''
             });
@@ -874,24 +871,10 @@ window.toggleAccordion = function (section) {
         }
     }
 
-    document.getElementById('connectBtn')?.addEventListener('click', () => connect().catch(error => {
+    document.getElementById('refreshTablesBtn')?.addEventListener('click', () => loadTables().catch(error => {
         hideSpinner();
         els.connectionOutput.innerHTML = `<div class="alert alert--error">${esc(error.message)}</div>`;
     }));
-    els.database?.addEventListener('change', () => loadTables().catch(error => {
-        els.configOutput.innerHTML = `<div class="alert alert--error">${esc(error.message)}</div>`;
-    }));
-    els.studTable?.addEventListener('change', () => loadColumnsForTable(els.studTable?.value, [
-        { selectEl: els.cm_studStudentNoCol, defaultValue: '_007' },
-        { selectEl: els.cm_studCompareValueCol, defaultValue: '_001' }
-    ]).catch(() => {}));
-    els.cregTable?.addEventListener('change', () => loadColumnsForTable(els.cregTable?.value, [
-        { selectEl: els.cm_cregStudentNoCol, defaultValue: '_007' },
-        { selectEl: els.cm_cregCompareValueCol, defaultValue: '_001' }
-    ]).catch(() => {}));
-    els.prodTable?.addEventListener('change', () => loadColumnsForTable(els.prodTable?.value, [
-        { selectEl: els.cm_prodStudentNoCol, defaultValue: 'IAGSTNO' }
-    ]).catch(() => {}));
     document.getElementById('verifyBtn')?.addEventListener('click', () => verifyTables().catch(error => {
         hideSpinner();
         els.configOutput.innerHTML = `<div class="alert alert--error">${esc(error.message)}</div>`;
@@ -943,6 +926,14 @@ window.toggleAccordion = function (section) {
     });
     document.getElementById('downloadSqlBtn')?.addEventListener('click', () =>
         downloadBlob(`${apiBase}/DownloadSql`, getRequest(), 'Rule64_STUD_CREG_Student_Number_Validation.sql').catch(error => setWorkspaceState(error.message, 'error')));
+    document.getElementById('downloadAllBtn')?.addEventListener('click', async () => {
+        if (!state.currentRunId) { setWorkspaceState('Save the workspace before downloading.', 'warning'); return; }
+        const id = state.currentRunId;
+        const dl = (url, filename) => window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
+        await dl(`${apiBase}/DownloadSavedExcel?runId=${id}`, `Rule64_Run_${id}.xlsx`);
+        await dl(`${apiBase}/DownloadSavedCsv?runId=${id}`, `Rule64_Run_${id}.csv`);
+        await dl(`${apiBase}/DownloadSavedSql?runId=${id}`, `Rule64_Run_${id}.sql`);
+    });
 
     els.clientId?.addEventListener('change', () => loadWorkspace().catch(error => setWorkspaceState(error.message, 'error')));
 

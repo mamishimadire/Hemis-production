@@ -14,9 +14,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string CancellationTable { get; set; } = "canceliation list";
         public string ClientTable { get; set; } = "CENSUS_LIST_CLIENT";
         public bool UseClientCensusTable { get; set; } = true;
@@ -54,7 +51,6 @@ namespace HemisAudit.ViewModels
         public int? SavedRunId { get; set; }
         public int ClientId { get; set; }
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string CancellationTable { get; set; } = "canceliation list";
         public string ClientTable { get; set; } = "CENSUS_LIST_CLIENT";
         public bool UseClientCensusTable { get; set; } = true;
@@ -70,17 +66,6 @@ namespace HemisAudit.ViewModels
         public List<Rule65ReviewRow> PassRows { get; set; } = new();
         public List<Rule65ReviewRow> FailRows { get; set; } = new();
         public List<Rule65ExceptionCategoryViewModel> ExceptionCategories { get; set; } = new();
-    }
-
-    public class Rule65VerifyRequest
-    {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string CancellationTable { get; set; } = "canceliation list";
-        public string ClientTable { get; set; } = "CENSUS_LIST_CLIENT";
-        public bool UseClientCensusTable { get; set; } = true;
-        public Rule65ColumnMapping ColumnMapping { get; set; } = new();
     }
 
     public class Rule65VerifyResult
@@ -104,13 +89,15 @@ namespace HemisAudit.ViewModels
     {
         public bool Success { get; set; }
         public List<string> Columns { get; set; } = new();
-        public string? AutoStudentNoCol { get; set; }
-        public string? AutoQualificationCol { get; set; }
-        public string? AutoSubjectCol { get; set; }
-        public string? AutoCancelDateCol { get; set; }
-        public string? AutoCensusDateCol { get; set; }
-        public string? AutoCurrentCensusCol { get; set; }
+        public string? AutoSelected { get; set; }
         public string? Error { get; set; }
+    }
+
+    public class Rule65GetColumnsRequest
+    {
+        public int ClientId { get; set; }
+        public string TableName { get; set; } = "";
+        public string TableRole { get; set; } = "";
     }
 
     public class Rule65WorkspaceSaveResult
@@ -128,9 +115,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string CancellationTable { get; set; } = "canceliation list";
         public string ClientTable { get; set; } = "CENSUS_LIST_CLIENT";
         public bool UseClientCensusTable { get; set; } = true;
@@ -153,7 +137,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string? GeneratedSql { get; set; }
         public Rule65ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -178,13 +161,5 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public string Comment { get; set; } = "";
-    }
-
-    public class Rule65GetColumnsRequest
-    {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string TableName { get; set; } = "";
     }
 }

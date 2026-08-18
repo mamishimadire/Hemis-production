@@ -4,10 +4,9 @@ namespace HemisAudit.Services
 {
     public interface IRule29Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<TableListResult> GetTablesAsync(string server, string database, string driver);
-        Task<Rule29ColumnSelectionResult> GetColumnsAsync(string server, string database, string driver, string tableName);
-        Task<Rule29FilterValueResult> GetFilterValuesAsync(string server, string database, string driver, string tableName, string filterColumn);
+        Task<TableListResult> GetTablesAsync(int clientId);
+        Task<Rule29ColumnSelectionResult> GetColumnsAsync(int clientId, string tableName);
+        Task<Rule29FilterValueResult> GetFilterValuesAsync(int clientId, string tableName, string filterColumn);
         Task<Rule29VerifyResult> VerifyTableAsync(Rule29VerifyRequest request);
         Task<Rule29ValidationSummary> RunValidationAsync(Rule29ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<int?> GetClientIdForRunAsync(int runId);

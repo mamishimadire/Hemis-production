@@ -1,0 +1,117 @@
+@model HemisAudit.Services.DatasetRowsPage
+@{
+    ViewData["Title"] = ViewBag.TableName;
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    int clientId = ViewBag.ClientId;
+    string tableName = ViewBag.TableName;
+    bool canEdit = ViewBag.CanEdit;
+    var totalPages = Model.PageSize > 0 ? (int)Math.Ceiling(Model.TotalRows / (double)Model.PageSize) : 1;
+    var queryParts = Model.Filters
+        .Where(kvp => !string.IsNullOrEmpty(kvp.Value))
+        .Select(kvp => $"{Uri.EscapeDataString($"filters[{kvp.Key}]") }={Uri.EscapeDataString(kvp.Value ?? string.Empty)}");
+    var querySuffix = queryParts.Any() ? "&" + string.Join("&", queryParts) : string.Empty;
+}
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert--success" style="margin-bottom:16px">✅ @TempData["Success"]</div>
+}
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">❌ @TempData["Error"]</div>
+}
+
+<div class="page-header">
+    <div>
+        <h1>@tableName</h1>
+        <p>@Model.TotalRows row(s) — page @Model.Page of @Math.Max(1, totalPages)</p>
+    </div>
+    <a asp-action="Index" asp-route-clientId="@clientId" class="btn btn-secondary">← Back to datasets</a>
+</div>
+
+<div class="card">
+    <form method="get" style="margin-bottom:14px">
+        <input type="hidden" name="clientId" value="@clientId" />
+        <input type="hidden" name="tableName" value="@tableName" />
+        <input type="hidden" name="page" value="1" />
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+            <div style="flex:1 1 420px;">
+                <label style="font-size:12px;color:var(--text-muted);text-transform:uppercase">Filter columns</label>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;max-width:1000px;">
+                    @foreach (var col in Model.Columns)
+                    {
+                        <div>
+                            <label style="font-size:11px;color:#555;display:block;margin-bottom:2px;">@col</label>
+                            <input type="text" name="filters[@col]" value="@(Model.Filters.TryGetValue(col, out var filterValue) ? filterValue : string.Empty)" placeholder="Search..." style="width:100%;padding:8px;" />
+                        </div>
+                    }
+                </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+                <button type="submit" class="btn btn-primary" style="height:38px;min-width:120px">Apply filters</button>
+                <a href="@Url.Action("Table", new { clientId, tableName, page = 1 })" class="btn btn-secondary" style="height:38px;min-width:120px;text-align:center;display:inline-flex;align-items:center;justify-content:center;">Clear filters</a>
+            </div>
+        </div>
+    </form>
+
+    <div class="table-wrapper">
+        <table class="data-table data-table--wide">
+            <thead>
+                <tr>
+                    @foreach (var col in Model.Columns)
+                    {
+                        <th>@col</th>
+                    }
+                    @if (canEdit)
+                    {
+                        <th>Actions</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @if (Model.Rows.Count == 0)
+                {
+                    <tr><td colspan="@(Model.Columns.Count + 1)" class="empty-state">No rows.</td></tr>
+                }
+                @foreach (var row in Model.Rows)
+                {
+                    var rowId = Convert.ToInt64(row["RowId"]);
+                    <tr>
+                        @foreach (var col in Model.Columns)
+                        {
+                            <td>@row[col]</td>
+                        }
+                        @if (canEdit)
+                        {
+                            <td>
+                                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                                    <a asp-action="EditRow" asp-route-clientId="@clientId" asp-route-tableName="@tableName" asp-route-rowId="@rowId" class="btn btn-sm btn-primary">Edit</a>
+                                    <form asp-action="DeleteRow" asp-route-clientId="@clientId" method="post" style="display:inline">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="tableName" value="@tableName" />
+                                        <input type="hidden" name="rowId" value="@rowId" />
+                                        <button type="submit" class="btn btn-sm btn-warning" onclick="return confirm('Delete this row?')">Delete</button>
+                                    </form>
+                                </div>
+                            </td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (totalPages > 1)
+    {
+        <div class="table-footer" style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+            @if (Model.Page > 1)
+            {
+                <a href="@Url.Action("Table", new { clientId, tableName, page = Model.Page - 1 })@querySuffix" class="btn btn-sm btn-secondary">← Previous</a>
+            }
+            @if (Model.Page < totalPages)
+            {
+                <a href="@Url.Action("Table", new { clientId, tableName, page = Model.Page + 1 })@querySuffix" class="btn btn-sm btn-secondary">Next →</a>
+            }
+        </div>
+    }
+</div>

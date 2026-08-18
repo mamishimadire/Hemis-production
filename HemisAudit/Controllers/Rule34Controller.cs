@@ -163,9 +163,6 @@ namespace HemisAudit.Controllers
                 review.GeneratedSql = await _rule34.GenerateSqlAsync(new Rule34ValidationRequest
                 {
                     ClientId = review.ClientId,
-                    Server = review.SourceServer,
-                    Database = review.Summary.Database,
-                    Driver = "ODBC Driver 17 for SQL Server",
                     TableName = review.Summary.TableName,
                     ClientTableName = review.Summary.ClientTableName,
                     FirstDayColumn = review.Summary.FirstDayColumn,
@@ -186,16 +183,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule34.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule34.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule34.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule34GetColumnsRequest model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule34.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName)));
+            Json(await RequireDataAnalystAsync(async () => await _rule34.GetColumnsAsync(model.ClientId, model.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTable([FromBody] Rule34VerifyRequest request) =>
@@ -710,9 +703,6 @@ namespace HemisAudit.Controllers
             var request = new Rule34ValidationRequest
             {
                 ClientId = review.ClientId,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
-                Driver = "ODBC Driver 17 for SQL Server",
                 TableName = review.Summary.TableName,
                 ClientTableName = review.Summary.ClientTableName,
                 FirstDayColumn = review.Summary.FirstDayColumn,

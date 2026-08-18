@@ -11,15 +11,15 @@ namespace HemisAudit.Controllers
     [Authorize]
     public class Rule52Controller : Controller
     {
-        private readonly IRule52Service _Rule52;
+        private readonly IRule52Service _rule52;
         private readonly IExportService _export;
         private readonly IAuditLogService _audit;
         private readonly UserManager<ApplicationUser> _users;
         private readonly ISystemDatabaseService _systemDb;
 
-        public Rule52Controller(IRule52Service Rule52, IExportService export, IAuditLogService audit, UserManager<ApplicationUser> users, ISystemDatabaseService systemDb)
+        public Rule52Controller(IRule52Service rule52, IExportService export, IAuditLogService audit, UserManager<ApplicationUser> users, ISystemDatabaseService systemDb)
         {
-            _Rule52 = Rule52; _export = export; _audit = audit; _users = users; _systemDb = systemDb;
+            _rule52 = rule52; _export = export; _audit = audit; _users = users; _systemDb = systemDb;
         }
 
         public async Task<IActionResult> Index(int clientId = 0)
@@ -71,7 +71,7 @@ namespace HemisAudit.Controllers
                 return Json(new { success = false, error = "You cannot access this engagement." });
             }
 
-            var workspace = await _Rule52.GetCurrentWorkspaceStateAsync(clientId, user?.Email);
+            var workspace = await _rule52.GetCurrentWorkspaceStateAsync(clientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
 
@@ -87,7 +87,7 @@ namespace HemisAudit.Controllers
             var role = await GetCurrentSystemRoleAsync(user);
             await _systemDb.NormalizeCompletedRunStatusesAsync();
 
-            var review = await _Rule52.GetSavedRunAsync(id, user?.Email);
+            var review = await _rule52.GetSavedRunAsync(id, user?.Email);
             if (review == null) return NotFound();
 
             if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
@@ -109,17 +109,17 @@ namespace HemisAudit.Controllers
                 string.Equals(role, "Director", StringComparison.OrdinalIgnoreCase);
             var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
             ViewBag.IsArchived = clientDetail?.IsArchived == true;
-            ViewBag.ModuleNavigation = ModuleSequenceNavigationHelper.BuildForSavedRun(51, review.ClientId, clientDetail?.ValidationRuns, role, review.CurrentUserEngagementRole);
+            ViewBag.ModuleNavigation = ModuleSequenceNavigationHelper.BuildForSavedRun(52, review.ClientId, clientDetail?.ValidationRuns, role, review.CurrentUserEngagementRole);
             ViewBag.CanOpenWorkspace =
                 clientDetail?.IsArchived != true &&
                 await _systemDb.CanAccessClientModuleAsync(review.ClientId, user, role) &&
                 (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
 
-            review.GeneratedSql = await _Rule52.GenerateSqlAsync(new Rule52ValidationRequest
+            review.GeneratedSql = _rule52.GenerateValidationSql(new Rule52ValidationRequest
             {
-                ClientId = review.ClientId, Server = review.SourceServer, Database = review.Summary.Database,
-                ValpacTable = review.Summary.ValpacTable, ProdTable = review.Summary.ProdTable,
+                ClientId = review.ClientId,
+                ValpacTable = review.Summary!.ValpacTable, ProdTable = review.Summary.ProdTable,
                 ValpacSubjCol = review.Summary.ValpacSubjCol, ProdSubjCol = review.Summary.ProdSubjCol,
                 ApprovalStatusCol = review.Summary.ApprovalStatusCol, ApprovalStatusValues = review.Summary.ApprovalStatusValues
             });
@@ -128,21 +128,16 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _Rule52.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule52.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _Rule52.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetColumns([FromBody] Rule52GetColumnsRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule52.GetColumnsAsync(model.ClientId, model.TableName, model.TableRole)));
 
         [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] Rule52VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () =>
-                await _Rule52.GetColumnsAsync(request.Server, request.Database, request.Driver, request.ValpacTable)));
-
-        [HttpPost]
-        public async Task<IActionResult> VerifyTables([FromBody] Rule52VerifyRequest request) =>
-            Json(await RequireDataAnalystAsync(async () => await _Rule52.VerifyTablesAsync(request)));
+        public async Task<IActionResult> VerifyTables([FromBody] Rule52ValidationRequest request) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule52.VerifyTablesAsync(request)));
 
         [HttpPost]
         public async Task<IActionResult> RunValidation([FromBody] Rule52ValidationRequest request)
@@ -172,7 +167,7 @@ namespace HemisAudit.Controllers
                     async (sp, ct) => await Execute(sp.GetRequiredService<IRule52Service>(), sp.GetRequiredService<IAuditLogService>()));
             }
 
-            return Json(await Execute(_Rule52, _audit));
+            return Json(await Execute(_rule52, _audit));
         }
 
         [HttpPost]
@@ -183,7 +178,7 @@ namespace HemisAudit.Controllers
             if (!await CanEditWorkspaceAsync(request.ClientId, user, role)) return Json(new Rule52WorkspaceSaveResult { Success = false, Error = "Only the assigned data analyst can edit a saved workspace." });
             if (!request.RunId.HasValue || request.RunId.Value <= 0) return Json(new Rule52WorkspaceSaveResult { Success = false, Error = "Select a saved run before editing." });
 
-            var result = await _Rule52.BeginWorkspaceEditAsync(request.RunId.Value, user!.Email!, user.FullName);
+            var result = await _rule52.BeginWorkspaceEditAsync(request.RunId.Value, user!.Email!, user.FullName);
             if (result.Success) await _audit.LogAsync("workspace_edit_started", $"DataAnalyst started editing Rule 52 run {request.RunId.Value}.", user?.Id, user?.Email);
             return Json(result);
         }
@@ -195,7 +190,7 @@ namespace HemisAudit.Controllers
             var role = await GetCurrentSystemRoleAsync(user);
             if (!await CanEditWorkspaceAsync(request.ClientId, user, role)) return Json(new Rule52WorkspaceSaveResult { Success = false, Error = "Only the assigned data analyst can save a workspace." });
 
-            var result = await _Rule52.SaveWorkspaceAsync(request, user!.Email!, user.FullName);
+            var result = await _rule52.SaveWorkspaceAsync(request, user!.Email!, user.FullName);
             if (result.Success) await _audit.LogAsync("save_validation_workspace", $"DataAnalyst saved Rule 52 workspace for client {request.ClientId}. Run: {result.Workspace?.RunId}", user?.Id, user?.Email);
             return Json(result);
         }
@@ -210,7 +205,7 @@ namespace HemisAudit.Controllers
             if (!await ValidationRunAccessPolicy.CanAssignedUserRemoveOwnSignoffAsync(_systemDb, model.ClientId, user, role)) return Json(new { success = false, error = "Only the assigned data analyst, manager, or director can sign off." });
             if (!model.RunId.HasValue || model.RunId.Value <= 0) return Json(new { success = false, error = "Run the validation first." });
 
-            var review = await _Rule52.GetSavedRunAsync(model.RunId.Value, user?.Email);
+            var review = await _rule52.GetSavedRunAsync(model.RunId.Value, user?.Email);
             if (review == null || review.ClientId != model.ClientId) return Json(new { success = false, error = "The saved validation run could not be found." });
             if (!review.IsCurrentRun) return Json(new { success = false, error = "History results are read-only." });
 
@@ -221,12 +216,12 @@ namespace HemisAudit.Controllers
 
             try
             {
-                await _Rule52.AddOrUpdateSignoffAsync(model.RunId.Value, user!.Email!, model.Comment);
+                await _rule52.AddOrUpdateSignoffAsync(model.RunId.Value, user!.Email!, model.Comment);
                 await _audit.LogAsync("signoff_validation_run", $"Rule 52 signoff saved for run {model.RunId.Value}", user.Id, user.Email);
             }
             catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
 
-            var workspace = await _Rule52.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email, includeSummary: false);
+            var workspace = await _rule52.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
             return Json(new { success = true, message = "Signoff saved.", resultsVisible, workspace });
@@ -241,7 +236,7 @@ namespace HemisAudit.Controllers
             if (model.ClientId <= 0 || !model.RunId.HasValue || model.RunId.Value <= 0) return Json(new { success = false, error = "Select a saved run before removing signoff." });
             if (!await ValidationRunAccessPolicy.CanAssignedUserRemoveOwnSignoffAsync(_systemDb, model.ClientId, user, role)) return Json(new { success = false, error = "Only the assigned data analyst, manager, or director can remove signoff." });
 
-            var review = await _Rule52.GetSavedRunAsync(model.RunId.Value, user?.Email);
+            var review = await _rule52.GetSavedRunAsync(model.RunId.Value, user?.Email);
             if (review == null || review.ClientId != model.ClientId) return Json(new { success = false, error = "The saved validation run could not be found." });
             if (!review.IsCurrentRun) return Json(new { success = false, error = "History results are read-only." });
 
@@ -249,10 +244,10 @@ namespace HemisAudit.Controllers
             if (clientDetail?.IsArchived == true) return Json(new { success = false, error = "Archived engagements are read-only." });
             if (!review.CurrentUserHasSignedOff) return Json(new { success = false, error = "There is no signoff to remove." });
 
-            try { await _Rule52.RemoveSignoffAsync(model.RunId.Value, user!.Email!); }
+            try { await _rule52.RemoveSignoffAsync(model.RunId.Value, user!.Email!); }
             catch (Exception ex) { return Json(new { success = false, error = ex.Message }); }
 
-            var workspace = await _Rule52.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email, includeSummary: false);
+            var workspace = await _rule52.GetCurrentWorkspaceStateAsync(model.ClientId, user?.Email);
             var resultsVisible = CanViewWorkspaceResults(role, workspace);
             if (workspace != null) workspace.ResultsVisible = resultsVisible;
             await _audit.LogAsync("remove_validation_signoff", $"{review.CurrentUserEngagementRole} removed signoff for Rule 52 run {model.RunId.Value}", user?.Id, user?.Email);
@@ -266,8 +261,9 @@ namespace HemisAudit.Controllers
             var role = await GetCurrentSystemRoleAsync(user);
             if (request.ClientId > 0 && !await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
                 return Json(new Rule52SqlResult { Success = false, Error = "You cannot access this engagement." });
-            return Json(await RequireDataAnalystAsync(async () => new Rule52SqlResult { Success = true, Sql = await _Rule52.GenerateSqlAsync(request) }));
+            return Json(await RequireDataAnalystAsync(async () => new Rule52SqlResult { Success = true, Sql = _rule52.GenerateValidationSql(request) }));
         }
+
         [HttpPost]
         public async Task<IActionResult> GenerateRScript([FromBody] Rule52ValidationRequest request)
         {
@@ -289,7 +285,7 @@ namespace HemisAudit.Controllers
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
-            var review = await _Rule52.GetSavedRunAsync(model.RunId, user?.Email);
+            var review = await _rule52.GetSavedRunAsync(model.RunId, user?.Email);
             if (review == null) return NotFound();
 
             var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
@@ -301,7 +297,7 @@ namespace HemisAudit.Controllers
             if (!ValidationRunAccessPolicy.CanCompleteReviewSignoff(role, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff))
             { TempData["Error"] = "The data analyst must sign off first."; return RedirectToAction(nameof(Run), new { id = model.RunId }); }
 
-            await _Rule52.AddOrUpdateSignoffAsync(model.RunId, user!.Email!, model.Comment);
+            await _rule52.AddOrUpdateSignoffAsync(model.RunId, user!.Email!, model.Comment);
             await _audit.LogAsync("signoff_validation_run", $"{review.CurrentUserEngagementRole} signed off Rule 52 run {model.RunId}", user.Id, user.Email);
             TempData["Success"] = "Signoff saved.";
             return RedirectToAction(nameof(Run), new { id = model.RunId });
@@ -312,7 +308,7 @@ namespace HemisAudit.Controllers
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
-            var review = await _Rule52.GetSavedRunAsync(runId, user?.Email);
+            var review = await _rule52.GetSavedRunAsync(runId, user?.Email);
             if (review == null) return NotFound();
 
             var clientDetail = await _systemDb.GetClientDetailAsync(review.ClientId, user, role);
@@ -321,7 +317,7 @@ namespace HemisAudit.Controllers
             if (!review.IsCurrentRun) { TempData["Error"] = "History results are read-only."; return RedirectToAction(nameof(Run), new { id = runId }); }
             if (!review.CurrentUserHasSignedOff) { TempData["Error"] = "No signoff to remove."; return RedirectToAction(nameof(Run), new { id = runId }); }
 
-            await _Rule52.RemoveSignoffAsync(runId, user!.Email!);
+            await _rule52.RemoveSignoffAsync(runId, user!.Email!);
             await _audit.LogAsync("remove_validation_signoff", $"{review.CurrentUserEngagementRole} removed signoff for Rule 52 run {runId}", user?.Id, user?.Email);
             TempData["Success"] = "Signoff removed.";
             return RedirectToAction(nameof(Run), new { id = runId });
@@ -332,7 +328,8 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            return File(_export.ExportRule52Excel(review.Summary), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule52_VALPAC_Production_Run_{runId}.xlsx");
+            var fullSummary = await _rule52.GetStoredSummaryAsync(runId) ?? review.Summary!;
+            return File(_export.ExportRule52Excel(fullSummary), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule52_VALPAC_Production_Run_{runId}.xlsx");
         }
 
         [HttpGet]
@@ -340,7 +337,8 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            return File(_export.ExportRule52Csv(review.Summary), "text/csv", $"Rule52_VALPAC_Production_Run_{runId}.csv");
+            var fullSummary = await _rule52.GetStoredSummaryAsync(runId) ?? review.Summary!;
+            return File(_export.ExportRule52Csv(fullSummary), "text/csv", $"Rule52_VALPAC_Production_Run_{runId}.csv");
         }
 
         [HttpGet]
@@ -348,10 +346,10 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var sql = await _Rule52.GenerateSqlAsync(new Rule52ValidationRequest
+            var sql = _rule52.GenerateValidationSql(new Rule52ValidationRequest
             {
-                ClientId = review.ClientId, Server = review.SourceServer, Database = review.Summary.Database,
-                ValpacTable = review.Summary.ValpacTable, ProdTable = review.Summary.ProdTable,
+                ClientId = review.ClientId,
+                ValpacTable = review.Summary!.ValpacTable, ProdTable = review.Summary.ProdTable,
                 ValpacSubjCol = review.Summary.ValpacSubjCol, ProdSubjCol = review.Summary.ProdSubjCol,
                 ApprovalStatusCol = review.Summary.ApprovalStatusCol, ApprovalStatusValues = review.Summary.ApprovalStatusValues
             });
@@ -378,16 +376,16 @@ namespace HemisAudit.Controllers
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
             if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase)) return Json(new { success = false, error = "Only the assigned data analyst can download the SQL script." });
-            return File(_export.ExportSql(await _Rule52.GenerateSqlAsync(request)), "application/sql", $"Rule52_VALPAC_Production_{Ts()}.sql");
+            return File(_export.ExportSql(_rule52.GenerateValidationSql(request)), "application/sql", $"Rule52_VALPAC_Production_{Ts()}.sql");
         }
 
-        // â”€â”€â”€ Private helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─── Private helpers ─────────────────────────────────────────────────
 
         private async Task<Rule52RunReviewViewModel?> LoadAuthorizedSavedRunAsync(int runId, bool requireDownloadAccess)
         {
             var user = await _users.GetUserAsync(User);
             var role = await GetCurrentSystemRoleAsync(user);
-            var review = await _Rule52.GetSavedRunAsync(runId, user?.Email, includeFullResults: requireDownloadAccess);
+            var review = await _rule52.GetSavedRunAsync(runId, user?.Email);
             if (review == null) { TempData["Error"] = "Saved validation run was not found."; return null; }
             if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role)) { TempData["Error"] = "You do not have access."; return null; }
             if (!CanViewSavedRun(review, role)) { TempData["Error"] = "Only analyst-signed results are available."; return null; }
@@ -400,16 +398,16 @@ namespace HemisAudit.Controllers
             var user = await _users.GetUserAsync(User);
             if (summary.SavedRunId is int savedRunId && savedRunId > 0)
             {
-                var review = await _Rule52.GetSavedRunAsync(savedRunId, user?.Email, includeFullResults: true);
-                if (review?.Summary != null) return review.Summary;
+                var stored = await _rule52.GetStoredSummaryAsync(savedRunId);
+                if (stored != null) return stored;
             }
             if (summary.ClientId > 0)
             {
-                var workspace = await _Rule52.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email, includeSummary: false);
+                var workspace = await _rule52.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email);
                 if (workspace?.RunId is int workspaceRunId && workspaceRunId > 0)
                 {
-                    var review = await _Rule52.GetSavedRunAsync(workspaceRunId, user?.Email, includeFullResults: true);
-                    if (review?.Summary != null) return review.Summary;
+                    var stored = await _rule52.GetStoredSummaryAsync(workspaceRunId);
+                    if (stored != null) return stored;
                 }
             }
             return summary;
@@ -456,4 +454,3 @@ namespace HemisAudit.Controllers
         private static string Ts() => DateTime.Now.ToString("yyyyMMdd_HHmmss");
     }
 }
-

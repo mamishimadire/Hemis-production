@@ -7,7 +7,7 @@
   const logs = [];
   page.on('console', msg => logs.push(`console:${msg.type()}:${msg.text()}`));
   page.on('pageerror', err => logs.push(`pageerror:${err.message}`));
-  await page.goto('http://localhost:5076/Rule12', { waitUntil: 'networkidle' });
+  await page.goto('http://localhost:5080/Rule12', { waitUntil: 'networkidle' });
   await page.waitForTimeout(2000);
   console.log(logs.join('\n') || 'no-errors');
   await browser.close();

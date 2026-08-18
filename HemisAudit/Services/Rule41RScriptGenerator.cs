@@ -10,19 +10,19 @@ public static class Rule41RScriptGenerator
     public static string Generate(Rule41ValidationRequest req, string ruleNumber = "41", string ruleTitle = "STUD vs MT-Audit Agreement")
     {
         var studTable  = RString(req.StudTable);
-        var auditTable = RString(req.AuditTable);
+        var auditTable = RString(req.H16Table);
         var studKey    = RString(req.StudKey);
-        var auditKey   = RString(req.AuditKey);
+        var auditKey   = RString(req.H16Key);
 
         var defaultPairs = new List<Rule41ColumnPair>
         {
-            new() { StudCol = "_007", AuditCol = "IAGSTNO", Label = "Student No" },
-            new() { StudCol = "_008", AuditCol = "IADIDNO",  Label = "Birth Date" },
-            new() { StudCol = "_001", AuditCol = "IAGQUAL",  Label = "Qualification" }
+            new() { StudCol = "_007", H16Col = "IAGSTNO", Label = "Student No" },
+            new() { StudCol = "_008", H16Col = "IADIDNO",  Label = "Birth Date" },
+            new() { StudCol = "_001", H16Col = "IAGQUAL",  Label = "Qualification" }
         };
         var pairsR = string.Join(",\n  ",
             (req.Pairs ?? defaultPairs).Select(p =>
-                $"list(stud='{p.StudCol.Replace("'", "\\'")}', audit='{p.AuditCol.Replace("'", "\\'")}', label='{p.Label.Replace("'", "\\'")}')"));
+                $"list(stud='{p.StudCol.Replace("'", "\\'")}', audit='{p.H16Col.Replace("'", "\\'")}', label='{p.Label.Replace("'", "\\'")}')"));
 
         return RScriptScaffold.BuildDataLoadingPrelude() + $@"
 

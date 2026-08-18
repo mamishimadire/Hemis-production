@@ -4,9 +4,8 @@ namespace HemisAudit.Services
 {
     public interface IRule10Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<Rule10TableDiscoveryResult> GetTablesAsync(string server, string database, string driver);
-        Task<Rule10ColumnSelectionResult> GetColumnsAsync(string server, string database, string driver, string tableName);
+        Task<Rule10TableDiscoveryResult> GetTablesAsync(int clientId);
+        Task<Rule10ColumnSelectionResult> GetColumnsAsync(int clientId, string tableName);
         Task<Rule10VerifyResult> VerifyTablesAsync(Rule10VerifyRequest request);
         Task<Rule10ValidationSummary> RunValidationAsync(Rule10ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<Rule10ValidationSummary?> GetPendingValidationPreviewAsync(int ruleNumber, int clientId, string reviewerEmail);
@@ -22,4 +21,3 @@ namespace HemisAudit.Services
         Task<Rule10ValidationSummary> GetExportSummaryAsync(Rule10ValidationRequest request);
     }
 }
-

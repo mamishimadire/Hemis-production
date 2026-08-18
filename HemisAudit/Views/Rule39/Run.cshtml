@@ -278,7 +278,6 @@
         <h3 style="margin-bottom:1rem">Run Configuration</h3>
         <table class="data-table">
             <tbody>
-                <tr><td style="font-weight:600">Database</td><td>@s.Database</td></tr>
                 <tr><td style="font-weight:600">STUD Table</td><td>@s.StudTable</td></tr>
                 <tr><td style="font-weight:600">First-Time Column</td><td>@s.StudFirstTimeColumn = '@s.StudFirstTimeValue'</td></tr>
                 <tr><td style="font-weight:600">STUD Qual Ref Column</td><td>@s.StudQualRefColumn</td></tr>
@@ -299,7 +298,6 @@
                 @if (!string.IsNullOrWhiteSpace(s.NalNqfColumn)) { <tr><td style="font-weight:600">NQF Column</td><td>@s.NalNqfColumn</td></tr> }
                 @if (!string.IsNullOrWhiteSpace(s.NalCreditsColumn)) { <tr><td style="font-weight:600">Credits Column</td><td>@s.NalCreditsColumn</td></tr> }
                 @if (!string.IsNullOrWhiteSpace(s.NalOutcomeColumn)) { <tr><td style="font-weight:600">Outcome Column</td><td>@s.NalOutcomeColumn</td></tr> }
-                <tr><td style="font-weight:600">Source Server</td><td>@Model.SourceServer</td></tr>
                 <tr><td style="font-weight:600">Run Date</td><td>@s.Timestamp</td></tr>
                 <tr><td style="font-weight:600">Run ID</td><td>#@Model.RunId</td></tr>
             </tbody>

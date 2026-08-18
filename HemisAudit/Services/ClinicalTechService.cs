@@ -1,55 +1,56 @@
-using System.Globalization;
-using System.Security.Cryptography;
-using HemisAudit.Helpers;
-using HemisAudit.ViewModels;
-using Microsoft.Data.SqlClient;
 using Newtonsoft.Json;
+using HemisAudit.Helpers;
+using HemisAudit.Models;
+using HemisAudit.ViewModels;
+using Microsoft.AspNetCore.Identity;
+using Npgsql;
 
 namespace HemisAudit.Services
 {
+    // Rule 69: ClinicalTech — Qualification & Surname Validation — validates against the engagement's
+    // own uploaded Supabase data instead of a live SQL Server connection. Population is every row in
+    // the ClinicalTech source table with a non-blank qualification code. PASS when that qualification
+    // code exists in the Clinical Production table; FAIL when missing. The matching Production surname
+    // is carried through for informational display alongside the result.
     public class ClinicalTechService : IClinicalTechService
     {
-        private const int BrowserPreviewRowLimit = 10;
-        private readonly IConfiguration _configuration;
-        private readonly IPendingValidationCacheService _pendingValidationCache;
+        // Storage/Excel population cap — effectively "full population" at this data scale.
+        private const int RowLimit = 200000;
+        private const int UiSampleLimit = 10;
 
-        public ClinicalTechService(IConfiguration configuration, IPendingValidationCacheService pendingValidationCache)
+        private readonly IConfiguration _configuration;
+        private readonly IEngagementDatasetService _datasets;
+        private readonly ISystemDatabaseService _systemDb;
+        private readonly UserManager<ApplicationUser> _userManager;
+
+        public ClinicalTechService(
+            IConfiguration configuration,
+            IEngagementDatasetService datasets,
+            ISystemDatabaseService systemDb,
+            UserManager<ApplicationUser> userManager)
         {
             _configuration = configuration;
-            _pendingValidationCache = pendingValidationCache;
+            _datasets = datasets;
+            _systemDb = systemDb;
+            _userManager = userManager;
         }
 
-        // ── Database discovery ─────────────────────────────────────────────────
+        // ── Discovery ─────────────────────────────────────────────────────────
 
-        public async Task<DatabaseListResult> GetDatabasesAsync(string server, string driver)
+        public async Task<ClinicalTechTableDiscoveryResult> GetTablesAsync(int clientId)
         {
             try
             {
-                var connStr = BuildConnectionString(server, "master", driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT name FROM sys.databases WHERE name NOT IN ('master','tempdb','model','msdb') ORDER BY name;";
-                await using var reader = await cmd.ExecuteReaderAsync();
-                var items = new List<string>();
-                while (await reader.ReadAsync()) items.Add(reader.GetString(0));
-                return new DatabaseListResult { Success = true, Databases = items };
-            }
-            catch (Exception ex) { return new DatabaseListResult { Success = false, Error = ex.Message }; }
-        }
+                var tables = await _datasets.ListTableNamesAsync(clientId);
+                if (tables.Count == 0)
+                {
+                    return new ClinicalTechTableDiscoveryResult
+                    {
+                        Success = false,
+                        Error = "No tables have been uploaded for this engagement yet. Upload data under Datasets first."
+                    };
+                }
 
-        public async Task<ClinicalTechTableDiscoveryResult> GetTablesAsync(string server, string database, string driver)
-        {
-            try
-            {
-                var connStr = BuildConnectionString(server, database, driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME;";
-                await using var reader = await cmd.ExecuteReaderAsync();
-                var tables = new List<string>();
-                while (await reader.ReadAsync()) tables.Add(reader.GetString(0));
                 return new ClinicalTechTableDiscoveryResult
                 {
                     Success = true,
@@ -61,607 +62,574 @@ namespace HemisAudit.Services
             catch (Exception ex) { return new ClinicalTechTableDiscoveryResult { Success = false, Error = ex.Message }; }
         }
 
-        public async Task<ColumnListResult> GetColumnsAsync(string server, string database, string driver, string tableName)
+        public async Task<ClinicalTechColumnDiscoveryResult> GetColumnsAsync(int clientId, string tableName, string tableRole)
         {
             try
             {
-                ValidateObjectName(tableName);
-                var tbl = Sanitise(tableName);
-                var connStr = BuildConnectionString(server, database, driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @T ORDER BY ORDINAL_POSITION;";
-                cmd.Parameters.AddWithValue("@T", tbl);
-                await using var reader = await cmd.ExecuteReaderAsync();
-                var cols = new List<string>();
-                while (await reader.ReadAsync()) if (!reader.IsDBNull(0)) cols.Add(reader.GetString(0));
-                return new ColumnListResult { Success = true, Columns = cols, AutoSelected = cols.FirstOrDefault() };
+                var cols = await _datasets.GetValidatedColumnsAsync(clientId, tableName);
+                string? auto = tableRole?.ToLowerInvariant() switch
+                {
+                    "qualification" => FindFirst(cols, ["QUALIFICATION"], ["qual"]),
+                    "surname"       => FindFirst(cols, ["Surname"], ["surname"]),
+                    _ => null
+                };
+                return new ClinicalTechColumnDiscoveryResult { Success = true, Columns = cols, AutoSelected = auto };
             }
-            catch (Exception ex) { return new ColumnListResult { Success = false, Error = ex.Message }; }
+            catch (Exception ex) { return new ClinicalTechColumnDiscoveryResult { Success = false, Error = ex.Message }; }
         }
-
-        // ── Verification ───────────────────────────────────────────────────────
 
         public async Task<ClinicalTechVerifyResult> VerifyTablesAsync(ClinicalTechVerifyRequest request)
         {
             try
             {
-                ValidateRequest(request);
-                var connStr = BuildConnectionString(request.Server, request.Database, request.Driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
+                await ValidateColumnsExistAsync(request.ClientId, request.ClinicaltechTable, [request.QualificationColumn, request.SurnameColumn]);
+                await ValidateColumnsExistAsync(request.ClientId, request.ProductionTable, [request.QualificationColumn]);
 
-                var clinicalTechTable = Sanitise(request.ClinicaltechTable);
+                var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+                await using var connection = conn;
+
+                var ctTable = Sanitise(request.ClinicaltechTable);
                 var prodTable = Sanitise(request.ProductionTable);
                 var qualCol = Sanitise(request.QualificationColumn);
 
-                var clinicalTechCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{clinicalTechTable}];");
-                var prodCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{prodTable}];");
+                var ctCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{ctTable}\";");
+                var prodCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{prodTable}\";");
 
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = BuildPopulationCountSql(clinicalTechTable, prodTable, qualCol);
+                var ctes = BuildValidationCtes(schema, ctTable, prodTable, qualCol, Sanitise(request.SurnameColumn));
+                var countSql = $@"
+WITH {ctes}
+SELECT
+    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE validation_result = 'PASS') AS pass_count,
+    COUNT(*) FILTER (WHERE validation_result = 'FAIL') AS fail_count
+FROM results;";
+
+                await using var cmd = connection.CreateCommand();
+                cmd.CommandText = countSql;
                 await using var reader = await cmd.ExecuteReaderAsync();
 
-                var result = new ClinicalTechVerifyResult { Success = true, ClinicaltechRecordCount = clinicalTechCount, ProductionRecordCount = prodCount };
+                var result = new ClinicalTechVerifyResult { Success = true, ClinicaltechRecordCount = ctCount, ProductionRecordCount = prodCount };
                 if (await reader.ReadAsync())
                 {
-                    result.TotalTested = GetInt(reader, 0);
-                    result.MatchedCount = GetInt(reader, 1);
-                    result.MissingCount = GetInt(reader, 2);
+                    result.TotalTested  = Convert.ToInt32(reader.GetValue(0));
+                    result.MatchedCount = Convert.ToInt32(reader.GetValue(1));
+                    result.MissingCount = Convert.ToInt32(reader.GetValue(2));
                 }
                 return result;
             }
             catch (Exception ex) { return new ClinicalTechVerifyResult { Success = false, Error = ex.Message }; }
         }
 
-        // ── Validation ─────────────────────────────────────────────────────────
+        // ── Validation ────────────────────────────────────────────────────────
 
         public async Task<ClinicalTechValidationSummary> RunValidationAsync(ClinicalTechValidationRequest request, string? userEmail = null, string? userName = null)
         {
             try
             {
-                ValidateRequest(request);
-                var browserSummary = await AnalyseAsync(request, includeAllReviewRows: false);
-                if (browserSummary.Success && request.ClientId > 0)
+                var summary = await AnalyseAsync(request);
+
+                if (summary.Success && request.ClientId > 0)
                 {
-                    try
-                    {
-                        var full = CloneSummary(browserSummary);
-                        if (full.IsPreviewOnly || full.ReviewRows.Count < full.TotalValidated)
-                            full = await AnalyseAsync(request, includeAllReviewRows: true);
-                        full.SavedRunId = null;
-                        browserSummary.SavedRunId = await SaveValidationRunAsync(CloneRequest(request), full, userEmail, userName, markWorkspaceSaved: false);
-                        if (!string.IsNullOrWhiteSpace(userEmail))
-                            _pendingValidationCache.ClearPending(69, request.ClientId, userEmail!);
-                    }
+                    try { summary.SavedRunId = await SaveValidationRunAsync(request, summary, userEmail, userName); }
                     catch (Exception ex)
                     {
-                        browserSummary.Warning = $"Analysis completed, but the workspace could not be saved automatically: {ex.Message}";
+                        summary.Success = false;
+                        summary.Error = $"Analysis completed, but the run could not be saved: {ex.Message}";
+                        return summary;
                     }
                 }
 
-                if (!browserSummary.SavedRunId.HasValue)
-                {
-                    if (browserSummary.Success && request.ClientId > 0 && !string.IsNullOrWhiteSpace(userEmail))
-                        _pendingValidationCache.StorePending(69, request.ClientId, userEmail!, request, CloneSummary(browserSummary), userName);
-                    browserSummary.Warning = string.IsNullOrWhiteSpace(browserSummary.Warning)
-                        ? "Counts reflect the full Clinicaltech population. Browser review rows are limited for performance."
-                        : browserSummary.Warning;
-                }
-                else
-                {
-                    browserSummary.Warning = "The current ClinicalTech run has been written to the system database. Click Save Workspace to finalize it for signoff.";
-                }
-                return browserSummary;
+                return ApplyUiSample(summary);
             }
             catch (Exception ex) { return new ClinicalTechValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<ClinicalTechValidationSummary> AnalyseAsync(ClinicalTechValidationRequest request, bool includeAllReviewRows)
+        private async Task<ClinicalTechValidationSummary> AnalyseAsync(ClinicalTechValidationRequest request)
         {
-            try
-            {
-                ValidateRequest(request);
-                var connStr = BuildConnectionString(request.Server, request.Database, request.Driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
+            await ValidateColumnsExistAsync(request.ClientId, request.ClinicaltechTable, [request.QualificationColumn, request.SurnameColumn]);
+            await ValidateColumnsExistAsync(request.ClientId, request.ProductionTable, [request.QualificationColumn]);
 
-                var clinicalTechTable = Sanitise(request.ClinicaltechTable);
-                var prodTable = Sanitise(request.ProductionTable);
-                var qualCol = Sanitise(request.QualificationColumn);
-                var surnameCol = Sanitise(request.SurnameColumn);
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
 
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandTimeout = 300;
-                cmd.CommandText = await GenerateSqlAsync(request);
-
-                await using var reader = await cmd.ExecuteReaderAsync();
-                var results = new List<ClinicalTechReviewRow>();
-                int passCount = 0, failCount = 0, totalCount = 0;
-
-                while (await reader.ReadAsync())
-                {
-                    totalCount++;
-                    var status = reader.GetString(2);
-                    var row = new ClinicalTechReviewRow
-                    {
-                        ClinicaltechQualification = reader.GetString(0) ?? "",
-                        ClinicaltechSurname = reader.GetString(1) ?? "",
-                        Status = status,
-                        ProductionQualification = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                        ProductionSurname = reader.IsDBNull(4) ? "" : reader.GetString(4)
-                    };
-
-                    if (status == "PASS") passCount++;
-                    else if (status == "FAIL") failCount++;
-
-                    if (results.Count < (includeAllReviewRows ? int.MaxValue : BrowserPreviewRowLimit))
-                        results.Add(row);
-                }
-
-                var exceptionRate = totalCount > 0 ? Math.Round((decimal)failCount * 100 / totalCount, 2) : 0;
-                var status_result = exceptionRate == 0 ? "PASS" : "FAIL";
-
-                return new ClinicalTechValidationSummary
-                {
-                    Success = true,
-                    Status = status_result,
-                    TotalValidated = totalCount,
-                    PassCount = passCount,
-                    FailCount = failCount,
-                    ExceptionRate = exceptionRate,
-                    ReviewRows = results,
-                    IsPreviewOnly = !includeAllReviewRows && results.Count < totalCount
-                };
-            }
-            catch (Exception ex)
-            {
-                return new ClinicalTechValidationSummary { Success = false, Error = ex.Message };
-            }
-        }
-
-        public async Task<string> GenerateSqlAsync(ClinicalTechValidationRequest request)
-        {
-            ValidateRequest(request);
-            var clinicalTechTable = Sanitise(request.ClinicaltechTable);
-            var prodTable = Sanitise(request.ProductionTable);
             var qualCol = Sanitise(request.QualificationColumn);
             var surnameCol = Sanitise(request.SurnameColumn);
 
-            var sql = $@"-- CLINICALTECH MODULE: Qualification Code and Surname Validation
--- Checks if QUALIFICATION values from Clinicaltech table exist in Clinical Production table
--- and confirms matching Surname records
+            var ctCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{Sanitise(request.ClinicaltechTable)}\";");
+            var prodCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{Sanitise(request.ProductionTable)}\";");
 
-DECLARE @ClinicaltechQualCount INT = 0;
-DECLARE @ProductionQualCount INT = 0;
-DECLARE @MatchedCount INT = 0;
-DECLARE @MissingCount INT = 0;
+            var ctes = BuildValidationCtes(schema, request.ClinicaltechTable, request.ProductionTable, qualCol, surnameCol);
 
--- Build reference qualification codes from Production table
-SELECT
-    UPPER(LTRIM(RTRIM(CAST([{qualCol}] AS nvarchar(255))))) AS ProdQualification,
-    UPPER(LTRIM(RTRIM(CAST([{surnameCol}] AS nvarchar(500))))) AS ProdSurname
-INTO #ProdQualifications
-FROM [{prodTable}]
-WHERE [{qualCol}] IS NOT NULL AND [{qualCol}] <> '';
-
-CREATE INDEX IDX_ProdQual ON #ProdQualifications(ProdQualification);
-
-SELECT @ProductionQualCount = COUNT(*) FROM #ProdQualifications;
-
--- Validate Clinicaltech against Production
-SELECT
-    UPPER(LTRIM(RTRIM(CAST(CT.[{qualCol}] AS nvarchar(255))))) AS ClinicalQual,
-    UPPER(LTRIM(RTRIM(CAST(CT.[{surnameCol}] AS nvarchar(500))))) AS ClinicalSurname,
-    CASE WHEN PQ.ProdQualification IS NOT NULL THEN 'PASS' ELSE 'FAIL' END AS Status,
-    ISNULL(PQ.ProdQualification, '') AS MatchedQual,
-    ISNULL(PQ.ProdSurname, '') AS MatchedSurname
-FROM [{clinicalTechTable}] CT
-LEFT JOIN #ProdQualifications PQ ON UPPER(LTRIM(RTRIM(CAST(CT.[{qualCol}] AS nvarchar(255))))) = PQ.ProdQualification
-WHERE CT.[{qualCol}] IS NOT NULL AND CT.[{qualCol}] <> ''
-ORDER BY Status DESC, ClinicalQual;
-
-DROP TABLE #ProdQualifications;";
-
-            return await Task.FromResult(sql);
-        }
-
-        public async Task<string> GenerateRScriptAsync(ClinicalTechValidationRequest request)
-        {
-            return await Task.FromResult(
-                ClinicalTechRScriptGenerator.Generate(
-                    69,
-                    "HEMIS Clinicaltech Module: Qualification and Surname Validation",
-                    request.ClinicaltechTable,
-                    request.ProductionTable,
-                    request.QualificationColumn,
-                    request.SurnameColumn));
-        }
-
-        // ── Workspace state ────────────────────────────────────────────────────
-
-        public async Task<ClinicalTechWorkspaceState?> GetCurrentWorkspaceStateAsync(int clientId, string? userEmail = null)
-        {
-            try
+            int total, passed, failed;
+            await using (var countCmd = connection.CreateCommand())
             {
-                if (clientId <= 0) return null;
-
-                try
+                countCmd.CommandText = $@"
+WITH {ctes}
+SELECT
+    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE validation_result = 'PASS') AS pass_count,
+    COUNT(*) FILTER (WHERE validation_result = 'FAIL') AS fail_count
+FROM results;";
+                await using var reader = await countCmd.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
                 {
-                    await using var connection = await OpenSystemConnectionAsync();
-                    await using var command = connection.CreateConfiguredCommand();
-                    command.CommandText = @"
-SELECT TOP 1
-    vr.RunID,
-    ISNULL(vr.HemisServer, '') AS HemisServer,
-    ISNULL(vr.AuditDatabase, '') AS AuditDatabase,
-    ISNULL(vr.StudTable, '') AS StudTable,
-    ISNULL(vr.DeceasedTable, '') AS DeceasedTable,
-    ISNULL(vr.StudColumn, '') AS StudColumn,
-    ISNULL(vr.DeceasedColumn, '') AS DeceasedColumn,
-    ISNULL(vr.Status, '') AS Status,
-    vr.ResultsJSON,
-    vr.WorkspaceSavedAt
-FROM dbo.ValidationRuns vr
-WHERE vr.ClientID = @ClientID
-  AND vr.RuleNumber = 69
-ORDER BY vr.IsCurrent DESC, vr.RunTimestamp DESC, vr.RunID DESC;";
-                    command.Parameters.AddWithValue("@ClientID", clientId);
+                    total  = Convert.ToInt32(reader.GetValue(0));
+                    passed = Convert.ToInt32(reader.GetValue(1));
+                    failed = Convert.ToInt32(reader.GetValue(2));
+                }
+                else { total = passed = failed = 0; }
+            }
 
-                    await using var reader = await command.ExecuteReaderAsync();
-                    if (await reader.ReadAsync())
+            var rows = new List<ClinicalTechValidationRowRecord>();
+            await using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = $@"
+WITH {ctes}
+SELECT source_qual, source_surname, matched_surname, validation_result FROM results
+ORDER BY CASE WHEN validation_result = 'FAIL' THEN 0 ELSE 1 END, source_qual
+LIMIT @limit;";
+                cmd.Parameters.AddWithValue("limit", RowLimit);
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var row = new ClinicalTechValidationRowRecord
                     {
-                        var runId = reader.GetInt32(0);
-                        var summaryJson = reader.IsDBNull(8) ? null : reader.GetString(8);
-                        ClinicalTechValidationSummary? summary = null;
-                        if (summaryJson != null)
+                        ValidationNumber = rows.Count + 1,
+                        ControlType = "Control_1",
+                        ControlLabel = "Control 1",
+                        ValidationResult = GetString(reader, 3) ?? "FAIL",
+                        DisplayValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
                         {
-                            try { summary = JsonConvert.DeserializeObject<ClinicalTechValidationSummary>(ValidationPayloadCodec.Decode(summaryJson)); }
-                            catch { }
+                            ["SOURCE_QUAL"] = GetString(reader, 0),
+                            ["SOURCE_SURNAME"] = GetString(reader, 1),
+                            ["PRODUCTION_SURNAME"] = GetString(reader, 2)
                         }
-                        if (summary != null && summary.ReviewRows.Count > BrowserPreviewRowLimit)
-                            summary.ReviewRows = summary.ReviewRows.Take(BrowserPreviewRowLimit).ToList();
-
-                        var ws = new ClinicalTechWorkspaceState
-                        {
-                            ClientId = clientId,
-                            Server = reader.GetString(1),
-                            Database = reader.GetString(2),
-                            Driver = "ODBC Driver 17 for SQL Server",
-                            ClinicaltechTable = reader.GetString(3),
-                            ProductionTable = reader.GetString(4),
-                            QualificationColumn = reader.GetString(5),
-                            SurnameColumn = reader.GetString(6),
-                            LastRunId = runId,
-                            LastRunStatus = reader.GetString(7),
-                            CurrentStatus = reader.GetString(7),
-                            Summary = summary,
-                            LastRunAt = DateTime.UtcNow
-                        };
-                        await reader.CloseAsync();
-                        ws.IsWorkspaceSaved = await QualSurnameModuleHelper.IsWorkspaceSavedAsync(connection, runId);
-
-                        int? userId = await GetSystemUserIdByEmailAsync(connection, userEmail);
-                        if (userId.HasValue)
-                            ws.CurrentUserEngagementRole = await QualSurnameModuleHelper.GetEngagementRoleAsync(connection, clientId, userId.Value) ?? "";
-
-                        var (hasDA, currentSigned, currentComment) = await QualSurnameModuleHelper.GetSignoffStateAsync(
-                            connection, runId, userId, ws.CurrentUserEngagementRole);
-                        ws.HasDataAnalystSignoff = hasDA;
-                        ws.CurrentUserHasSignedOff = currentSigned;
-                        ws.CurrentUserSignoffComment = currentComment;
-
-                        if (ws.Summary != null) ws.Summary.SavedRunId = runId;
-                        return ws;
-                    }
-                }
-                catch { }
-
-                var cached = _pendingValidationCache.GetPending<ClinicalTechValidationRequest, ClinicalTechValidationSummary>(69, clientId, userEmail ?? "");
-                if (cached?.Request is not null && cached.Summary is not null)
-                {
-                    var req = cached.Request;
-                    return new ClinicalTechWorkspaceState
-                    {
-                        ClientId = clientId,
-                        Server = req.Server,
-                        Database = req.Database,
-                        Driver = req.Driver,
-                        ClinicaltechTable = req.ClinicaltechTable,
-                        ProductionTable = req.ProductionTable,
-                        QualificationColumn = req.QualificationColumn,
-                        SurnameColumn = req.SurnameColumn,
-                        Summary = cached.Summary,
-                        LastRunAt = DateTime.UtcNow
                     };
+                    EnrichDisplayValues(row);
+                    rows.Add(row);
                 }
-
-                return null;
             }
-            catch
+
+            var rate = total == 0 ? 0m : Math.Round((decimal)failed / total * 100m, 2);
+            var overallStatus = failed == 0 ? "PASS" : "FAIL";
+
+            var controlSummaries = new List<ClinicalTechControlSummaryItemViewModel>
             {
-                return null;
-            }
-        }
+                new()
+                {
+                    ControlType  = "Control_1",
+                    ControlLabel = "Control 1",
+                    CriteriaText = $"Every {request.ClinicaltechTable} [{qualCol}] value must exist in {request.ProductionTable} [{qualCol}]",
+                    TotalCount   = total,
+                    PassCount    = passed,
+                    FailCount    = failed,
+                    Status       = failed == 0 ? "PASS" : "FAIL"
+                }
+            };
 
-        public async Task<bool> SaveWorkspaceStateAsync(int clientId, ClinicalTechValidationRequest config, string? userEmail = null)
-        {
-            try
+            return new ClinicalTechValidationSummary
             {
-                if (clientId <= 0) return false;
-                await using var connection = await OpenSystemConnectionAsync();
-                await using var cmd = connection.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT TOP 1 RunID FROM dbo.ValidationRuns WHERE ClientID = @ClientID AND RuleNumber = 69 ORDER BY IsCurrent DESC, RunTimestamp DESC;";
-                cmd.Parameters.AddWithValue("@ClientID", clientId);
-                var val = await cmd.ExecuteScalarAsync();
-                if (val == null || val == DBNull.Value) return false;
-                return await QualSurnameModuleHelper.MarkWorkspaceSavedAsync(connection, Convert.ToInt32(val));
-            }
-            catch { return false; }
+                Success               = true,
+                ClinicaltechRecordCount = ctCount,
+                ProductionRecordCount   = prodCount,
+                TotalValidated        = total,
+                DisplayedCount        = rows.Count,
+                PassCount             = passed,
+                FailCount             = failed,
+                ExceptionRate         = rate,
+                Status                = overallStatus,
+                Timestamp             = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                ClinicaltechTable     = request.ClinicaltechTable,
+                ProductionTable       = request.ProductionTable,
+                QualificationColumn   = qualCol,
+                SurnameColumn         = surnameCol,
+                TableLinkageText      = $"{request.ClinicaltechTable}.{qualCol} <> {request.ProductionTable}.{qualCol}",
+                RuleModeText          = $"100% population testing of {request.ClinicaltechTable} against {request.ProductionTable}",
+                ProcedureSteps        = new List<string>
+                {
+                    $"Select all records from {request.ClinicaltechTable} where [{qualCol}] is not null/empty as the population to test.",
+                    $"For each record, check if a matching row exists in {request.ProductionTable} on [{qualCol}] (case-insensitive, trimmed).",
+                    "Mark PASS when the qualification code is found in Production; FAIL when it is missing.",
+                    "The matching Production surname (when found) is shown alongside the result for reference."
+                },
+                ClientId              = request.ClientId,
+                ControlSummaries      = controlSummaries,
+                ReviewRows            = rows,
+                Warning = total > rows.Count
+                    ? $"{total:N0} rows were found; only the first {rows.Count:N0} are stored to keep the app responsive. All totals above are exact."
+                    : null
+            };
         }
 
-        public async Task<ClinicalTechValidationSummary?> GetFullSummaryByRunIdAsync(int runId)
+        private static void EnrichDisplayValues(ClinicalTechValidationRowRecord row)
         {
-            try
+            var v = row.DisplayValues;
+            var isPass = string.Equals(row.ValidationResult, "PASS", StringComparison.OrdinalIgnoreCase);
+            var qual = v.TryGetValue("SOURCE_QUAL", out var q) ? q ?? "" : "";
+            var surname = v.TryGetValue("SOURCE_SURNAME", out var s) ? s ?? "" : "";
+
+            v["FINAL_RESULT_MESSAGE"] = isPass
+                ? $"PASS: qualification '{qual}' (surname: {surname}) found in Production."
+                : $"FAIL: qualification '{qual}' (surname: {surname}) not found in Production.";
+            row.ValidationExplanation = v["FINAL_RESULT_MESSAGE"] ?? "";
+        }
+
+        private static ClinicalTechValidationSummary ApplyUiSample(ClinicalTechValidationSummary full)
+        {
+            if (full.ReviewRows.Count <= UiSampleLimit) return full;
+            return new ClinicalTechValidationSummary
             {
-                if (runId <= 0) return null;
-                await using var connection = await OpenSystemConnectionAsync();
-                await using var cmd = connection.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT ResultsJSON FROM dbo.ValidationRuns WHERE RunID = @RunID;";
-                cmd.Parameters.AddWithValue("@RunID", runId);
-                var val = await cmd.ExecuteScalarAsync();
-                if (val == null || val == DBNull.Value) return null;
-                return JsonConvert.DeserializeObject<ClinicalTechValidationSummary>(ValidationPayloadCodec.Decode(val.ToString()!));
-            }
-            catch { return null; }
+                Success = full.Success, ClinicaltechRecordCount = full.ClinicaltechRecordCount, ProductionRecordCount = full.ProductionRecordCount,
+                TotalValidated = full.TotalValidated, DisplayedCount = full.DisplayedCount,
+                PassCount = full.PassCount, FailCount = full.FailCount, ExceptionRate = full.ExceptionRate,
+                Status = full.Status, Timestamp = full.Timestamp,
+                ClinicaltechTable = full.ClinicaltechTable, ProductionTable = full.ProductionTable,
+                QualificationColumn = full.QualificationColumn, SurnameColumn = full.SurnameColumn,
+                TableLinkageText = full.TableLinkageText, RuleModeText = full.RuleModeText,
+                ProcedureSteps = full.ProcedureSteps, ClientId = full.ClientId, SavedRunId = full.SavedRunId,
+                ControlSummaries = full.ControlSummaries,
+                ReviewRows = full.ReviewRows.Take(UiSampleLimit).ToList(),
+                Warning = "Showing preview (first 10 rows) — see stat cards above for full counts. Download for full results."
+            };
         }
 
-        // ── Helper methods ─────────────────────────────────────────────────────
+        // ─── SQL Builders ────────────────────────────────────────────────────────
 
-        private static string BuildConnectionString(string server, string database, string driver)
+        private static string BuildValidationCtes(string schema, string clinicaltechTable, string productionTable, string qualCol, string surnameCol)
         {
-            return $"Server={server};Database={database};Trusted_Connection=True;TrustServerCertificate=True;Encrypt=False;Connection Timeout=180;";
-        }
+            var ctTable = Sanitise(clinicaltechTable);
+            var prodTable = Sanitise(productionTable);
 
-        private static string BuildPopulationCountSql(string clinicalTechTable, string prodTable, string qualCol)
-        {
             return $@"
-SELECT
-    COUNT(*) AS TotalTested,
-    SUM(CASE WHEN PQ.ProdQualification IS NOT NULL THEN 1 ELSE 0 END) AS MatchedCount,
-    SUM(CASE WHEN PQ.ProdQualification IS NULL THEN 1 ELSE 0 END) AS MissingCount
-FROM (
-    SELECT DISTINCT
-        UPPER(LTRIM(RTRIM(CAST(CT.[{qualCol}] AS nvarchar(255))))) AS ClinicalQual
-    FROM [{clinicalTechTable}] CT
-    WHERE CT.[{qualCol}] IS NOT NULL AND CT.[{qualCol}] <> ''
-) CT
-LEFT JOIN (
-    SELECT DISTINCT
-        UPPER(LTRIM(RTRIM(CAST([{qualCol}] AS nvarchar(255))))) AS ProdQualification
-    FROM [{prodTable}]
-    WHERE [{qualCol}] IS NOT NULL AND [{qualCol}] <> ''
-) PQ ON CT.ClinicalQual = PQ.ProdQualification;";
+results AS (
+    SELECT
+        TRIM(CAST(ct.""{qualCol}"" AS text)) AS source_qual,
+        TRIM(CAST(ct.""{surnameCol}"" AS text)) AS source_surname,
+        (
+            SELECT TRIM(CAST(p.""{surnameCol}"" AS text))
+            FROM ""{schema}"".""{prodTable}"" p
+            WHERE UPPER(TRIM(CAST(p.""{qualCol}"" AS text))) = UPPER(TRIM(CAST(ct.""{qualCol}"" AS text)))
+            LIMIT 1
+        ) AS matched_surname,
+        CASE
+            WHEN EXISTS (
+                SELECT 1 FROM ""{schema}"".""{prodTable}"" p
+                WHERE UPPER(TRIM(CAST(p.""{qualCol}"" AS text))) = UPPER(TRIM(CAST(ct.""{qualCol}"" AS text)))
+            ) THEN 'PASS' ELSE 'FAIL'
+        END AS validation_result
+    FROM ""{schema}"".""{ctTable}"" ct
+    WHERE ct.""{qualCol}"" IS NOT NULL AND TRIM(CAST(ct.""{qualCol}"" AS text)) <> ''
+)";
         }
 
-        private static async Task<int> CountAsync(SqlConnection conn, string sql)
+        public string GenerateSql(ClinicalTechValidationRequest request)
         {
-            await using var cmd = conn.CreateConfiguredCommand();
-            cmd.CommandText = sql;
-            var result = await cmd.ExecuteScalarAsync();
-            return result is int count ? count : 0;
+            var qualCol = Sanitise(request.QualificationColumn);
+            var surnameCol = Sanitise(request.SurnameColumn);
+            var ctes = BuildValidationCtes("{schema}", request.ClinicaltechTable, request.ProductionTable, qualCol, surnameCol);
+
+            return $@"-- ============================================================
+-- HEMIS RULE 69 - ClinicalTech Qualification & Surname Validation
+-- Generated : {DateTime.Now:yyyy-MM-dd HH:mm:ss}
+-- Source    : this engagement's own uploaded tables (schema engagement_{{ClientId}}), not a live SQL Server.
+-- Check     : all {Sanitise(request.ClinicaltechTable)}.[{qualCol}] values must exist in {Sanitise(request.ProductionTable)}.[{qualCol}]
+-- ============================================================
+WITH {ctes}
+SELECT * FROM results
+ORDER BY CASE WHEN validation_result = 'FAIL' THEN 0 ELSE 1 END, source_qual;".Trim();
         }
 
-        private static int GetInt(SqlDataReader reader, int ordinal) =>
-            reader.IsDBNull(ordinal) ? 0 : reader.GetInt32(ordinal);
+        // ─── Save / Load ───────────────────────────────────────────────────────
 
-        private static string Sanitise(string? objectName)
+        private async Task<int> SaveValidationRunAsync(ClinicalTechValidationRequest request, ClinicalTechValidationSummary summary, string? userEmail, string? userName)
         {
-            if (string.IsNullOrWhiteSpace(objectName))
-                return "";
-            var trimmed = objectName.Trim().Replace("'", "").Replace("\"", "");
-            return trimmed.Length > 128 ? trimmed[..128] : trimmed;
-        }
+            await _systemDb.EnsureClientNotArchivedAsync(request.ClientId);
+            await _systemDb.MarkPreviousRuleRunsHistoricalAsync(request.ClientId, 69);
 
-        private static void ValidateObjectName(string? objectName)
-        {
-            if (string.IsNullOrWhiteSpace(objectName))
-                throw new ArgumentException("Object name cannot be empty.");
-            if (objectName.Length > 128)
-                throw new ArgumentException("Object name cannot exceed 128 characters.");
-        }
-
-        private static void ValidateRequest(ClinicalTechVerifyRequest request)
-        {
-            if (string.IsNullOrWhiteSpace(request.Server))
-                throw new ArgumentException("Server must be specified.");
-            if (string.IsNullOrWhiteSpace(request.Database))
-                throw new ArgumentException("Database must be specified.");
-            if (string.IsNullOrWhiteSpace(request.ClinicaltechTable))
-                throw new ArgumentException("ClinicaltechTable must be specified.");
-            if (string.IsNullOrWhiteSpace(request.ProductionTable))
-                throw new ArgumentException("ProductionTable must be specified.");
-        }
-
-        private static void ValidateRequest(ClinicalTechValidationRequest request)
-        {
-            if (string.IsNullOrWhiteSpace(request.Server))
-                throw new ArgumentException("Server must be specified.");
-            if (string.IsNullOrWhiteSpace(request.Database))
-                throw new ArgumentException("Database must be specified.");
-            if (string.IsNullOrWhiteSpace(request.ClinicaltechTable))
-                throw new ArgumentException("ClinicaltechTable must be specified.");
-            if (string.IsNullOrWhiteSpace(request.ProductionTable))
-                throw new ArgumentException("ProductionTable must be specified.");
-        }
-
-        private static string? FindFirst(List<string> items, string[] preferred, string[] contains)
-        {
-            foreach (var p in preferred)
-                if (items.Any(i => i.Equals(p, StringComparison.OrdinalIgnoreCase)))
-                    return items.First(i => i.Equals(p, StringComparison.OrdinalIgnoreCase));
-
-            foreach (var c in contains)
-                if (items.Any(i => i.Contains(c, StringComparison.OrdinalIgnoreCase)))
-                    return items.First(i => i.Contains(c, StringComparison.OrdinalIgnoreCase));
-
-            return null;
-        }
-
-        private static ClinicalTechValidationSummary CloneSummary(ClinicalTechValidationSummary summary)
-        {
-            return JsonConvert.DeserializeObject<ClinicalTechValidationSummary>(
-                JsonConvert.SerializeObject(summary)) ?? new ClinicalTechValidationSummary();
-        }
-
-        private static ClinicalTechValidationRequest CloneRequest(ClinicalTechValidationRequest request)
-        {
-            return JsonConvert.DeserializeObject<ClinicalTechValidationRequest>(
-                JsonConvert.SerializeObject(request)) ?? new ClinicalTechValidationRequest();
-        }
-
-        private async Task<int> SaveValidationRunAsync(ClinicalTechValidationRequest request, ClinicalTechValidationSummary summary, string? userEmail, string? userName, bool markWorkspaceSaved)
-        {
-            await using var connection = await OpenSystemConnectionAsync();
-            await EnsureClientNotArchivedAsync(connection, request.ClientId);
-            await MarkPreviousRunsHistoricalAsync(connection, request.ClientId, 69);
-
-            var systemUserId = await GetSystemUserIdByEmailAsync(connection, userEmail);
-            if (!systemUserId.HasValue)
-                throw new InvalidOperationException("The current analyst could not be resolved in the system database.");
-
-            var previousHash = await GetLatestValidationHashAsync(connection, request.ClientId, 69);
-
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-INSERT INTO dbo.ValidationRuns
-(ClientID, UserID, RuleNumber, RuleName, Status, TotalRecords, PassCount, FailCount, ExceptionRate, RunTimestamp,
- HemisServer, AuditDatabase, StudTable, DeceasedTable, StudColumn, DeceasedColumn,
- ExceptionsJSON, ResultsJSON, RunByUserName, LastEditedByUserName, LastEditedAt, PreviousHash, RecordHash, IsCurrent)
-VALUES
-(@ClientID, @UserID, 69, @RuleName, @Status, @TotalRecords, @PassCount, @FailCount, @ExceptionRate, GETDATE(),
- @HemisServer, @AuditDatabase, @StudTable, @DeceasedTable, @StudColumn, @DeceasedColumn,
- @ExceptionsJSON, @ResultsJSON, @RunByUserName, NULL, NULL, @PreviousHash, NULL, 1);
-SELECT CAST(SCOPE_IDENTITY() AS int);";
-            command.Parameters.AddWithValue("@ClientID", request.ClientId);
-            command.Parameters.AddWithValue("@UserID", systemUserId.Value);
-            command.Parameters.AddWithValue("@RuleName", "ClinicalTech Qualification Validation");
-            command.Parameters.AddWithValue("@Status", summary.Status ?? "");
-            command.Parameters.AddWithValue("@TotalRecords", summary.TotalValidated);
-            command.Parameters.AddWithValue("@PassCount", summary.PassCount);
-            command.Parameters.AddWithValue("@FailCount", summary.FailCount);
-            command.Parameters.AddWithValue("@ExceptionRate", summary.ExceptionRate);
-            command.Parameters.AddWithValue("@HemisServer", request.Server);
-            command.Parameters.AddWithValue("@AuditDatabase", request.Database);
-            command.Parameters.AddWithValue("@StudTable", request.ClinicaltechTable);
-            command.Parameters.AddWithValue("@DeceasedTable", request.ProductionTable);
-            command.Parameters.AddWithValue("@StudColumn", request.QualificationColumn);
-            command.Parameters.AddWithValue("@DeceasedColumn", request.SurnameColumn);
-            command.Parameters.AddWithValue("@ExceptionsJSON", ValidationPayloadCodec.Encode(
-                JsonConvert.SerializeObject(summary.ReviewRows.Where(r => r.Status == "FAIL").ToList())));
-            command.Parameters.AddWithValue("@ResultsJSON", ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary)));
-            command.Parameters.AddWithValue("@RunByUserName", (object?)userName ?? DBNull.Value);
-            command.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-
-            var value = await command.ExecuteScalarAsync();
-            var runId = Convert.ToInt32(value);
-
-            await using var hashCommand = connection.CreateConfiguredCommand();
-            hashCommand.CommandText = "UPDATE dbo.ValidationRuns SET RecordHash = @RecordHash WHERE RunID = @RunID;";
-            hashCommand.Parameters.AddWithValue("@RunID", runId);
-            hashCommand.Parameters.AddWithValue("@RecordHash", ComputeHash(
-                $"ClinicalTech|{runId}|{request.ClientId}|{systemUserId.Value}|{summary.Status}|{summary.TotalValidated}|{summary.PassCount}|{summary.FailCount}|{summary.ExceptionRate}|{previousHash}"));
-            await hashCommand.ExecuteNonQueryAsync();
+            var runId = await _systemDb.SaveValidationRunAsync(new SaveValidationRunRequest
+            {
+                ClientId = request.ClientId,
+                RuleNumber = 69,
+                RuleName = "ClinicalTech Qualification & Surname Validation",
+                Status = summary.Status,
+                TotalRecords = summary.TotalValidated,
+                PassCount = summary.PassCount,
+                FailCount = summary.FailCount,
+                ExceptionRate = summary.ExceptionRate,
+                StudTable = request.ClinicaltechTable,
+                DeceasedTable = request.ProductionTable,
+                StudColumn = request.QualificationColumn,
+                DeceasedColumn = request.SurnameColumn,
+                ExceptionsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(
+                    summary.ReviewRows.Where(r => string.Equals(r.ValidationResult, "FAIL", StringComparison.OrdinalIgnoreCase)).ToList())),
+                ResultsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary))
+            }, userEmail, userName);
 
             return runId;
         }
 
-        private async Task<SqlConnection> OpenSystemConnectionAsync()
+        public async Task<int?> GetClientIdForRunAsync(int runId) => await _systemDb.GetClientIdForRunAsync(runId);
+
+        public async Task<ClinicalTechValidationSummary?> GetStoredSummaryAsync(int runId)
         {
-            var server = _configuration["SystemDatabase:Server"] ?? @"(localdb)\MSSQLLocalDB";
-            var database = _configuration["SystemDatabase:Name"] ?? "HEMISBaseSystem";
-            var trust = _configuration.GetValue("SystemDatabase:TrustServerCertificate", true);
-            var builder = new SqlConnectionStringBuilder
+            var row = await _systemDb.GetRuleRunByIdAsync(runId, 69);
+            if (row == null) return null;
+            var summary = DeserializeSummary(row.ResultsJSON);
+            if (summary != null) summary.SavedRunId = runId;
+            return summary;
+        }
+
+        public async Task<ClinicalTechWorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null)
+        {
+            var row = await _systemDb.GetCurrentRuleRunAsync(clientId, 69);
+            if (row == null) return null;
+
+            var summary = DeserializeSummary(row.ResultsJSON);
+            if (summary != null) summary = ApplyUiSample(summary);
+
+            var workspace = new ClinicalTechWorkspaceStateViewModel
             {
-                DataSource = server, InitialCatalog = database, IntegratedSecurity = true,
-                TrustServerCertificate = trust, Encrypt = false, ConnectTimeout = 180
+                ClientId = row.ClientId,
+                RunId = row.RunId,
+                ClinicaltechTable = string.IsNullOrWhiteSpace(row.StudTable) ? "Clinicaltech" : row.StudTable,
+                ProductionTable = string.IsNullOrWhiteSpace(row.DeceasedTable) ? "Clinical_Production" : row.DeceasedTable,
+                QualificationColumn = string.IsNullOrWhiteSpace(row.StudColumn) ? "QUALIFICATION" : row.StudColumn,
+                SurnameColumn = string.IsNullOrWhiteSpace(row.DeceasedColumn) ? "Surname" : row.DeceasedColumn,
+                CurrentStatus = row.Status,
+                LastEditedByUserName = row.LastEditedByUserName,
+                LastEditedAt = row.LastEditedAt,
+                Summary = summary
             };
-            var connection = new SqlConnection(builder.ConnectionString);
+
+            if (summary != null) workspace.CurrentStatus = summary.Status;
+
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            workspace.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(clientId, currentUser.Id) ?? ""
+                : "";
+
+            var signoffs = await _systemDb.GetRuleRunSignoffsAsync(workspace.RunId!.Value, currentUser?.Id);
+            workspace.HasDataAnalystSignoff = signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+            var mySignoff = signoffs.FirstOrDefault(s => ValidationRunAccessPolicy.IsSignoffOwnedByEngagementRole(s.SignoffRole, workspace.CurrentUserEngagementRole));
+            workspace.CurrentUserHasSignedOff = mySignoff != null;
+            workspace.CurrentUserSignoffComment = mySignoff?.Comment ?? "";
+            workspace.IsWorkspaceSaved = await _systemDb.IsWorkspaceSavedAsync(workspace.RunId!.Value);
+
+            if (workspace.Summary != null) workspace.Summary.SavedRunId = workspace.RunId;
+            return workspace;
+        }
+
+        public async Task<ClinicalTechRunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null)
+        {
+            var row = await _systemDb.GetRuleRunByIdAsync(runId, 69);
+            if (row == null) return null;
+
+            var summary = DeserializeSummary(row.ResultsJSON);
+            if (summary == null) return null;
+            summary = ApplyUiSample(summary);
+            summary.SavedRunId = runId;
+
+            var viewModel = new ClinicalTechRunReviewViewModel
+            {
+                RunId = row.RunId,
+                ClientId = row.ClientId,
+                IsCurrentRun = row.IsCurrent,
+                EngagementName = row.EngagementName,
+                MaconomyNumber = row.MaconomyNumber,
+                Summary = summary
+            };
+
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            viewModel.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(viewModel.ClientId, currentUser.Id) ?? ""
+                : "";
+            viewModel.Signoffs = await _systemDb.GetRuleRunSignoffsAsync(runId, currentUser?.Id);
+            viewModel.HasDataAnalystSignoff = viewModel.Signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+            viewModel.GeneratedSql = GenerateSql(new ClinicalTechValidationRequest
+            {
+                ClientId = viewModel.ClientId,
+                ClinicaltechTable = summary.ClinicaltechTable,
+                ProductionTable = summary.ProductionTable,
+                QualificationColumn = summary.QualificationColumn,
+                SurnameColumn = summary.SurnameColumn
+            });
+
+            return viewModel;
+        }
+
+        public async Task<ClinicalTechWorkspaceSaveResult> SaveWorkspaceAsync(ClinicalTechValidationRequest request, string reviewerEmail, string? reviewerName = null)
+        {
+            try
+            {
+                if (request.RunId is null || request.RunId <= 0)
+                    return new ClinicalTechWorkspaceSaveResult { Success = false, Error = "Run the validation first." };
+
+                var clientId = await _systemDb.GetClientIdForRunAsync(request.RunId.Value);
+                if (!clientId.HasValue || clientId.Value != request.ClientId)
+                    return new ClinicalTechWorkspaceSaveResult { Success = false, Error = "The saved run could not be found for this engagement." };
+
+                await _systemDb.EnsureClientNotArchivedAsync(request.ClientId);
+                var cleared = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(request.RunId.Value);
+
+                await _systemDb.SaveRuleWorkspaceFieldsAsync(new SaveRuleWorkspaceFieldsRequest
+                {
+                    RunId = request.RunId.Value,
+                    ClientId = request.ClientId,
+                    StudTable = request.ClinicaltechTable,
+                    DeceasedTable = request.ProductionTable,
+                    StudColumn = request.QualificationColumn,
+                    DeceasedColumn = request.SurnameColumn
+                }, reviewerName ?? reviewerEmail);
+
+                var workspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail);
+                return new ClinicalTechWorkspaceSaveResult
+                {
+                    Success = true,
+                    Message = cleared > 0 ? $"Workspace saved. {cleared} signoff(s) were cleared." : "Workspace saved.",
+                    SignoffsCleared = cleared > 0,
+                    ClearedSignoffCount = cleared,
+                    Workspace = workspace
+                };
+            }
+            catch (Exception ex) { return new ClinicalTechWorkspaceSaveResult { Success = false, Error = ex.Message }; }
+        }
+
+        public async Task<ClinicalTechWorkspaceSaveResult> BeginWorkspaceEditAsync(int runId, string reviewerEmail, string? reviewerName = null)
+        {
+            try
+            {
+                var clientId = await _systemDb.GetClientIdForRunAsync(runId);
+                if (!clientId.HasValue)
+                    return new ClinicalTechWorkspaceSaveResult { Success = false, Error = "Saved run not found." };
+
+                await _systemDb.EnsureClientNotArchivedAsync(clientId.Value);
+                var cleared = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(runId);
+                await _systemDb.MarkRuleWorkspaceEditStartedAsync(runId, reviewerName ?? reviewerEmail);
+
+                var workspace = await GetCurrentWorkspaceStateAsync(clientId.Value, reviewerEmail);
+                return new ClinicalTechWorkspaceSaveResult
+                {
+                    Success = true,
+                    Message = cleared > 0 ? $"Workspace unlocked for editing. {cleared} signoff(s) cleared." : "Workspace unlocked for editing.",
+                    SignoffsCleared = cleared > 0,
+                    ClearedSignoffCount = cleared,
+                    Workspace = workspace
+                };
+            }
+            catch (Exception ex) { return new ClinicalTechWorkspaceSaveResult { Success = false, Error = ex.Message }; }
+        }
+
+        public async Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment)
+        {
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
+                ?? throw new InvalidOperationException("Your account could not be resolved in the system database.");
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
+                ?? throw new InvalidOperationException("Validation run not found.");
+
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
+
+            if (!await _systemDb.RuleWorkspaceReadyForSignoffAsync(runId))
+                throw new InvalidOperationException("The data analyst must save the workspace before signoff is available.");
+
+            var role = await _systemDb.GetRawEngagementRoleAsync(clientId, reviewer.Id);
+            if (!CanSignOffAsRole(role))
+                throw new InvalidOperationException("Only assigned data analysts, managers, and directors can sign off.");
+
+            if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) &&
+                !await _systemDb.HasRuleSignoffRoleAsync(runId, "DataAnalyst"))
+                throw new InvalidOperationException("The assigned data analyst must sign off first.");
+
+            await _systemDb.AddOrUpdateRuleSignoffAsync(runId, clientId, reviewer.Id, role!, comment);
+        }
+
+        public async Task RemoveSignoffAsync(int runId, string reviewerEmail)
+        {
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
+                ?? throw new InvalidOperationException("Your account could not be resolved.");
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
+                ?? throw new InvalidOperationException("Validation run not found.");
+
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
+            await _systemDb.RemoveRuleSignoffByReviewerAsync(runId, reviewer.Id);
+        }
+
+        // ─── Utilities ─────────────────────────────────────────────────────────
+
+        private static string Sanitise(string name) => name.Replace("\"", "").Replace("'", "").Replace(";", "").Trim();
+
+        private static string? GetString(System.Data.Common.DbDataReader reader, int ordinal)
+        {
+            if (reader.IsDBNull(ordinal)) return null;
+            var value = Convert.ToString(reader.GetValue(ordinal));
+            return string.IsNullOrEmpty(value) ? null : value;
+        }
+
+        private static async Task<int> CountAsync(NpgsqlConnection conn, string sql)
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
+        // Column names come from defaults or a previously-saved workspace and may not match this
+        // engagement's actual uploaded table - check before querying so a mismatch surfaces as a
+        // clear message instead of a raw Postgres "column does not exist" error.
+        private async Task ValidateColumnsExistAsync(int clientId, string tableName, IEnumerable<string> requiredColumns)
+        {
+            var actual = await _datasets.GetValidatedColumnsAsync(clientId, tableName);
+            var missing = requiredColumns.Where(c => !string.IsNullOrWhiteSpace(c) && !actual.Contains(c, StringComparer.OrdinalIgnoreCase)).Distinct().ToList();
+            if (missing.Count > 0)
+                throw new InvalidOperationException(
+                    $"Column(s) {string.Join(", ", missing.Select(m => $"\"{m}\""))} were not found in table \"{tableName}\". " +
+                    "Update the column mapping to match your uploaded data, then run again.");
+        }
+
+        private static string? FindFirst(IEnumerable<string> values, string[] exactMatches, string[] containsMatches)
+        {
+            foreach (var exact in exactMatches)
+            {
+                var m = values.FirstOrDefault(v => string.Equals(v, exact, StringComparison.OrdinalIgnoreCase));
+                if (m != null) return m;
+            }
+            foreach (var fragment in containsMatches)
+            {
+                var m = values.FirstOrDefault(v => v.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0);
+                if (m != null) return m;
+            }
+            return null;
+        }
+
+        private static ClinicalTechValidationSummary? DeserializeSummary(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return null;
+            try { return JsonConvert.DeserializeObject<ClinicalTechValidationSummary>(ValidationPayloadCodec.Decode(json)); }
+            catch { return null; }
+        }
+
+        private static bool CanSignOffAsRole(string? role) =>
+            string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(role, "Manager", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(role, "Director", StringComparison.OrdinalIgnoreCase);
+
+        private async Task<(NpgsqlConnection Connection, string Schema)> OpenEngagementConnectionAsync(int clientId)
+        {
+            var database = await _datasets.GetDatabaseAsync(clientId)
+                ?? throw new InvalidOperationException("Create a database for this engagement before running this rule.");
+
+            var connectionString = HemisAudit.Data.PostgresConnectionStringHelper.WithResiliencyDefaults(
+                _configuration.GetConnectionString("Postgres")
+                    ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured."),
+                commandTimeoutSeconds: 0);
+
+            var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();
-            return connection;
-        }
-
-        private static async Task<int?> GetSystemUserIdByEmailAsync(SqlConnection connection, string? email)
-        {
-            if (string.IsNullOrWhiteSpace(email)) return null;
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 UserID FROM dbo.Users WHERE Email = @Email;";
-            command.Parameters.AddWithValue("@Email", email);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToInt32(value);
-        }
-
-        private static async Task EnsureClientNotArchivedAsync(SqlConnection connection, int clientId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 Status FROM dbo.Clients WHERE ClientID = @ClientID;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            var status = Convert.ToString(await command.ExecuteScalarAsync());
-            if (string.Equals(status, "Archived", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Archived engagements are read-only.");
-        }
-
-        private static async Task MarkPreviousRunsHistoricalAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"UPDATE dbo.ValidationRuns SET IsCurrent = 0
-WHERE ClientID = @ClientID AND RuleNumber = @RuleNumber AND IsCurrent = 1;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private static async Task<string?> GetLatestValidationHashAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"SELECT TOP 1 RecordHash FROM dbo.ValidationRuns
-WHERE ClientID = @ClientID AND RuleNumber = @RuleNumber AND RecordHash IS NOT NULL
-ORDER BY RunTimestamp DESC, RunID DESC;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToString(value);
-        }
-
-        public async Task AddOrUpdateSignoffAsync(int runId, string email, string comment)
-        {
-            await using var connection = await OpenSystemConnectionAsync();
-            var clientId = await QualSurnameModuleHelper.GetClientIdForRunAsync(connection, runId)
-                ?? throw new InvalidOperationException("Validation run was not found.");
-            var userId = await GetSystemUserIdByEmailAsync(connection, email)
-                ?? throw new InvalidOperationException("Reviewer could not be resolved in the system database.");
-            var role = await QualSurnameModuleHelper.GetEngagementRoleAsync(connection, clientId, userId)
-                ?? throw new InvalidOperationException("User is not assigned to this engagement.");
-            await QualSurnameModuleHelper.AddOrUpdateSignoffAsync(connection, runId, clientId, userId, role, comment);
-        }
-
-        public async Task RemoveSignoffAsync(int runId, string email)
-        {
-            await using var connection = await OpenSystemConnectionAsync();
-            var clientId = await QualSurnameModuleHelper.GetClientIdForRunAsync(connection, runId)
-                ?? throw new InvalidOperationException("Validation run was not found.");
-            var userId = await GetSystemUserIdByEmailAsync(connection, email)
-                ?? throw new InvalidOperationException("Reviewer could not be resolved in the system database.");
-            var role = await QualSurnameModuleHelper.GetEngagementRoleAsync(connection, clientId, userId)
-                ?? throw new InvalidOperationException("User is not assigned to this engagement.");
-            await QualSurnameModuleHelper.RemoveSignoffAsync(connection, runId, role);
-        }
-
-        private static string ComputeHash(string input)
-        {
-            using var sha = SHA256.Create();
-            return Convert.ToHexString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(input)));
+            await using (var setTimeout = connection.CreateCommand())
+            {
+                setTimeout.CommandText = "SET statement_timeout = 0;";
+                await setTimeout.ExecuteNonQueryAsync();
+            }
+            var schema = string.IsNullOrWhiteSpace(database.SchemaName) ? $"engagement_{clientId}" : database.SchemaName;
+            return (connection, schema);
         }
     }
 }

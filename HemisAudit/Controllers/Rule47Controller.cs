@@ -99,17 +99,13 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule47.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule47.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule47.GetTablesAsync(model.Server, model.Database, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] Rule41GetColumnsRequest model) =>
+        public async Task<IActionResult> GetColumns([FromBody] Rule16ColumnsRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule47.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName)));
+                await _rule47.GetColumnsAsync(model.ClientId, model.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule41VerifyRequest request) =>
@@ -151,7 +147,7 @@ namespace HemisAudit.Controllers
                     this,
                     HttpContext.RequestServices.GetRequiredService<IValidationOperationService>(),
                     ValidationOperationHttpHelper.ResolveOwnerKey(User),
-                    "Rule 47 validation",
+                    "Rule 41 validation",
                     async (sp, ct) => await ExecuteAsync(
                         sp.GetRequiredService<IRule47Service>(),
                         sp.GetRequiredService<IAuditLogService>()));
@@ -300,7 +296,7 @@ namespace HemisAudit.Controllers
             var review = await _rule47.GetSavedRunAsync(runId, user?.Email);
             if (review == null || !await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
                 return NotFound();
-            var bytes = BuildExcelExport(review.Summary!);
+            var bytes = _export.ExportRule41FamilyExcel(review.Summary!, "HEMIS RULE 47 - QUAL vs H16QUAL Agreement", "QUAL", "H16QUAL");
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule47_QUAL_H16QUAL_Agreement_Run_{runId}.xlsx");
         }
@@ -344,24 +340,11 @@ namespace HemisAudit.Controllers
 
         // Ã¢â€â‚¬Ã¢â€â‚¬ Private helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
-        private static byte[] BuildExcelExport(Rule41ValidationSummary summary)
-        {
-            using var ms = new System.IO.MemoryStream();
-            using var sw = new System.IO.StreamWriter(ms, System.Text.Encoding.UTF8);
-            sw.WriteLine("HEMIS RULE 47 Ã¢â‚¬â€œ QUAL vs H16QUAL Agreement");
-            sw.WriteLine($"Database: {summary.Database}  |  Timestamp: {summary.Timestamp}");
-            sw.WriteLine();
-            WriteReconcCsv(sw, summary.Reconc);
-            sw.Flush();
-            return ms.ToArray();
-        }
-
         private static byte[] BuildCsvExport(Rule41ValidationSummary summary, bool exceptionsOnly)
         {
             using var ms = new System.IO.MemoryStream();
             using var sw = new System.IO.StreamWriter(ms, System.Text.Encoding.UTF8);
-            sw.WriteLine($"\"HEMIS RULE 47 Ã¢â‚¬â€œ {(exceptionsOnly ? "Exceptions" : "All Results")}\"");
-            sw.WriteLine($"\"Database\",\"{summary.Database}\"");
+            sw.WriteLine($"\"HEMIS RULE 47 - {(exceptionsOnly ? "Exceptions" : "All Results")}\"");
             sw.WriteLine($"\"Timestamp\",\"{summary.Timestamp}\"");
             sw.WriteLine();
             WriteReconcCsv(sw, summary.Reconc, exceptionsOnly);
@@ -371,13 +354,13 @@ namespace HemisAudit.Controllers
 
         private static void WriteReconcCsv(System.IO.StreamWriter sw, Rule41ReconciliationSummary reconc, bool exceptionsOnly = false)
         {
-            sw.WriteLine($"\"QUAL vs H16QUAL Reconciliation\"");
-            sw.WriteLine($"\"QUAL Table\",\"{reconc.StudTable}\"  \"H16QUAL Table\",\"{reconc.AuditTable}\"");
+            sw.WriteLine($"\"STUD vs MT-Audit Reconciliation\"");
+            sw.WriteLine($"\"STUD Table\",\"{reconc.StudTable}\"  \"Audit Table\",\"{reconc.H16Table}\"");
             sw.WriteLine($"\"Total\",{reconc.TotalCount}  \"Agree\",{reconc.AgreeCount}  \"Disagree\",{reconc.DisagreeCount}  \"Missing\",{reconc.MissingCount}  \"Exception Rate\",{reconc.ExceptionRate:0.00}%");
 
             var labels = reconc.Pairs.Select(p => p.Label).ToList();
-            sw.WriteLine("\"Row_No\",\"Qual_Ref\"," +
-                string.Join(",", labels.Select(l => $"\"QUAL_{l}\",\"H16QUAL_{l}\",\"MATCH_{l}\"")) +
+            sw.WriteLine("\"Row_No\",\"Student_Ref\"," +
+                string.Join(",", labels.Select(l => $"\"STUD_{l}\",\"AUDIT_{l}\",\"MATCH_{l}\"")) +
                 ",\"Overall_Result\",\"Disagree_Detail\"");
 
             var rows = exceptionsOnly ? reconc.ExceptionRows : reconc.ExceptionRows.Concat(reconc.Rows);
@@ -388,7 +371,7 @@ namespace HemisAudit.Controllers
                 foreach (var lbl in labels)
                 {
                     if (row.Fields.TryGetValue(lbl, out var fv))
-                        line.Append($"\"{fv.StudValue}\",\"{fv.AuditValue}\",\"{fv.Match}\",");
+                        line.Append($"\"{fv.StudValue}\",\"{fv.H16Value}\",\"{fv.Match}\",");
                     else
                         line.Append("\"Ã¢â‚¬â€\",\"Ã¢â‚¬â€\",\"Ã¢â‚¬â€\",");
                 }
@@ -400,11 +383,10 @@ namespace HemisAudit.Controllers
         private static Rule41ValidationRequest BuildRequestFromSummary(Rule41ValidationSummary s) =>
             new()
             {
-                Database   = s.Database,
                 StudTable  = s.StudTable,
-                AuditTable = s.AuditTable,
+                H16Table = s.H16Table,
                 StudKey    = s.StudKey,
-                AuditKey   = s.AuditKey,
+                H16Key   = s.H16Key,
                 Pairs      = s.Reconc.Pairs
             };
 

@@ -1,6 +1,6 @@
 ﻿@using HemisAudit.Models
 @{
-    ViewData["Title"] = "Rule 48 – CRED vs H16CRED Agreement";
+    ViewData["Title"] = "Rule 48 – Student ASCII Agreement";
     Layout = "~/Views/Shared/_Layout.cshtml";
     var clients = ViewBag.Clients as List<Client> ?? new();
     var selectedClientId = ViewBag.ClientId is int cid ? cid : 0;
@@ -53,7 +53,7 @@
         <div>
             <h1 class="rule-header__title">HEMIS RULE 48: CRED vs H16CRED Agreement</h1>
             <p class="rule-header__sub">
-                Full outer reconciliation — <code>dbo_CRED</code> vs <code>H16CRED</code>.
+                Full outer reconciliation of <code>CRED</code> vs <code>H16CRED</code> (audit system).
                 Join key: <code>_001</code> (CRED) &harr; <code>_001</code> (H16CRED).
             </p>
         </div>
@@ -65,29 +65,15 @@
     <div class="accordion-stack">
         <div class="accordion-item">
             <button class="accordion-toggle" type="button" onclick="toggleAccordion('r48-conn')">
-                <span class="acc-icon">DB</span><span>Database Connection</span><span class="acc-chevron">v</span>
+                <span class="acc-icon">DB</span><span>Engagement Dataset</span><span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-r48-conn">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label for="r48Server">Server Name</label>
-                        <input id="r48Server" type="text" placeholder="SERVER\INSTANCE or (localdb)\MSSQLLocalDB" />
-                    </div>
-                    <div class="field-group">
-                        <label for="r48Driver">Driver</label>
-                        <select id="r48Driver">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group">
-                        <label for="r48Db">Database</label>
-                        <select id="r48Db" onchange="r48LoadTables()"></select>
-                    </div>
+                <div class="alert alert--info" id="r48DatasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
-                <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
-                    <button type="button" class="btn btn-primary" onclick="r48Connect()">Connect</button>
+                <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
+                    <a class="btn btn-secondary" id="r48DatasetsLink" href="#">Manage Datasets</a>
+                    <button type="button" class="btn btn-primary" onclick="r48LoadTables()">Refresh Tables</button>
                 </div>
                 <div id="r48ConnOut" class="status-output"></div>
             </div>
@@ -99,11 +85,11 @@
             </button>
             <div class="accordion-body" id="body-r48-tables" style="display:none">
                 <div class="info-box info-box--red" style="margin-bottom:12px">
-                    Tables auto-detected on connect. Both CRED and H16CRED use <code>_001</code> as the credential code join key.
+                    Tables auto-detected on connect. CRED and H16CRED both use <code>_001</code> as the credential code join key.
                 </div>
                 <div class="form-grid">
                     <div class="field-group">
-                        <label>CRED Table</label>
+                        <label>CRED Table (HEMIS ASCII)</label>
                         <select id="r48StudTable" onchange="r48LoadCols('stud',this.value)"></select>
                     </div>
                     <div class="field-group">
@@ -111,12 +97,20 @@
                         <select id="r48AuditTable" onchange="r48LoadCols('audit',this.value)"></select>
                     </div>
                     <div class="field-group">
-                        <label>CRED join key</label>
+                        <label>STUD join key</label>
                         <select id="r48StudKey"></select>
                     </div>
                     <div class="field-group">
                         <label>H16CRED join key</label>
                         <select id="r48AuditKey"></select>
+                    </div>
+                    <div class="field-group">
+                        <label>CRED secondary join key <small>(optional &mdash; set this when the primary key repeats, e.g. one row per qualification)</small></label>
+                        <select id="r48StudKey2"><option value="">None</option></select>
+                    </div>
+                    <div class="field-group">
+                        <label>H16CRED secondary join key <small>(optional)</small></label>
+                        <select id="r48AuditKey2"><option value="">None</option></select>
                     </div>
                 </div>
                 <div id="r48TableOut" class="status-output"></div>
@@ -129,8 +123,8 @@
             </button>
             <div class="accordion-body" id="body-r48-colmap" style="display:none">
                 <div class="alert alert--info" style="margin-bottom:12px">
-                    Map CRED columns to H16CRED columns for field-by-field comparison.
-                    Defaults: <code>_001, _030, _036, _065</code>. Connect to auto-populate dropdowns.
+                    Map STUD columns to Audit columns for field-by-field comparison. Defaults match the standard HEMIS layout.
+                    Connect and select a database to auto-populate.
                 </div>
                 <div id="r48ColPairs"></div>
                 <button type="button" class="btn btn-secondary" style="margin-top:8px;font-size:.82rem" onclick="r48AddPair()">&#65291; Add pair</button>
@@ -249,10 +243,10 @@ window.r48Tab = function(tab) {
     var TOKEN = (document.querySelector('#r48AntiForgery input[name="__RequestVerificationToken"]') || {}).value || '';
 
     var DEF_PAIRS = [
-        { studCol: '_001', auditCol: '_001', label: 'Credential Code' },
-        { studCol: '_030', auditCol: '_030', label: 'Course Code'     },
-        { studCol: '_036', auditCol: '_036', label: '_036'            },
-        { studCol: '_065', auditCol: '_065', label: '_065'            }
+        { studCol: '_001', h16Col: '_001', label: 'Credential Code' },
+        { studCol: '_030', h16Col: '_030', label: 'Course Code' },
+        { studCol: '_036', h16Col: '_036', label: '_036' },
+        { studCol: '_065', h16Col: '_065', label: '_065' }
     ];
 
     var st = {
@@ -301,110 +295,76 @@ window.r48Tab = function(tab) {
         b.className = 'rule-header__badge ' + (String(status).toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail');
     }
 
-    function makePair(sc, ac, lbl) {
-        var sCols = st.studCols; var aCols = st.auditCols;
-        var mkOpts = function(cols, cur) {
-            return (cols.length ? cols : (cur ? [cur] : [])).map(function(c) {
-                return '<option' + (c === cur ? ' selected' : '') + '>' + esc(c) + '</option>';
-            }).join('');
-        };
-        var div = document.createElement('div'); div.className = 'r48-pair-row';
-        div.innerHTML =
-            '<select class="sc">' + mkOpts(sCols, sc) + '</select>' +
-            '<span style="color:#999">&harr;</span>' +
-            '<select class="ac">' + mkOpts(aCols, ac) + '</select>' +
-            '<input class="lbl" type="text" value="' + esc(lbl) + '" placeholder="Label">' +
-            '<button class="r48-pair-del" onclick="this.closest(\'.r48-pair-row\').remove()">&#x2715;</button>';
-        return div;
+    /* ── Pair Management ── */
+    function renderPairs() {
+        var box = g('r48ColPairs'); if (!box) return;
+        box.innerHTML = '';
+        if (!st.pairs || !st.pairs.length) st.pairs = DEF_PAIRS.slice();
+        st.pairs.forEach(function(p, i) {
+            var row = document.createElement('div'); row.className = 'r48-pair-row';
+            row.innerHTML = '<span style="color:#888;font-size:.8rem">#' + (i + 1) + '</span>' +
+                '<input type="text" placeholder="STUD col" value="' + esc(p.studCol) + '" oninput="r48PairSet(' + i + ',\'studCol\',this.value)">' +
+                '<span style="color:#999">&harr;</span>' +
+                '<input type="text" placeholder="Audit col" value="' + esc(p.h16Col) + '" oninput="r48PairSet(' + i + ',\'h16Col\',this.value)">' +
+                '<input type="text" placeholder="Label" value="' + esc(p.label) + '" oninput="r48PairSet(' + i + ',\'label\',this.value)" style="max-width:130px">' +
+                '<button class="r48-pair-del" onclick="r48RemovePair(' + i + ')">&#x2715;</button>';
+            box.appendChild(row);
+        });
     }
 
-    function getPairs() {
-        var box = g('r48ColPairs'); if (!box) return [];
-        return Array.from(box.querySelectorAll('.r48-pair-row')).map(function(row) {
-            return {
-                studCol:  (row.querySelector('.sc') || {}).value || '',
-                auditCol: (row.querySelector('.ac') || {}).value || '',
-                label:    (row.querySelector('.lbl') || {}).value || ''
-            };
-        }).filter(function(p) { return p.studCol && p.auditCol; });
-    }
+    window.r48PairSet = function(i, key, val) { if (st.pairs[i]) st.pairs[i][key] = val; };
+    window.r48RemovePair = function(i) { st.pairs.splice(i, 1); renderPairs(); };
+    window.r48AddPair = function() { st.pairs.push({ studCol: '', h16Col: '', label: '' }); renderPairs(); };
 
-    function refreshSel(sel, cols) {
-        var cur = sel.value; sel.innerHTML = '';
-        (cols.length ? cols : (cur ? [cur] : [])).forEach(function(c) {
+    /* -- Table Loading (this engagement's uploaded datasets) -- */
+    window.r48LoadTables = function(options) {
+        options = options || {};
+        if (!st.clientId) return Promise.resolve(null);
+        spin('Loading tables...');
+        return post(API + '/GetTables', { clientId: st.clientId })
+        .then(function(d) {
+            unspin();
+            if (!d.success) {
+                setStatus('r48TableOut', d.error || 'Failed to load tables.', 'error');
+                var alertEl = g('r48DatasetStatusAlert');
+                if (alertEl) { alertEl.className = 'alert alert--error'; alertEl.textContent = d.error || 'Failed to load tables.'; }
+                return null;
+            }
+            var tables = d.tables || [];
+            fillSel('r48StudTable',  tables, options.preferredStudTable  || d.autoStudTable  || 'CRED');
+            fillSel('r48AuditTable', tables, options.preferredAuditTable || d.autoH16Table || 'H16CRED');
+            show('body-r48-tables', true); show('body-r48-colmap', true);
+            if (!options.silent) setStatus('r48TableOut', 'Loaded ' + tables.length + ' tables. STUD and Audit auto-detected.', 'success');
+            var alertEl2 = g('r48DatasetStatusAlert');
+            if (alertEl2) { alertEl2.className = 'alert alert--success'; alertEl2.textContent = 'Loaded ' + tables.length + " table(s) from this engagement's dataset."; }
+            if (!options.preservePairs) st.pairs = DEF_PAIRS.slice();
+            return Promise.all([
+                r48LoadColsInner('stud',  gv('r48StudTable'), options.preferredStudKey, options.preferredStudKey2),
+                r48LoadColsInner('audit', gv('r48AuditTable'), options.preferredAuditKey, options.preferredAuditKey2)
+            ]);
+        }).then(function() { renderPairs(); return true; })
+        .catch(function(e) { unspin(); setStatus('r48TableOut', e.message, 'error'); return null; });
+    };
+
+    function fillSecondaryKeySel(id, cols, preferred) {
+        var sel = g(id); if (!sel) return;
+        sel.innerHTML = '<option value="">None</option>';
+        (cols || []).forEach(function(c) {
             var o = document.createElement('option');
             o.value = o.textContent = c;
-            if (c === cur) o.selected = true;
+            if (preferred && preferred === c) o.selected = true;
             sel.appendChild(o);
         });
     }
 
-    function refreshPairSels() {
-        var box = g('r48ColPairs'); if (!box) return;
-        box.querySelectorAll('.r48-pair-row').forEach(function(row) {
-            var sc = row.querySelector('.sc'); if (sc) refreshSel(sc, st.studCols);
-            var ac = row.querySelector('.ac'); if (ac) refreshSel(ac, st.auditCols);
-        });
-    }
-
-    function renderPairs() {
-        var box = g('r48ColPairs'); if (!box) return;
-        var existing = st.pairs && st.pairs.length ? st.pairs : DEF_PAIRS.slice();
-        box.innerHTML = '';
-        existing.forEach(function(p) {
-            box.appendChild(makePair(p.studCol || p.StudCol, p.auditCol || p.AuditCol, p.label || p.Label));
-        });
-    }
-
-    window.r48AddPair = function() {
-        var box = g('r48ColPairs'); if (!box) return;
-        box.appendChild(makePair('', '', ''));
-    };
-
-    window.r48Connect = function() {
-        var server = gv('r48Server').trim();
-        if (!server) { setWs('Enter a server name first.', 'warning'); return; }
-        spin('Connecting to server...');
-        post(API + '/GetDatabases', { server: server, driver: gv('r48Driver') })
-        .then(function(d) {
-            unspin();
-            if (!d.success) { setStatus('r48ConnOut', d.error || 'Connection failed.', 'error'); return; }
-            fillSel('r48Db', d.databases || []);
-            setStatus('r48ConnOut', 'Connected — ' + (d.databases || []).length + ' database(s) found.', 'success');
-            if ((d.databases || []).length) r48LoadTables();
-        }).catch(function(e) { unspin(); setStatus('r48ConnOut', e.message, 'error'); });
-    };
-
-    window.r48LoadTables = function() {
-        var db = gv('r48Db'); if (!db) return;
-        spin('Loading tables...');
-        post(API + '/GetTables', { server: gv('r48Server').trim(), database: db, driver: gv('r48Driver') })
-        .then(function(d) {
-            unspin();
-            if (!d.success) { setStatus('r48TableOut', d.error || 'Failed to load tables.', 'error'); return; }
-            var tables = d.tables || [];
-            fillSel('r48StudTable',  tables, d.autoStudTable  || 'dbo_CRED');
-            fillSel('r48AuditTable', tables, d.autoAuditTable || 'H16CRED');
-            show('body-r48-tables', true); show('body-r48-colmap', true);
-            setStatus('r48TableOut', 'Loaded ' + tables.length + ' tables — CRED and H16CRED auto-detected.', 'success');
-            st.pairs = DEF_PAIRS.slice();
-            return Promise.all([
-                r48LoadColsInner('stud',  gv('r48StudTable')),
-                r48LoadColsInner('audit', gv('r48AuditTable'))
-            ]);
-        }).then(function() { renderPairs(); })
-        .catch(function(e) { unspin(); setStatus('r48TableOut', e.message, 'error'); });
-    };
-
-    function r48LoadColsInner(role, tableName) {
-        if (!tableName || !gv('r48Server') || !gv('r48Db')) return Promise.resolve();
-        return post(API + '/GetColumns', { server: gv('r48Server').trim(), database: gv('r48Db'), driver: gv('r48Driver'), tableName: tableName })
+    function r48LoadColsInner(role, tableName, preferredKey, preferredKey2) {
+        if (!tableName || !st.clientId) return Promise.resolve();
+        return post(API + '/GetColumns', { clientId: st.clientId, tableName: tableName })
         .then(function(d) {
             if (!d.success) return;
             var cols = d.columns || [];
-            if (role === 'stud')  { st.studCols  = cols; fillSel('r48StudKey',  cols, d.autoKey || '_001'); }
-            if (role === 'audit') { st.auditCols = cols; fillSel('r48AuditKey', cols, d.autoKey || '_001'); }
-            refreshPairSels();
+            if (role === 'stud')  { st.studCols  = cols; fillSel('r48StudKey',  cols, preferredKey || d.autoKey || '_007'); fillSecondaryKeySel('r48StudKey2', cols, preferredKey2); }
+            if (role === 'audit') { st.auditCols = cols; fillSel('r48AuditKey', cols, preferredKey || d.autoKey || '_001'); fillSecondaryKeySel('r48AuditKey2', cols, preferredKey2); }
         });
     }
 
@@ -413,25 +373,26 @@ window.r48Tab = function(tab) {
     window.r48Verify = function() {
         spin('Verifying tables...');
         post(API + '/VerifyTables', {
-            server: gv('r48Server').trim(), database: gv('r48Db'), driver: gv('r48Driver'),
-            studTable: gv('r48StudTable'), auditTable: gv('r48AuditTable'),
-            studKey: gv('r48StudKey') || '_001', auditKey: gv('r48AuditKey') || '_001'
+            clientId: st.clientId,
+            studTable: gv('r48StudTable'), h16Table: gv('r48AuditTable'),
+            studKey: gv('r48StudKey') || '_007', h16Key: gv('r48AuditKey') || '_001'
         }).then(function(d) {
             unspin();
             if (!d.success) { setStatus('r48TableOut', d.error || 'Verification failed.', 'error'); return; }
-            setStatus('r48TableOut', 'CRED: ' + fmt(d.studCount) + ' rows | H16CRED: ' + fmt(d.auditCount) + ' rows', 'success');
+            setStatus('r48TableOut', 'CRED: ' + fmt(d.studCount) + ' rows | H16CRED: ' + fmt(d.h16Count) + ' rows', 'success');
         }).catch(function(e) { unspin(); setStatus('r48TableOut', e.message, 'error'); });
     };
 
     function buildReq() {
         return {
             clientId: st.clientId, runId: st.runId,
-            server: gv('r48Server').trim(), database: gv('r48Db'), driver: gv('r48Driver') || 'ODBC Driver 17 for SQL Server',
-            studTable:  gv('r48StudTable')  || 'dbo_CRED',
-            auditTable: gv('r48AuditTable') || 'H16CRED',
-            studKey:    gv('r48StudKey')    || '_001',
-            auditKey:   gv('r48AuditKey')   || '_001',
-            pairs: getPairs()
+            studTable:  gv('r48StudTable')  || 'CRED',
+            h16Table: gv('r48AuditTable') || 'H16CRED',
+            studKey:    gv('r48StudKey')    || '_007',
+            h16Key:   gv('r48AuditKey')   || '_001',
+            studSecondaryKey: gv('r48StudKey2')  || null,
+            h16SecondaryKey:  gv('r48AuditKey2') || null,
+            pairs: st.pairs.filter(function(p) { return p.studCol && p.h16Col; })
         };
     }
 
@@ -460,8 +421,12 @@ window.r48Tab = function(tab) {
         }).catch(function(e) { unspin(); alert(e.message); });
     };
 
-    window.r48DlAll = function() { if (st.runId) window.open(API + '/DownloadExcel?runId=' + st.runId, '_blank'); };
+    function r48DownloadSaved(url, filename) {
+        return window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
+    }
+    window.r48DlAll = function() { if (st.runId) r48DownloadSaved(API + '/DownloadExcel?runId=' + st.runId, 'Rule48_Run_' + st.runId + '.xlsx'); };
 
+    /* ── Workspace ── */
     window.r48SaveWorkspace = function() {
         spin('Saving workspace...');
         post(API + '/SaveWorkspace', buildReq()).then(function(d) {
@@ -543,6 +508,9 @@ window.r48Tab = function(tab) {
     }
 
     function applyWorkspace(ws, resultsVisible) {
+        var datasetsLink = g('r48DatasetsLink');
+        if (datasetsLink) datasetsLink.href = st.clientId ? '/EngagementDatasets?clientId=' + st.clientId : '#';
+
         if (!ws) {
             st.runId = null; st.summary = null; st.isWorkspaceSaved = false;
             st.currentUserHasSignedOff = false; st.resultsVisible = false; st.currentUserEngagementRole = '';
@@ -552,7 +520,9 @@ window.r48Tab = function(tab) {
             var sl  = g('r48StatusLabel'); if (sl)  sl.textContent  = '-';
             var el  = g('r48EditedLabel'); if (el)  el.textContent  = '-';
             st.pairs = DEF_PAIRS.slice(); renderPairs();
-            applySummary(null, false); updateButtons(); return;
+            applySummary(null, false); updateButtons();
+            if (!IS_RESULTS_ONLY) r48LoadTables().catch(function() {});
+            return;
         }
         st.runId = ws.runId || null;
         st.isWorkspaceSaved = !!ws.isWorkspaceSaved;
@@ -560,21 +530,23 @@ window.r48Tab = function(tab) {
         st.resultsVisible = !!resultsVisible;
         st.currentUserEngagementRole = ws.currentUserEngagementRole || '';
 
-        if (!IS_RESULTS_ONLY) {
-            var sv = g('r48Server'); if (sv && ws.server) sv.value = ws.server;
-            var dv = g('r48Driver'); if (dv && ws.driver) dv.value = ws.driver;
-            if (ws.database)   fillSel('r48Db',         [ws.database],    ws.database);
-            if (ws.studTable)  fillSel('r48StudTable',  [ws.studTable],   ws.studTable);
-            if (ws.auditTable) fillSel('r48AuditTable', [ws.auditTable],  ws.auditTable);
-            if (ws.studKey)    fillSel('r48StudKey',    [ws.studKey],     ws.studKey);
-            if (ws.auditKey)   fillSel('r48AuditKey',   [ws.auditKey],    ws.auditKey);
-        }
-
         applyWsMeta(ws);
         var sc = g('r48SignoffComment'); if (sc && ws.currentUserSignoffComment) sc.value = ws.currentUserSignoffComment;
 
         st.pairs = (ws.summary && ws.summary.reconc && ws.summary.reconc.pairs && ws.summary.reconc.pairs.length) ? ws.summary.reconc.pairs.slice() : DEF_PAIRS.slice();
-        if (!IS_RESULTS_ONLY) renderPairs();
+
+        if (!IS_RESULTS_ONLY) {
+            r48LoadTables({
+                preferredStudTable: ws.studTable || '',
+                preferredAuditTable: ws.h16Table || '',
+                preferredStudKey: ws.studKey || '',
+                preferredAuditKey: ws.h16Key || '',
+                preferredStudKey2: ws.studSecondaryKey || '',
+                preferredAuditKey2: ws.h16SecondaryKey || '',
+                preservePairs: true,
+                silent: true
+            }).catch(function() {});
+        }
 
         if (!resultsVisible) { setWs('Saved Rule 48 results are not available for your role.', 'info'); applySummary(null, false); updateButtons(); return; }
         setWs(ws.summary ? 'Saved Rule 48 workspace loaded.' : 'Rule 48 workspace loaded. Run validation to generate results.', 'success');
@@ -583,6 +555,7 @@ window.r48Tab = function(tab) {
         var dlBtn = g('r48DlAllBtn'); if (dlBtn) dlBtn.disabled = !ws.runId;
     }
 
+    /* ── Rendering ── */
     function applySummary(summary, fromWs) {
         st.summary = summary;
         if (summary && !fromWs) st.runId = summary.savedRunId || st.runId;
@@ -590,10 +563,10 @@ window.r48Tab = function(tab) {
         renderAnalysis(summary);
         renderReconc(summary ? summary.reconc : null);
         if (summary && st.runId) {
-            var dlE = g('r48DlExcel');  if (dlE) dlE.onclick = function() { window.open(API + '/DownloadExcel?runId=' + st.runId, '_blank'); };
-            var dlC = g('r48DlCsv');    if (dlC) dlC.onclick = function() { window.open(API + '/DownloadCsv?runId=' + st.runId, '_blank'); };
-            var dlX = g('r48DlExcCsv');if (dlX) dlX.onclick = function() { window.open(API + '/DownloadExceptionsCsv?runId=' + st.runId, '_blank'); };
-            var dlS = g('r48DlSql');    if (dlS) dlS.onclick = function() { window.open(API + '/DownloadSql?runId=' + st.runId, '_blank'); };
+            var dlE = g('r48DlExcel');  if (dlE) dlE.onclick = function() { r48DownloadSaved(API + '/DownloadExcel?runId=' + st.runId, 'Rule48_Run_' + st.runId + '.xlsx'); };
+            var dlC = g('r48DlCsv');    if (dlC) dlC.onclick = function() { r48DownloadSaved(API + '/DownloadCsv?runId=' + st.runId, 'Rule48_Run_' + st.runId + '.csv'); };
+            var dlX = g('r48DlExcCsv');if (dlX) dlX.onclick = function() { r48DownloadSaved(API + '/DownloadExceptionsCsv?runId=' + st.runId, 'Rule48_Run_' + st.runId + '_Exceptions.csv'); };
+            var dlS = g('r48DlSql');    if (dlS) dlS.onclick = function() { r48DownloadSaved(API + '/DownloadSql?runId=' + st.runId, 'Rule48_Run_' + st.runId + '.sql'); };
         }
         updateButtons();
     }
@@ -612,9 +585,8 @@ window.r48Tab = function(tab) {
             statCard('Overall', '<span class="badge ' + sc + '">' + esc(s.status) + '</span>', '') +
             '</div>' +
             '<div class="card" style="padding:16px"><div class="form-grid">' +
-            '<div><div class="stat-label">Database</div><div>' + esc(s.database || '') + '</div></div>' +
             '<div><div class="stat-label">CRED Table</div><div>' + esc(s.studTable || '') + '</div></div>' +
-            '<div><div class="stat-label">H16CRED Table</div><div>' + esc(s.auditTable || '') + '</div></div>' +
+            '<div><div class="stat-label">H16CRED Table</div><div>' + esc(s.h16Table || '') + '</div></div>' +
             '<div><div class="stat-label">Timestamp</div><div>' + esc(s.timestamp || '') + '</div></div>' +
             '</div></div>';
     }
@@ -637,11 +609,11 @@ window.r48Tab = function(tab) {
         setHtml('r48FlaggedPane',
             '<div class="card" style="padding:12px;margin-bottom:10px;border-left:4px solid #C0392B">' +
             '<strong>FLAGGED</strong>: ' + fmt(reconc.disagreeCount || 0) + ' DISAGREE + ' + fmt(reconc.missingCount || 0) + ' MISSING rows.' +
-            '</div>' + buildTable(excRows, pairs, 'No exceptions — all credentials agree.'));
+            '</div>' + buildTable(excRows, pairs, 'No exceptions — all students agree.'));
 
         setHtml('r48ClearPane',
             '<div class="card" style="padding:12px;margin-bottom:10px;border-left:4px solid #1E8449">' +
-            '<strong>CLEAR</strong>: ' + fmt(reconc.agreeCount || 0) + ' credentials agree' +
+            '<strong>CLEAR</strong>: ' + fmt(reconc.agreeCount || 0) + ' students agree' +
             (agrRows.length < (reconc.agreeCount || 0) ? ' (sample of ' + fmt(agrRows.length) + ' shown)' : '') + '.' +
             '</div>' + buildTable(agrRows, pairs, 'No clear rows in this run.'));
     }
@@ -650,7 +622,7 @@ window.r48Tab = function(tab) {
         if (!rows || !rows.length) return '<div class="empty-state"><p>' + emptyMsg + '</p></div>';
         var hdrs = pairs.map(function(p) {
             return '<th style="background:#1565A6">CRED ' + esc(p.studCol || p.StudCol || '') + '</th>' +
-                   '<th style="background:#0D6E2E">H16CRED ' + esc(p.auditCol || p.AuditCol || '') + '</th>' +
+                   '<th style="background:#0D6E2E">H16CRED ' + esc(p.h16Col || p.H16Col || '') + '</th>' +
                    '<th>Match</th>';
         }).join('');
         var body = rows.map(function(r) {
@@ -670,16 +642,17 @@ window.r48Tab = function(tab) {
                 }
                 f = f || {};
                 var sv = f.studValue != null ? f.studValue : (f.StudValue != null ? f.StudValue : '—');
-                var av = f.auditValue != null ? f.auditValue : (f.AuditValue != null ? f.AuditValue : '—');
+                var av = f.h16Value != null ? f.h16Value : (f.H16Value != null ? f.H16Value : '—');
                 var matchVal = f.match || f.Match || 'MISSING';
                 var mi = matchVal === 'AGREE' ? '<span style="color:#1E8449">&#10003;</span>' : matchVal === 'DISAGREE' ? '<span style="color:#C0392B">&#x2717;</span>' : '<span style="color:#E67E22">?</span>';
                 return '<td>' + esc(sv) + '</td><td class="oc">' + esc(av) + '</td><td>' + mi + '</td>';
             }).join('');
-            return '<tr class="' + cls + '"><td style="font-size:.73rem;color:#777">' + (r.rowNumber || r.RowNumber || '') + '</td><td style="font-weight:600;font-family:monospace">' + esc(r.studentRef || r.StudentRef || '') + '</td>' + cells + '<td>' + badge + '</td><td style="font-size:.71rem;text-align:left;max-width:230px">' + esc(r.disagreeDetail || r.DisagreeDetail || '') + '</td></tr>';
+            return '<tr class="' + cls + '"><td style="font-size:.73rem;color:#777">' + (r.rowNumber || r.RowNumber || '') + '</td><td style="font-weight:600;font-family:monospace">' + esc(r.studentRef || r.StudentRef || r.staffRef || '') + '</td>' + cells + '<td>' + badge + '</td><td style="font-size:.71rem;text-align:left;max-width:230px">' + esc(r.disagreeDetail || r.DisagreeDetail || '') + '</td></tr>';
         }).join('');
-        return '<div style="overflow-x:auto"><table class="r48-tbl"><thead><tr><th>#</th><th>Cred Code</th>' + hdrs + '<th>Result</th><th>Detail</th></tr></thead><tbody>' + body + '</tbody></table></div>';
+        return '<div style="overflow-x:auto"><table class="r48-tbl"><thead><tr><th>#</th><th>Student No</th>' + hdrs + '<th>Result</th><th>Detail</th></tr></thead><tbody>' + body + '</tbody></table></div>';
     }
 
+    /* ── Init ── */
     st.pairs = DEF_PAIRS.slice();
     renderPairs();
     applySummary(null, false);

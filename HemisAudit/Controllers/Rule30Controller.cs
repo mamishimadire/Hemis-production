@@ -154,7 +154,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = await _rule30.GenerateSqlAsync(new Rule32ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
                 TableName = review.Summary.TableName,
                 ErrorTypeColumn = review.Summary.ErrorTypeColumn,
                 ErrorColumn = review.Summary.ErrorColumn,
@@ -166,21 +165,17 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule30.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule30.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule30.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule32GetColumnsRequest model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule30.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName)));
+            Json(await RequireDataAnalystAsync(async () => await _rule30.GetColumnsAsync(model.ClientId, model.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> LoadFilterValues([FromBody] Rule32FilterValueRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule30.GetFilterValuesAsync(model.Server, model.Database, model.Driver, model.TableName, model.ErrorTypeColumn)));
+                await _rule30.GetFilterValuesAsync(model.ClientId, model.TableName, model.ErrorTypeColumn)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTable([FromBody] Rule32VerifyRequest request) =>
@@ -607,7 +602,6 @@ namespace HemisAudit.Controllers
             var request = new Rule32ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
                 TableName = review.Summary.TableName,
                 ErrorTypeColumn = review.Summary.ErrorTypeColumn,
                 ErrorColumn = review.Summary.ErrorColumn,

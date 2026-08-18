@@ -57,25 +57,14 @@
         <div class="accordion-stack">
             <div class="accordion-item">
                 <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
-                    <span class="acc-icon">DB</span><span>Database Connection</span><span class="acc-chevron">v</span>
+                    <span class="acc-icon">DB</span><span>Engagement Dataset</span><span class="acc-chevron">v</span>
                 </button>
                 <div class="accordion-body" id="body-connection">
-                    <div class="form-grid">
-                        <div class="field-group"><label for="server">Server Name</label><input id="server" type="text" placeholder="e.g. MYSERVER\INSTANCE" /></div>
-                        <div class="field-group">
-                            <label for="driver">Driver</label>
-                            <select id="driver">
-                                <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                                <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                                <option value="SQL Server">SQL Server</option>
-                            </select>
-                        </div>
-                        <div class="field-group"><label for="database">Database</label><select id="database"></select></div>
+                    <div id="connectionOutput" class="status-output"><div class="alert alert--info">Select an engagement above to load its uploaded tables.</div></div>
+                    <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
+                        <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                        <button type="button" class="btn btn-primary" id="refreshTablesBtn">Refresh Tables</button>
                     </div>
-                    <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                        <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
-                    </div>
-                    <div id="connectionOutput" class="status-output"></div>
                 </div>
             </div>
 
@@ -191,7 +180,7 @@ window.toggleAccordion = function (section) {
     const state = {
         clientId: @(selectedClientId > 0 ? selectedClientId : 0),
         currentRunId: null, summary: null, sql: '',
-        resultsVisible: false, hasPendingValidation: false,
+        resultsVisible: false,
         currentUserEngagementRole: '', currentUserHasSignedOff: false,
         isWorkspaceSaved: false, hasDataAnalystSignoff: false,
         currentStatus: '', resultFilter: 'ALL'
@@ -199,7 +188,7 @@ window.toggleAccordion = function (section) {
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'), driver: document.getElementById('driver'), database: document.getElementById('database'),
+        datasetsLink: document.getElementById('datasetsLink'),
         valpacTable: document.getElementById('valpacTable'), prodTable: document.getElementById('prodTable'),
         valpacCol037: document.getElementById('valpacCol037'), prodColPersonel: document.getElementById('prodColPersonel'),
         connectionOutput: document.getElementById('connectionOutput'), configOutput: document.getElementById('configOutput'),
@@ -252,6 +241,7 @@ window.toggleAccordion = function (section) {
             return;
         }
 
+        const exts = { excel: 'xlsx', csv: 'csv', sql: 'sql' };
         const routes = {
             excel: `${apiBase}/DownloadSavedExcel?runId=${state.currentRunId}`,
             csv: `${apiBase}/DownloadSavedCsv?runId=${state.currentRunId}`,
@@ -260,7 +250,8 @@ window.toggleAccordion = function (section) {
 
         const url = routes[kind];
         if (!url) return;
-        window.open(url, '_blank');
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '');
+        window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: `Rule59_Run_${state.currentRunId}_${stamp}.${exts[kind]}`, label: 'Downloading result' });
     }
 
     function populateSelect(sel, values, selected) {
@@ -280,9 +271,6 @@ window.toggleAccordion = function (section) {
         return {
             clientId: parseInt(els.clientId?.value||'0',10)||0,
             runId: state.currentRunId,
-            server: els.server?.value?.trim()||'',
-            database: els.database?.value||'',
-            driver: els.driver?.value||'ODBC Driver 17 for SQL Server',
             valpacTable: els.valpacTable?.value||'dbo_SFTE_VALPAC',
             prodTable:   els.prodTable?.value||'dbo_STAFF_PRODUCTION',
             valpacCol037: els.valpacCol037?.value||'_037',
@@ -290,11 +278,10 @@ window.toggleAccordion = function (section) {
         };
     }
 
-    async function loadColsForTable(sel, tableName, preferred) {
-        const server = els.server?.value?.trim(); const db = els.database?.value;
-        if (!server || !db || !tableName || !sel) return;
+    async function loadColsForTable(sel, tableName, preferred, tableRole) {
+        if (!state.clientId || !tableName || !sel) return;
         try {
-            const data = await postJson(`${apiBase}/GetColumns`, { server, database: db, driver: els.driver?.value||'ODBC Driver 17 for SQL Server', valpacTable: tableName });
+            const data = await postJson(`${apiBase}/GetColumns`, { clientId: state.clientId, tableName, tableRole: tableRole || 'valpac_037' });
             if (data.success && data.columns) fillColSel(sel, data.columns, preferred);
         } catch (e) { /* silently ignore */ }
     }
@@ -302,19 +289,19 @@ window.toggleAccordion = function (section) {
     function updateWorkspaceButtons() {
         const role = state.currentUserEngagementRole || currentSystemRole || '';
         const normalizedRole = normalizeRole(role);
-        const hasUnsaved = !!state.summary && (!!state.hasPendingValidation || (!state.currentRunId && !state.isWorkspaceSaved));
+        const hasUnsaved = !!state.summary && (!state.currentRunId || !state.isWorkspaceSaved);
         const canEdit = !isResultsOnlyRole && (normalizeRole(currentSystemRole)==='dataanalyst'||normalizedRole==='dataanalyst'||hasUnsaved);
-        const canSign = !state.hasPendingValidation && !!state.currentRunId && !!state.isWorkspaceSaved &&
+        const canSign = !!state.currentRunId && !!state.isWorkspaceSaved &&
             (normalizedRole==='dataanalyst' || (state.resultsVisible && (normalizedRole==='manager'||normalizedRole==='director')));
         const signoffLocked = !!state.currentUserHasSignedOff;
         window.ruleWorkspaceUi.setReadonlyShell('app', !canEdit||signoffLocked);
         window.ruleWorkspaceUi.setFormSectionReadonly('.accordion-stack', !canEdit||signoffLocked);
         window.ruleWorkspaceUi.applyStates([
-            {target:'connectBtn',disabled:!canEdit||signoffLocked},
+            {target:'refreshTablesBtn',disabled:!canEdit||signoffLocked},
             {target:'verifyBtn',disabled:!canEdit||signoffLocked},
             {target:'runBtn',disabled:!canEdit||signoffLocked},
             {target:'sqlBtn',disabled:!canEdit||signoffLocked},
-            {target:els.beginEditBtn,disabled:signoffLocked||!canEdit||!state.currentRunId||state.hasPendingValidation},
+            {target:els.beginEditBtn,disabled:signoffLocked||!canEdit||!state.currentRunId},
             {target:els.saveWorkspaceBtn,disabled:signoffLocked||!canEdit||!hasUnsaved},
             {target:els.signoffBtn,disabled:signoffLocked||!canSign,text:state.currentUserHasSignedOff?`Signed Off as ${role||currentSystemRole}`:'Save Signoff'},
             {target:els.removeSignoffBtn,show:state.currentUserHasSignedOff,display:'',disabled:!state.currentUserHasSignedOff},
@@ -352,28 +339,25 @@ window.toggleAccordion = function (section) {
 
     function applyWorkspace(workspace, resultsVisible, preserveExistingSummary = false) {
         if (!workspace) {
-            state.currentRunId=null;state.currentStatus='';state.currentUserEngagementRole='';state.currentUserHasSignedOff=false;state.isWorkspaceSaved=false;state.hasDataAnalystSignoff=false;state.resultsVisible=false;state.hasPendingValidation=false;
+            state.currentRunId=null;state.currentStatus='';state.currentUserEngagementRole='';state.currentUserHasSignedOff=false;state.isWorkspaceSaved=false;state.hasDataAnalystSignoff=false;state.resultsVisible=false;
             els.workspaceRunState.textContent='No saved run loaded';els.workspaceRunLabel.textContent='No saved run yet';els.workspaceStatusLabel.textContent='-';els.workspaceEditedLabel.textContent='-';
             setWorkspaceState('No saved Rule 59 workspace exists for this engagement yet.','info');
             if (!preserveExistingSummary) applySummary(null); else updateWorkspaceButtons();
+            if (state.clientId) loadTables().catch(()=>{});
             return;
         }
         state.clientId=workspace.clientId||state.clientId;state.currentRunId=workspace.runId||null;state.currentStatus=workspace.currentStatus||'';
         state.currentUserEngagementRole=workspace.currentUserEngagementRole||currentSystemRole||'';state.currentUserHasSignedOff=!!workspace.currentUserHasSignedOff;
-        state.isWorkspaceSaved=!!workspace.isWorkspaceSaved;state.hasDataAnalystSignoff=!!workspace.hasDataAnalystSignoff;state.resultsVisible=!!resultsVisible;state.hasPendingValidation=false;
-        if(els.server) els.server.value=workspace.server||'';
-        if(els.driver) els.driver.value=workspace.driver||'ODBC Driver 17 for SQL Server';
-        populateSelect(els.database, workspace.database?[workspace.database]:[], workspace.database);
+        state.isWorkspaceSaved=!!workspace.isWorkspaceSaved;state.hasDataAnalystSignoff=!!workspace.hasDataAnalystSignoff;state.resultsVisible=!!resultsVisible;
         populateSelect(els.valpacTable, workspace.valpacTable?[workspace.valpacTable]:[], workspace.valpacTable);
         populateSelect(els.prodTable, [workspace.prodTable||'dbo_STAFF_PRODUCTION'], workspace.prodTable||'dbo_STAFF_PRODUCTION');
-        if(els.valpacCol037) { els.valpacCol037.innerHTML=`<option value="${escapeHtml(workspace.valpacCol037||'_037')}">${escapeHtml(workspace.valpacCol037||'_037')}</option>`; els.valpacCol037.value=workspace.valpacCol037||'_037'; }
-        if(els.prodColPersonel) { els.prodColPersonel.innerHTML=`<option value="${escapeHtml(workspace.prodColPersonelNumber||'PERSONEL_NUMBER')}">${escapeHtml(workspace.prodColPersonelNumber||'PERSONEL_NUMBER')}</option>`; els.prodColPersonel.value=workspace.prodColPersonelNumber||'PERSONEL_NUMBER'; }
         els.workspaceRunState.textContent=workspace.runId?`Run #${workspace.runId}`:'No saved run loaded';
         els.workspaceRunLabel.textContent=workspace.runId?`Rule 59 Run #${workspace.runId}`:'No saved run yet';
         els.workspaceStatusLabel.textContent=workspace.currentStatus||'-';
         els.workspaceEditedLabel.textContent=workspace.lastEditedAt?new Date(workspace.lastEditedAt).toLocaleString():'-';
         els.workspaceRoleLabel.textContent=workspace.currentUserEngagementRole||currentSystemRole||'-';
         els.workspaceSignoffComment.value=workspace.currentUserSignoffComment||'';
+        loadTables({ preferredValpac: workspace.valpacTable, preferredProd: workspace.prodTable, preferredValpacCol: workspace.valpacCol037, preferredProdCol: workspace.prodColPersonelNumber }).catch(()=>{});
         if (!resultsVisible) { setWorkspaceState('Saved Rule 59 results are not available for your engagement role.','info'); if (!preserveExistingSummary) applySummary(null); else updateWorkspaceButtons(); return; }
         setWorkspaceState(workspace.summary?'Saved workspace loaded.':'Rule 59 workspace loaded. Run validation to generate results.','success');
         if (workspace.summary) applySummary(workspace.summary,{fromWorkspace:true}); else if (!preserveExistingSummary) applySummary(null); else updateWorkspaceButtons();
@@ -387,29 +371,18 @@ window.toggleAccordion = function (section) {
         applyWorkspace(data.workspace, data.resultsVisible);
     }
 
-    async function connect() {
-        const server = els.server?.value?.trim();
-        if (!server) throw new Error('Enter the SQL Server name first.');
-        showSpinner('Loading databases...');
+    async function loadTables(opts = {}) {
+        if (!state.clientId) return;
+        showSpinner('Loading tables...');
         try {
-            const data = await postJson(`${apiBase}/GetDatabases`, {server, driver:els.driver.value});
-            if (!data.success) throw new Error(data.error||'Connection failed.');
-            els.database.innerHTML='<option value="">Select database</option>';
-            data.databases.forEach(db => { const o=document.createElement('option');o.value=o.textContent=db;els.database.appendChild(o); });
-            setAlert(els.connectionOutput,'success',`Connected. Found ${data.databases.length} database(s).`);
-            if (data.databases.length) await loadTables();
+            const data = await postJson(`${apiBase}/GetTables`, {clientId: state.clientId});
+            if (!data.success) throw new Error(data.error||'Could not load tables.');
+            populateSelect(els.valpacTable, data.tables||[], opts.preferredValpac || data.autoValpacTable);
+            populateSelect(els.prodTable, data.tables||[], opts.preferredProd || data.autoProdTable);
+            if (els.valpacTable.value) await loadColsForTable(els.valpacCol037, els.valpacTable.value, opts.preferredValpacCol || '_037', 'valpac_037');
+            if (els.prodTable.value)   await loadColsForTable(els.prodColPersonel, els.prodTable.value, opts.preferredProdCol || 'PERSONEL_NUMBER', 'prod_personel');
+            setAlert(els.connectionOutput,'success',`Loaded ${data.tables.length} table(s) from this engagement's dataset.`);
         } finally { hideSpinner(); }
-    }
-
-    async function loadTables() {
-        if (!els.database.value) return;
-        const data = await postJson(`${apiBase}/GetTables`, {server:els.server.value.trim(), database:els.database.value, driver:els.driver.value});
-        if (!data.success) throw new Error(data.error||'Could not load tables.');
-        populateSelect(els.valpacTable, data.tables||[], data.autoValpacTable);
-        populateSelect(els.prodTable, data.tables||[], data.autoProdTable);
-        if (els.valpacTable.value) await loadColsForTable(els.valpacCol037, els.valpacTable.value, '_037');
-        if (els.prodTable.value)   await loadColsForTable(els.prodColPersonel, els.prodTable.value, 'PERSONEL_NUMBER');
-        setAlert(els.configOutput,'success',`Loaded ${data.tables.length} table(s).`);
     }
 
     async function verifyTables() {
@@ -428,7 +401,7 @@ window.toggleAccordion = function (section) {
         try {
             const data = await postJson(`${apiBase}/RunValidation`, request);
             if (!data.success) throw new Error(data.error||'Rule 59 failed.');
-            state.hasPendingValidation=true;state.currentRunId=data.savedRunId||null;state.currentStatus=data.status||'';state.currentUserHasSignedOff=false;state.isWorkspaceSaved=false;state.hasDataAnalystSignoff=false;state.resultsVisible=true;
+            state.currentRunId=data.savedRunId||null;state.currentStatus=data.status||'';state.currentUserHasSignedOff=false;state.isWorkspaceSaved=false;state.hasDataAnalystSignoff=false;state.resultsVisible=true;
             state.currentUserEngagementRole=state.currentUserEngagementRole||currentSystemRole||'DataAnalyst';
             applySummary(data);
             setWorkspaceState(`Rule 59 completed. Total tested: ${formatNumber(data.totalValidated)} | Matched: ${formatNumber(data.passCount)} | Missing: ${formatNumber(data.failCount)}. Click Save Workspace before signoff.`,'success');
@@ -447,7 +420,7 @@ window.toggleAccordion = function (section) {
 
     async function saveWorkspace() {
         showSpinner('Saving workspace...');
-        try { const data=await postJson(`${apiBase}/SaveWorkspace`,getRequest()); if(!data.success) throw new Error(data.error||'Could not save workspace.'); state.hasPendingValidation=false; applyWorkspace(data.workspace,!!data.workspace?.resultsVisible,true); setWorkspaceState(data.message||'Workspace saved.',data.signoffsCleared?'warning':'success'); } finally { hideSpinner(); }
+        try { const data=await postJson(`${apiBase}/SaveWorkspace`,getRequest()); if(!data.success) throw new Error(data.error||'Could not save workspace.'); applyWorkspace(data.workspace,!!data.workspace?.resultsVisible,true); setWorkspaceState(data.message||'Workspace saved.',data.signoffsCleared?'warning':'success'); } finally { hideSpinner(); }
     }
 
     async function signoffWorkspace() {
@@ -477,7 +450,7 @@ window.toggleAccordion = function (section) {
         }).join('');
 
         els.analysisPane.innerHTML=`
-            ${summary.isPreviewOnly?`<div class="alert alert--warning" style="margin-bottom:16px">Browser shows a preview of ${summary.previewLimit.toLocaleString()} rows prioritising FAIL records. Download Excel/CSV for the complete result set.</div>`:''}
+            ${summary.warning?`<div class="alert alert--warning" style="margin-bottom:16px">${escapeHtml(summary.warning)}</div>`:''}
             <div class="R59-summary-grid">
                 <div class="stat-card"><div class="stat-card__label">VALPAC Records</div><div class="stat-card__value">${formatNumber(summary.valpacRecordCount)}</div></div>
                 <div class="stat-card"><div class="stat-card__label">PRODUCTION Records</div><div class="stat-card__value">${formatNumber(summary.prodRecordCount)}</div></div>
@@ -488,7 +461,7 @@ window.toggleAccordion = function (section) {
             ${summary.failCount>0?`<div class="card" style="padding:20px;margin-top:20px;border-left:4px solid #c62828"><h3 class="section-title" style="margin-top:0;color:#c62828">Missing from PRODUCTION (FAIL) — ${formatNumber(summary.failCount)} record(s)</h3>${failRows.length===0?`<div class="alert alert--info">No FAIL rows in this preview. Download for the full list.</div>`:`<div class="R59-table-wrap"><table class="R59-grid"><thead><tr><th>#</th><th class="group-valpac">${escapeHtml(v037)} (VALPAC)</th><th class="group-prod">PRODUCTION match</th></tr></thead><tbody>${failRowHtml}</tbody></table></div>`}</div>`:`<div class="alert alert--success" style="margin-top:16px">All ${formatNumber(summary.totalValidated)} SFTE VALPAC records found in STAFF PRODUCTION.</div>`}
             ${summary.passCount>0?`<div class="card" style="padding:20px;margin-top:20px;border-left:4px solid #2e7d32"><h3 class="section-title" style="margin-top:0;color:#2e7d32">Found in PRODUCTION (PASS) — ${formatNumber(summary.passCount)} record(s)</h3>${passRows.length===0?`<div class="alert alert--info">No PASS rows in this preview (FAIL-prioritised). Download for all matched records.</div>`:`<div class="R59-table-wrap"><table class="R59-grid"><thead><tr><th>#</th><th class="group-valpac">${escapeHtml(v037)} (VALPAC)</th><th class="group-prod">${escapeHtml(pPersonel)} (PRODUCTION)</th></tr></thead><tbody>${passRowHtml}</tbody></table></div>`}</div>`:''
             }
-            <div class="card" style="padding:20px;margin-top:20px"><h3 class="section-title" style="margin-top:0">Run Summary</h3><div class="form-grid"><div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Database</div><div>${escapeHtml(summary.database)}</div></div><div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">VALPAC Table</div><div>${escapeHtml(summary.valpacTable||'')}</div></div><div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">PRODUCTION Table</div><div>${escapeHtml(summary.prodTable||'')}</div></div><div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Status</div><div><span class="badge ${summary.failCount===0?'badge--pass':'badge--fail'}">${escapeHtml(summary.status)}</span></div></div></div></div>`;
+            <div class="card" style="padding:20px;margin-top:20px"><h3 class="section-title" style="margin-top:0">Run Summary</h3><div class="form-grid"><div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">VALPAC Table</div><div>${escapeHtml(summary.valpacTable||'')}</div></div><div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">PRODUCTION Table</div><div>${escapeHtml(summary.prodTable||'')}</div></div><div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Status</div><div><span class="badge ${summary.failCount===0?'badge--pass':'badge--fail'}">${escapeHtml(summary.status)}</span></div></div></div></div>`;
     }
 
     function renderResults(force = false) {
@@ -504,27 +477,29 @@ window.toggleAccordion = function (section) {
             return `<tr><td class="group-valpac ${isFail?'is-fail':''}">${escapeHtml(v.VALPAC__037||'')}</td><td class="group-prod ${isFail?'is-fail':''}">${escapeHtml(v.PROD_PERSONEL_NUMBER||'')}</td><td class="group-final ${isFail?'is-fail':'is-pass'}">${escapeHtml(isFail?'FAIL':'PASS')}: ${escapeHtml(v.FINAL_RESULT_MESSAGE||'')}</td></tr>`;
         }).join('');
 
-        els.resultsPane.innerHTML=`<div style="display:flex;gap:12px;align-items:flex-end;margin-bottom:16px"><div class="field-group" style="margin:0;min-width:180px"><label style="font-size:12px;font-weight:700;text-transform:uppercase;color:var(--text-muted)">Result Filter</label><select id="liveResultFilter"><option value="ALL">All results</option><option value="FAIL">FAIL — Missing</option><option value="PASS">PASS — Found</option></select></div></div>${summary.isPreviewOnly?`<div class="alert alert--warning" style="margin-bottom:12px">Only browser preview shown.</div>`:''}<div class="R59-table-wrap"><table class="R59-grid"><thead><tr><th class="group-valpac">${escapeHtml(summary.valpacTable||'SFTE VALPAC')}</th><th class="group-prod">${escapeHtml(summary.prodTable||'STAFF PRODUCTION')}</th><th class="group-final">Final Result</th></tr><tr><th class="group-valpac">${escapeHtml(v037)}</th><th class="group-prod">${escapeHtml(pPersonel)}</th><th class="group-final">pass/fail</th></tr></thead><tbody>${rowHtml}</tbody></table></div>`;
+        els.resultsPane.innerHTML=`<div style="display:flex;gap:12px;align-items:flex-end;margin-bottom:16px"><div class="field-group" style="margin:0;min-width:180px"><label style="font-size:12px;font-weight:700;text-transform:uppercase;color:var(--text-muted)">Result Filter</label><select id="liveResultFilter"><option value="ALL">All results</option><option value="FAIL">FAIL — Missing</option><option value="PASS">PASS — Found</option></select></div></div>${summary.warning?`<div class="alert alert--warning" style="margin-bottom:12px">${escapeHtml(summary.warning)}</div>`:''}<div class="R59-table-wrap"><table class="R59-grid"><thead><tr><th class="group-valpac">${escapeHtml(summary.valpacTable||'SFTE VALPAC')}</th><th class="group-prod">${escapeHtml(summary.prodTable||'STAFF PRODUCTION')}</th><th class="group-final">Final Result</th></tr><tr><th class="group-valpac">${escapeHtml(v037)}</th><th class="group-prod">${escapeHtml(pPersonel)}</th><th class="group-final">pass/fail</th></tr></thead><tbody>${rowHtml}</tbody></table></div>`;
         const liveFilter=document.getElementById('liveResultFilter');
         if(liveFilter){liveFilter.value=state.resultFilter;liveFilter.addEventListener('change',()=>{state.resultFilter=liveFilter.value;renderResults(true);});}
     }
 
     if (!isResultsOnlyRole) {
-        els.database?.addEventListener('change', () => loadTables().catch(err=>setAlert(els.configOutput,'error',escapeHtml(err.message))));
-        els.valpacTable?.addEventListener('change', () => loadColsForTable(els.valpacCol037, els.valpacTable.value, '_037'));
-        els.prodTable?.addEventListener('change', () => loadColsForTable(els.prodColPersonel, els.prodTable.value, 'PERSONEL_NUMBER'));
-        document.getElementById('connectBtn')?.addEventListener('click', () => connect().catch(err=>{hideSpinner();setAlert(els.connectionOutput,'error',escapeHtml(err.message));}));
+        els.valpacTable?.addEventListener('change', () => loadColsForTable(els.valpacCol037, els.valpacTable.value, '_037', 'valpac_037'));
+        els.prodTable?.addEventListener('change', () => loadColsForTable(els.prodColPersonel, els.prodTable.value, 'PERSONEL_NUMBER', 'prod_personel'));
+        document.getElementById('refreshTablesBtn')?.addEventListener('click', () => loadTables().catch(err=>{els.connectionOutput.innerHTML=`<div class="alert alert--error">${escapeHtml(err.message)}</div>`;}));
         document.getElementById('verifyBtn')?.addEventListener('click', () => verifyTables().catch(err=>{hideSpinner();setAlert(els.configOutput,'error',escapeHtml(err.message));}));
         document.getElementById('runBtn')?.addEventListener('click', () => runValidation().catch(err=>{hideSpinner();setWorkspaceState(err.message,'error');}));
         document.getElementById('sqlBtn')?.addEventListener('click', () => generateSql().catch(err=>{hideSpinner();if(els.sqlText)els.sqlText.value=err.message;}));
         els.beginEditBtn?.addEventListener('click', () => beginEdit().catch(err=>{hideSpinner();setWorkspaceState(err.message,'error');}));
         els.saveWorkspaceBtn?.addEventListener('click', () => saveWorkspace().catch(err=>{hideSpinner();setWorkspaceState(err.message,'error');}));
-        els.downloadAllBtn?.addEventListener('click', () => {
+        els.downloadAllBtn?.addEventListener('click', async () => {
             if (!state.currentRunId) { setWorkspaceState('Save the workspace before downloading.','warning'); return; }
             const id = state.currentRunId;
-            if (document.getElementById('chkExcel')?.checked) window.open(`/Rule59/DownloadSavedExcel?runId=${id}`, '_blank');
-            if (document.getElementById('chkCsv')?.checked)   window.open(`/Rule59/DownloadSavedCsv?runId=${id}`, '_blank');
-            if (document.getElementById('chkSql')?.checked)   window.open(`/Rule59/DownloadSavedSql?runId=${id}`, '_blank');
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '');
+            const tasks = [];
+            if (document.getElementById('chkExcel')?.checked) tasks.push(() => window.downloadFileWithProgress({ url: `/Rule59/DownloadSavedExcel?runId=${id}`, method: 'GET', defaultFileName: `Rule59_Run_${id}_${stamp}.xlsx`, label: 'Downloading result' }));
+            if (document.getElementById('chkCsv')?.checked)   tasks.push(() => window.downloadFileWithProgress({ url: `/Rule59/DownloadSavedCsv?runId=${id}`, method: 'GET', defaultFileName: `Rule59_Run_${id}_${stamp}.csv`, label: 'Downloading result' }));
+            if (document.getElementById('chkSql')?.checked)   tasks.push(() => window.downloadFileWithProgress({ url: `/Rule59/DownloadSavedSql?runId=${id}`, method: 'GET', defaultFileName: `Rule59_Run_${id}_${stamp}.sql`, label: 'Downloading result' }));
+            for (const task of tasks) { await task(); }
         });
     }
 
@@ -533,9 +508,13 @@ window.toggleAccordion = function (section) {
     els.downloadSqlBtn?.addEventListener('click', () => openSavedDownload('sql'));
     els.signoffBtn?.addEventListener('click', () => signoffWorkspace().catch(err=>{hideSpinner();setWorkspaceState(err.message,'error');}));
     els.removeSignoffBtn?.addEventListener('click', () => removeWorkspaceSignoff().catch(err=>{hideSpinner();setWorkspaceState(err.message,'error');}));
-    els.clientId?.addEventListener('change', () => loadWorkspace().catch(err=>setWorkspaceState(err.message,'error')));
+    els.clientId?.addEventListener('change', () => {
+        if (els.datasetsLink) els.datasetsLink.href = els.clientId.value ? '/EngagementDatasets?clientId=' + els.clientId.value : '#';
+        loadWorkspace().catch(err=>setWorkspaceState(err.message,'error'));
+    });
 
     renderAnalysis(null); renderResults(); updateWorkspaceButtons();
+    if (els.datasetsLink) els.datasetsLink.href = state.clientId ? '/EngagementDatasets?clientId=' + state.clientId : '#';
     if (state.clientId) loadWorkspace().catch(err=>setWorkspaceState(err.message,'error'));
     else if (isResultsOnlyRole) setWorkspaceState('Select an engagement to load the saved Rule 59 results.','info');
 })();

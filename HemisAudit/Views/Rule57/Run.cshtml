@@ -180,10 +180,6 @@
             <h3 class="section-title" style="margin-top:0">Run Summary</h3>
             <div class="form-grid">
                 <div>
-                    <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Database</div>
-                    <div>@Model.Summary.Database</div>
-                </div>
-                <div>
                     <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Rule</div>
                     <div>Rule 57 — Registration Documentation Agreement</div>
                 </div>
@@ -214,6 +210,10 @@
     <div class="review-panel" data-review-panel="details" style="padding:24px">
         <div class="card" style="margin-bottom:24px;padding:20px">
             <h3 class="section-title" style="margin-top:0">Exceptions</h3>
+            @if (Model.Summary.Exceptions.Count > 10)
+            {
+                <div class="alert alert--info" style="margin-bottom:12px">Showing preview (first 10 rows) — see stat cards above for full counts. Download for full results.</div>
+            }
             @if (Model.Summary.Exceptions.Any())
             {
                 <div style="overflow:auto">
@@ -256,6 +256,10 @@
 
         <div class="card" style="padding:20px">
             <h3 class="section-title" style="margin-top:0">Validation Sample (up to 10 rows)</h3>
+            @if (Model.Summary.ValidationRows.Count > 10)
+            {
+                <div class="alert alert--info" style="margin-bottom:12px">Showing preview (first 10 rows) — see stat cards above for full counts. Download for full results.</div>
+            }
             @if (Model.Summary.ValidationRows.Any())
             {
                 <div class="filter-toolbar">

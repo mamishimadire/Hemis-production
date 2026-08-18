@@ -15,32 +15,23 @@ namespace HemisAudit.ViewModels
         public List<string> Tables { get; set; } = new();
         public string? AutoValpacTable { get; set; }
         public string? AutoProdTable { get; set; }
+        public string? AutoCregTable { get; set; }
         public string? Error { get; set; }
     }
 
-    public class Rule51VerifyRequest
+    public class Rule51GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string ValpacTable    { get; set; } = "dbo_STUD_VALPAC";
-        public string ProdTable      { get; set; } = "dbo_STUD_PRODUCTION";
-        public string ValpacCol007   { get; set; } = "_007";
-        public string ValpacCol008   { get; set; } = "_008";
-        public string ValpacCol001   { get; set; } = "_001";
-        public string ValpacColYear  { get; set; } = "ColYear";
-        public string ProdColStNo    { get; set; } = "IAGSTNO";
-        public string ProdColIdNo    { get; set; } = "IADIDNO";
-        public string ProdColQual    { get; set; } = "IAGQUAL";
-        public string ProdColYear    { get; set; } = "IAGCYR";
-        public string ValpacCol049   { get; set; } = "_049";
-        public string SaNationalValues { get; set; } = "SA,PR";
-        public string ValpacCol008ZPlaceholders { get; set; } = "ZZZZZZZZZZZZZ";
-        public string CregTable      { get; set; } = "";
-        public string CregIdCol      { get; set; } = "_007";
-        public string CregCompletionStatusCol    { get; set; } = "_032";
-        public string CregCompletionStatusValues { get; set; } = "W";
-        public List<Rule51ColumnMapping> ColumnMappings { get; set; } = new();
+        public int ClientId { get; set; }
+        public string TableName { get; set; } = "";
+        public string TableRole { get; set; } = "";
+    }
+
+    public class Rule51ColumnDiscoveryResult
+    {
+        public bool Success { get; set; }
+        public List<string> Columns { get; set; } = new();
+        public string? AutoSelected { get; set; }
+        public string? Error { get; set; }
     }
 
     public class Rule51VerifyResult
@@ -58,9 +49,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string ValpacTable    { get; set; } = "dbo_STUD_VALPAC";
         public string ProdTable      { get; set; } = "dbo_STUD_PRODUCTION";
         public string ValpacCol007   { get; set; } = "_007";
@@ -117,8 +105,6 @@ namespace HemisAudit.ViewModels
         public int TotalRequested { get; set; }
         public int TotalValidated { get; set; }
         public int DisplayedCount { get; set; }
-        public bool IsPreviewOnly { get; set; }
-        public int PreviewLimit { get; set; }
         public int PassCount { get; set; }
         public int FailCount { get; set; }
         public int ForeignNationalExemptCount { get; set; }
@@ -128,7 +114,6 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string ValpacTable   { get; set; } = "dbo_STUD_VALPAC";
         public string ProdTable     { get; set; } = "dbo_STUD_PRODUCTION";
         public string ValpacCol007  { get; set; } = "_007";
@@ -164,9 +149,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string ValpacTable   { get; set; } = "dbo_STUD_VALPAC";
         public string ProdTable     { get; set; } = "dbo_STUD_PRODUCTION";
         public string ValpacCol007  { get; set; } = "_007";
@@ -203,7 +185,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule51ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();

@@ -1,222 +1,128 @@
-using Microsoft.Data.SqlClient;
 using Newtonsoft.Json;
-using System.Diagnostics;
-using System.Security.Cryptography;
 using HemisAudit.Helpers;
+using HemisAudit.Models;
 using HemisAudit.ViewModels;
+using Microsoft.AspNetCore.Identity;
+using Npgsql;
 
 namespace HemisAudit.Services
 {
+    // Rule 64: STUD to CREG Student Number Validation — validates against the engagement's own
+    // uploaded Supabase data instead of a live SQL Server connection. A STUD student number
+    // PASSes if it exists in CREG AND at least one of that student's compare values (e.g. STUD._001
+    // qualification code) matches one of CREG's compare values for the same student - a student
+    // with multiple qualification rows only needs one match to fully pass. FAILs are further
+    // confirmed against the STUD PRODUCTION table for context in the exception explanation.
     public class Rule64Service : IRule64Service
     {
+        private const int RowLimit = 5000;
         private const int BrowserPreviewRowLimit = 10;
-        private const int SqlCommandTimeoutSeconds = SqlLargeDataExtensions.LargeDataCommandTimeoutSeconds;
 
         private readonly IConfiguration _configuration;
+        private readonly IEngagementDatasetService _datasets;
+        private readonly ISystemDatabaseService _systemDb;
+        private readonly UserManager<ApplicationUser> _userManager;
 
-        public Rule64Service(IConfiguration configuration)
+        public Rule64Service(
+            IConfiguration configuration,
+            IEngagementDatasetService datasets,
+            ISystemDatabaseService systemDb,
+            UserManager<ApplicationUser> userManager)
         {
             _configuration = configuration;
+            _datasets = datasets;
+            _systemDb = systemDb;
+            _userManager = userManager;
         }
 
-        private static string BuildConnectionString(string server, string database, string driver)
-        {
-            if (server.StartsWith("(localdb)", StringComparison.OrdinalIgnoreCase))
-            {
-                var pipe = ResolveLocalDbPipe(server);
-                if (pipe != null)
-                    return $"Server={pipe};Database={database};Trusted_Connection=True;TrustServerCertificate=True;Encrypt=False;Connection Timeout=30;";
-            }
+        // ── Discovery ─────────────────────────────────────────────────────────
 
-            return $"Server={server};Database={database};Trusted_Connection=True;TrustServerCertificate=True;Encrypt=False;Connection Timeout=180;";
-        }
-
-        private static string? ResolveLocalDbPipe(string server)
+        public async Task<Rule64TableDiscoveryResult> GetTablesAsync(int clientId)
         {
             try
             {
-                var instance = server.Contains('\\') ? server.Split('\\').Last().Trim() : "MSSQLLocalDB";
-                using (var start = Process.Start(new ProcessStartInfo("sqllocaldb", $"start \"{instance}\"")
+                var tables = await _datasets.ListTableNamesAsync(clientId);
+                if (tables.Count == 0)
                 {
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                })!)
-                {
-                    start.WaitForExit(8000);
+                    return new Rule64TableDiscoveryResult
+                    {
+                        Success = false,
+                        Error = "No tables have been uploaded for this engagement yet. Upload data under Datasets first."
+                    };
                 }
-
-                using var info = Process.Start(new ProcessStartInfo("sqllocaldb", $"info \"{instance}\"")
-                {
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                })!;
-                var output = info.StandardOutput.ReadToEnd();
-                info.WaitForExit(3000);
-
-                var match = System.Text.RegularExpressions.Regex.Match(
-                    output,
-                    @"Instance pipe name:\s*(np:[^\r\n]+)",
-                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-                return match.Success ? match.Groups[1].Value.Trim() : null;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private async Task<SqlConnection> OpenSystemConnectionAsync()
-        {
-            var server = _configuration["SystemDatabase:Server"] ?? @"(localdb)\MSSQLLocalDB";
-            var database = _configuration["SystemDatabase:Name"] ?? "HEMISBaseSystem";
-            var trust = _configuration.GetValue("SystemDatabase:TrustServerCertificate", true);
-            var builder = new SqlConnectionStringBuilder
-            {
-                DataSource = server,
-                InitialCatalog = database,
-                IntegratedSecurity = true,
-                TrustServerCertificate = trust,
-                Encrypt = false,
-                ConnectTimeout = 180
-            };
-
-            var connection = new SqlConnection(builder.ConnectionString);
-            await connection.OpenAsync();
-            return connection;
-        }
-
-        public async Task<DatabaseListResult> GetDatabasesAsync(string server, string driver)
-        {
-            try
-            {
-                await using var connection = new SqlConnection(BuildConnectionString(server, "master", driver));
-                await connection.OpenAsync();
-
-                await using var command = connection.CreateConfiguredCommand();
-                command.CommandText = "SELECT name FROM sys.databases WHERE name NOT IN ('master','tempdb','model','msdb') ORDER BY name;";
-
-                await using var reader = await command.ExecuteReaderAsync();
-                var items = new List<string>();
-                while (await reader.ReadAsync())
-                    items.Add(reader.GetString(0));
-
-                return new DatabaseListResult { Success = true, Databases = items };
-            }
-            catch (Exception ex)
-            {
-                return new DatabaseListResult { Success = false, Error = ex.Message };
-            }
-        }
-
-        public async Task<Rule64TableDiscoveryResult> GetTablesAsync(string server, string database, string driver)
-        {
-            try
-            {
-                await using var connection = new SqlConnection(BuildConnectionString(server, database, driver));
-                await connection.OpenAsync();
-
-                await using var command = connection.CreateConfiguredCommand();
-                command.CommandText = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME;";
-
-                await using var reader = await command.ExecuteReaderAsync();
-                var tables = new List<string>();
-                while (await reader.ReadAsync())
-                    tables.Add(reader.GetString(0));
 
                 return new Rule64TableDiscoveryResult
                 {
-                    Success = true,
-                    Tables = tables,
+                    Success       = true,
+                    Tables        = tables,
                     AutoStudTable = FindFirst(tables, ["dbo_STUD", "STUD"], ["stud"]),
                     AutoCregTable = FindFirst(tables, ["dbo_CREG", "CREG"], ["creg"]),
-                    AutoProdTable = FindFirst(tables, ["dbo_STUD_PRODUCTION", "STUD_PRODUCTION", "PRODUCTION"], ["production", "prod"])
+                    AutoProdTable = FindFirst(tables, ["dbo_STUD_PRODUCTION", "STUD_PRODUCTION", "MT-audit-prod-std", "MT_AUDIT_PROD_STD", "mt_audit_prod_std"], [])
+                                    ?? FindFirstContainsAll(tables, "prod", "std")
                 };
             }
-            catch (Exception ex)
-            {
-                return new Rule64TableDiscoveryResult { Success = false, Error = ex.Message };
-            }
+            catch (Exception ex) { return new Rule64TableDiscoveryResult { Success = false, Error = ex.Message }; }
         }
 
-        public async Task<Rule64ColumnDiscoveryResult> GetColumnsAsync(string server, string database, string driver, string tableName)
+        public async Task<Rule64ColumnDiscoveryResult> GetColumnsAsync(int clientId, string tableName, string tableRole)
         {
             try
             {
-                tableName = (tableName ?? "").Trim();
-                ValidateObjectName(tableName);
-
-                await using var connection = new SqlConnection(BuildConnectionString(server, database, driver));
-                await connection.OpenAsync();
-
-                await using var command = connection.CreateConfiguredCommand();
-                command.CommandText = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @TableName ORDER BY ORDINAL_POSITION;";
-                command.Parameters.AddWithValue("@TableName", tableName);
-
-                await using var reader = await command.ExecuteReaderAsync();
-                var columns = new List<string>();
-                while (await reader.ReadAsync())
+                var cols = await _datasets.GetValidatedColumnsAsync(clientId, tableName);
+                string? auto = tableRole?.ToLowerInvariant() switch
                 {
-                    if (!reader.IsDBNull(0))
-                        columns.Add(reader.GetString(0));
-                }
-
-                return new Rule64ColumnDiscoveryResult { Success = true, Columns = columns };
+                    "stud_student_no"    => FindFirst(cols, ["_007"], []),
+                    "stud_compare_value" => FindFirst(cols, ["_001"], []),
+                    "creg_student_no"    => FindFirst(cols, ["_007"], []),
+                    "creg_compare_value" => FindFirst(cols, ["_001"], []),
+                    "prod_student_no"    => FindFirst(cols, ["IAGSTNO"], ["stno"]),
+                    _ => null
+                };
+                return new Rule64ColumnDiscoveryResult { Success = true, Columns = cols, AutoSelected = auto };
             }
-            catch (Exception ex)
-            {
-                return new Rule64ColumnDiscoveryResult { Success = false, Error = ex.Message };
-            }
+            catch (Exception ex) { return new Rule64ColumnDiscoveryResult { Success = false, Error = ex.Message }; }
         }
 
-        public async Task<Rule64VerifyResult> VerifyTablesAsync(Rule64VerifyRequest request)
+        public async Task<Rule64VerifyResult> VerifyTablesAsync(Rule64ValidationRequest request)
         {
             try
             {
-                NormalizeRequest(request.StudTable, request.CregTable, request.ProdTable, request.ColumnMapping, out var studTable, out var cregTable, out var prodTable, out _);
+                var m = NormalizeMapping(request.ColumnMapping);
+                await ValidateColumnsExistAsync(request.ClientId, request.StudTable, [m.StudStudentNoCol]);
+                await ValidateColumnsExistAsync(request.ClientId, request.CregTable, [m.CregStudentNoCol]);
+                await ValidateColumnsExistAsync(request.ClientId, request.ProdTable, [m.ProdStudentNoCol]);
 
-                await using var connection = new SqlConnection(BuildConnectionString(request.Server, request.Database, request.Driver));
-                await connection.OpenAsync();
+                var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+                await using var connection = conn;
 
                 return new Rule64VerifyResult
                 {
-                    Success = true,
-                    StudCount = await ExecuteCountAsync(connection, $"SELECT COUNT_BIG(*) FROM [{Sanitise(studTable)}];"),
-                    CregCount = await ExecuteCountAsync(connection, $"SELECT COUNT_BIG(*) FROM [{Sanitise(cregTable)}];"),
-                    ProdCount = await ExecuteCountAsync(connection, $"SELECT COUNT_BIG(*) FROM [{Sanitise(prodTable)}];")
+                    Success   = true,
+                    StudCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{Sanitise(request.StudTable)}\";"),
+                    CregCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{Sanitise(request.CregTable)}\";"),
+                    ProdCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{Sanitise(request.ProdTable)}\";")
                 };
             }
-            catch (Exception ex)
-            {
-                return new Rule64VerifyResult { Success = false, Error = ex.Message };
-            }
+            catch (Exception ex) { return new Rule64VerifyResult { Success = false, Error = ex.Message }; }
         }
+
+        // ── Validation ────────────────────────────────────────────────────────
 
         public async Task<Rule64ValidationSummary> RunValidationAsync(Rule64ValidationRequest request, string? userEmail = null, string? userName = null)
         {
             try
             {
-                NormalizeRequest(request.StudTable, request.CregTable, request.ProdTable, request.ColumnMapping, out var studTable, out var cregTable, out var prodTable, out var mapping);
-                request.StudTable = studTable;
-                request.CregTable = cregTable;
-                request.ProdTable = prodTable;
-                request.ColumnMapping = mapping;
+                request.ColumnMapping = NormalizeMapping(request.ColumnMapping);
 
-                var summary = await AnalyseAsync(request, mapping);
+                var summary = await AnalyseAsync(request);
+
                 if (summary.Success && request.ClientId > 0)
                 {
-                    try
-                    {
-                        summary.SavedRunId = await SaveValidationRunAsync(request, summary, userEmail, userName);
-                    }
+                    try { summary.SavedRunId = await SaveValidationRunAsync(request, summary, userEmail, userName); }
                     catch (Exception ex)
                     {
                         summary.Success = false;
-                        summary.Error = $"Analysis completed, but the run could not be saved: {ex.Message}";
+                        summary.Error   = $"Analysis completed, but the run could not be saved: {ex.Message}";
                         return summary;
                     }
                 }
@@ -224,47 +130,76 @@ namespace HemisAudit.Services
                 ApplyBrowserPreview(summary);
                 return summary;
             }
-            catch (Exception ex)
-            {
-                return new Rule64ValidationSummary { Success = false, Error = ex.Message };
-            }
+            catch (Exception ex) { return new Rule64ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<Rule64ValidationSummary> AnalyseAsync(Rule64ValidationRequest request, Rule64ColumnMapping mapping)
+        private async Task<Rule64ValidationSummary> AnalyseAsync(Rule64ValidationRequest req)
         {
-            var sql = BuildValidationSql(request.StudTable, request.CregTable, request.ProdTable, mapping);
+            var m = NormalizeMapping(req.ColumnMapping);
 
-            await using var connection = new SqlConnection(BuildConnectionString(request.Server, request.Database, request.Driver));
-            await connection.OpenAsync();
+            await ValidateColumnsExistAsync(req.ClientId, req.StudTable, [m.StudStudentNoCol, m.StudCompareValueCol]);
+            await ValidateColumnsExistAsync(req.ClientId, req.CregTable, [m.CregStudentNoCol, m.CregCompareValueCol]);
+            await ValidateColumnsExistAsync(req.ClientId, req.ProdTable, [m.ProdStudentNoCol]);
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandTimeout = SqlCommandTimeoutSeconds;
-            command.CommandText = sql;
+            var (conn, schema) = await OpenEngagementConnectionAsync(req.ClientId);
+            await using var connection = conn;
 
-            await using var reader = await command.ExecuteReaderAsync();
+            var cteSql = BuildValidationCtes(schema, req.StudTable, req.CregTable, req.ProdTable, m);
+
+            var countSql = $@"
+WITH {cteSql}
+SELECT
+    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE validation_result = 'PASS') AS pass_count
+FROM results;";
+
+            int total, passed;
+            await using (var countCmd = connection.CreateCommand())
+            {
+                countCmd.CommandText = countSql;
+                await using var reader = await countCmd.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    total  = Convert.ToInt32(reader.GetValue(0));
+                    passed = Convert.ToInt32(reader.GetValue(1));
+                }
+                else { total = passed = 0; }
+            }
+
+            var rowsSql = $@"
+WITH {cteSql}
+SELECT * FROM results
+ORDER BY
+    CASE WHEN validation_result = 'FAIL' THEN 0 ELSE 1 END,
+    student_no
+LIMIT @limit;";
+
             var passRows = new List<Rule64ReviewRow>();
             var failRows = new List<Rule64ReviewRow>();
 
-            while (await reader.ReadAsync())
+            await using (var cmd = connection.CreateCommand())
             {
-                var row = new Rule64ReviewRow
+                cmd.CommandText = rowsSql;
+                cmd.Parameters.AddWithValue("limit", RowLimit);
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
                 {
-                    SourceTable = reader.IsDBNull(0) ? "" : reader.GetString(0).Trim(),
-                    StudentNo = reader.IsDBNull(1) ? "" : reader.GetString(1).Trim(),
-                    CregStudentNo = reader.IsDBNull(2) ? "" : reader.GetString(2).Trim(),
-                    ProdStudentNo = reader.IsDBNull(3) ? "" : reader.GetString(3).Trim(),
-                    StudCompareValue = reader.IsDBNull(4) ? "" : reader.GetString(4).Trim(),
-                    CregCompareValue = reader.IsDBNull(5) ? "" : reader.GetString(5).Trim(),
-                    ErrorCode = reader.IsDBNull(6) ? "" : reader.GetString(6).Trim(),
-                    ValidationResult = reader.IsDBNull(7) ? "" : reader.GetString(7).Trim().ToUpperInvariant(),
-                    ValidationExplanation = reader.IsDBNull(8) ? "" : reader.GetString(8).Trim()
-                };
-                row.ExceptionCategory = ResolveExceptionCategory(row);
+                    var row = new Rule64ReviewRow
+                    {
+                        SourceTable           = GetString(reader, "source_table") ?? "",
+                        StudentNo             = GetString(reader, "student_no") ?? "",
+                        CregStudentNo         = GetString(reader, "creg_student_no") ?? "",
+                        ProdStudentNo         = GetString(reader, "prod_student_no") ?? "",
+                        StudCompareValue      = GetString(reader, "stud_compare_value") ?? "",
+                        CregCompareValue      = GetString(reader, "creg_compare_value") ?? "",
+                        ErrorCode             = GetString(reader, "error_code") ?? "",
+                        ValidationResult      = (GetString(reader, "validation_result") ?? "").Trim().ToUpperInvariant(),
+                        ValidationExplanation = GetString(reader, "validation_explanation") ?? ""
+                    };
+                    row.ExceptionCategory = ResolveExceptionCategory(row);
 
-                if (row.ValidationResult == "PASS")
-                    passRows.Add(row);
-                else
-                    failRows.Add(row);
+                    if (row.ValidationResult == "PASS") passRows.Add(row); else failRows.Add(row);
+                }
             }
 
             failRows = DeduplicateRows(failRows);
@@ -272,507 +207,354 @@ namespace HemisAudit.Services
             AssignRowNumbers(failRows);
             AssignRowNumbers(passRows);
 
-            var totalCount = passRows.Count + failRows.Count;
-            var failCount = failRows.Count;
-            var passCount = passRows.Count;
-            var exceptionRate = totalCount == 0 ? 0m : Math.Round((decimal)failCount / totalCount * 100m, 2);
+            var failCount = total - passed;
+            var exceptionRate = total == 0 ? 0m : Math.Round((decimal)failCount / total * 100m, 2);
 
             var summary = new Rule64ValidationSummary
             {
-                Success = true,
-                Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                Database = request.Database,
-                StudTable = request.StudTable,
-                CregTable = request.CregTable,
-                ProdTable = request.ProdTable,
-                ColumnMapping = mapping,
-                ClientId = request.ClientId,
-                TotalCount = totalCount,
-                PassCount = passCount,
-                FailCount = failCount,
+                Success              = true,
+                Timestamp            = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                StudTable            = req.StudTable,
+                CregTable            = req.CregTable,
+                ProdTable            = req.ProdTable,
+                ColumnMapping        = m,
+                ClientId             = req.ClientId,
+                TotalCount           = total,
+                PassCount            = passed,
+                FailCount            = failCount,
                 ExceptionDetailCount = failCount,
-                ExceptionRate = exceptionRate,
-                Status = failCount == 0 ? "PASS" : "FAIL",
-                PassRows = passRows,
-                FailRows = failRows,
-                ExceptionCategories = BuildExceptionCategories(passRows, failRows)
+                ExceptionRate        = exceptionRate,
+                Status               = failCount == 0 ? "PASS" : "FAIL",
+                PassRows             = passRows,
+                FailRows             = failRows,
+                ExceptionCategories  = BuildExceptionCategories(passRows, failRows),
+                Warning = total > (passRows.Count + failRows.Count)
+                    ? $"{total:N0} rows were found; only the first {(passRows.Count + failRows.Count):N0} are stored and shown to keep the app responsive. All totals above are exact."
+                    : null
             };
 
-            EnsureDerivedSummaryData(summary);
             return summary;
         }
 
-        private static string BuildValidationSql(string studTable, string cregTable, string prodTable, Rule64ColumnMapping mapping)
+        private static string BuildValidationCtes(string schema, string studTable, string cregTable, string prodTable, Rule64ColumnMapping m)
         {
-            // Each CTE is materialised into a temp table with a clustered index so every source
-            // table is scanned exactly once and all joins use index seeks instead of hash joins
-            // on full re-scans.  CregReference was the main bottleneck: the old CTE was evaluated
-            // twice (once for STRING_AGG, once for the value-match join).
+            var stud = Sanitise(studTable);
+            var creg = Sanitise(cregTable);
+            var prod = Sanitise(prodTable);
+
             return $@"
-SET NOCOUNT ON;
-
-IF OBJECT_ID('tempdb..#R64CregRef')          IS NOT NULL DROP TABLE #R64CregRef;
-IF OBJECT_ID('tempdb..#R64CregSummary')      IS NOT NULL DROP TABLE #R64CregSummary;
-IF OBJECT_ID('tempdb..#R64CregStudentMatch') IS NOT NULL DROP TABLE #R64CregStudentMatch;
-IF OBJECT_ID('tempdb..#R64ProdRef')          IS NOT NULL DROP TABLE #R64ProdRef;
-IF OBJECT_ID('tempdb..#R64StudPop')          IS NOT NULL DROP TABLE #R64StudPop;
-
--- CREG: distinct (student, compare-value) pairs
-SELECT DISTINCT
-    UPPER(LTRIM(RTRIM(CONVERT(nvarchar(255), [{mapping.CregStudentNoCol}])))) AS CregStudentNo,
-    UPPER(LTRIM(RTRIM(ISNULL(CONVERT(nvarchar(255), [{mapping.CregCompareValueCol}]), '')))) AS CregCompareValue
-INTO #R64CregRef
-FROM [{Sanitise(cregTable)}] WITH (NOLOCK)
-WHERE [{mapping.CregStudentNoCol}] IS NOT NULL
-  AND LTRIM(RTRIM(CONVERT(nvarchar(255), [{mapping.CregStudentNoCol}]))) <> '';
-
-CREATE CLUSTERED INDEX IX_R64CregRef ON #R64CregRef(CregStudentNo, CregCompareValue);
-
--- CREG: one row per student with all compare-values concatenated
-SELECT
-    CregStudentNo,
-    STRING_AGG(CASE WHEN CregCompareValue = '' THEN '[BLANK]' ELSE CregCompareValue END, ', ')
-        WITHIN GROUP (ORDER BY CregCompareValue) AS CregCompareValue
-INTO #R64CregSummary
-FROM #R64CregRef
-GROUP BY CregStudentNo;
-
-CREATE CLUSTERED INDEX IX_R64CregSummary ON #R64CregSummary(CregStudentNo);
-
--- PRODUCTION: distinct student numbers
-SELECT DISTINCT
-    UPPER(LTRIM(RTRIM(CONVERT(nvarchar(255), [{mapping.ProdStudentNoCol}])))) AS ProdStudentNo
-INTO #R64ProdRef
-FROM [{Sanitise(prodTable)}] WITH (NOLOCK)
-WHERE [{mapping.ProdStudentNoCol}] IS NOT NULL
-  AND LTRIM(RTRIM(CONVERT(nvarchar(255), [{mapping.ProdStudentNoCol}]))) <> '';
-
-CREATE CLUSTERED INDEX IX_R64ProdRef ON #R64ProdRef(ProdStudentNo);
-
--- STUD: distinct (student, compare-value) pairs
-SELECT DISTINCT
-    UPPER(LTRIM(RTRIM(CONVERT(nvarchar(255), [{mapping.StudStudentNoCol}])))) AS StudentNo,
-    UPPER(LTRIM(RTRIM(ISNULL(CONVERT(nvarchar(255), [{mapping.StudCompareValueCol}]), '')))) AS StudCompareValue
-INTO #R64StudPop
-FROM [{Sanitise(studTable)}] WITH (NOLOCK)
-WHERE [{mapping.StudStudentNoCol}] IS NOT NULL
-  AND LTRIM(RTRIM(CONVERT(nvarchar(255), [{mapping.StudStudentNoCol}]))) <> '';
-
-CREATE CLUSTERED INDEX IX_R64StudPop ON #R64StudPop(StudentNo, StudCompareValue);
-
--- Students where AT LEAST ONE compare value matches between STUD and CREG.
--- A student with multiple qualifications only needs one match in CREG to fully pass.
-SELECT DISTINCT P.StudentNo
-INTO #R64CregStudentMatch
-FROM #R64StudPop P
-INNER JOIN #R64CregRef CR ON CR.CregStudentNo = P.StudentNo AND CR.CregCompareValue = P.StudCompareValue;
-
-CREATE CLUSTERED INDEX IX_R64CregStudentMatch ON #R64CregStudentMatch(StudentNo);
-
--- Final validation join — student-level match: if any _001 for this student matches CREG, all their rows PASS
-SELECT
-    'STUD' AS SourceTable,
-    ISNULL(P.StudentNo, '') AS StudentNo,
-    ISNULL(CS.CregStudentNo, '') AS CregStudentNo,
-    ISNULL(PR.ProdStudentNo, '') AS ProdStudentNo,
-    ISNULL(P.StudCompareValue, '') AS StudCompareValue,
-    ISNULL(CS.CregCompareValue, '') AS CregCompareValue,
-    CASE
-        WHEN CS.CregStudentNo IS NULL THEN 'NOTE'
-        WHEN MM.StudentNo IS NULL THEN 'MISMATCH'
-        ELSE ''
-    END AS ErrorCode,
-    CASE
-        WHEN CS.CregStudentNo IS NULL THEN 'FAIL'
-        WHEN MM.StudentNo IS NULL THEN 'FAIL'
-        ELSE 'PASS'
-    END AS ValidationResult,
-    CASE
-        WHEN CS.CregStudentNo IS NULL AND PR.ProdStudentNo IS NULL
-            THEN 'FAIL: STUD.{mapping.StudStudentNoCol} student number ''' + P.StudentNo + ''' was not found in CREG.{mapping.CregStudentNoCol}. Note: this student should not appear in production. Confirmation: it was not found in STUD PRODUCTION.{mapping.ProdStudentNoCol}.'
-        WHEN CS.CregStudentNo IS NULL
-            THEN 'FAIL: STUD.{mapping.StudStudentNoCol} student number ''' + P.StudentNo + ''' was not found in CREG.{mapping.CregStudentNoCol}. Note: this student should not appear in production. Confirmation: it exists in STUD PRODUCTION.{mapping.ProdStudentNoCol} as ''' + PR.ProdStudentNo + '''.'
-        WHEN MM.StudentNo IS NULL
-            THEN 'FAIL: STUD.{mapping.StudStudentNoCol} student number ''' + P.StudentNo + ''' exists in CREG.{mapping.CregStudentNoCol}, but none of the student''s {mapping.StudCompareValueCol} values match any CREG.{mapping.CregCompareValueCol} value(s). CREG has: ''' + ISNULL(CS.CregCompareValue, '') + '''.'
-        ELSE 'PASS: STUD.{mapping.StudStudentNoCol} student number ''' + P.StudentNo + ''' exists in CREG.{mapping.CregStudentNoCol} with at least one matching {mapping.CregCompareValueCol} value. CREG {mapping.CregCompareValueCol} value(s): ''' + ISNULL(CS.CregCompareValue, '') + '''.'
-    END AS ValidationExplanation
-FROM #R64StudPop P
-LEFT JOIN #R64CregSummary      CS ON CS.CregStudentNo = P.StudentNo
-LEFT JOIN #R64CregStudentMatch MM ON MM.StudentNo = P.StudentNo
-LEFT JOIN #R64ProdRef          PR ON PR.ProdStudentNo = P.StudentNo
-ORDER BY
-    CASE WHEN CS.CregStudentNo IS NULL OR MM.StudentNo IS NULL THEN 0 ELSE 1 END,
-    P.StudentNo;";
+    creg_ref AS (
+        SELECT DISTINCT
+            UPPER(TRIM(CAST(CREG.""{m.CregStudentNoCol}"" AS text))) AS creg_student_no,
+            UPPER(TRIM(COALESCE(CAST(CREG.""{m.CregCompareValueCol}"" AS text), ''))) AS creg_compare_value
+        FROM ""{schema}"".""{creg}"" CREG
+        WHERE CREG.""{m.CregStudentNoCol}"" IS NOT NULL
+          AND TRIM(CAST(CREG.""{m.CregStudentNoCol}"" AS text)) <> ''
+    ),
+    creg_summary AS (
+        SELECT
+            creg_student_no,
+            STRING_AGG(CASE WHEN creg_compare_value = '' THEN '[BLANK]' ELSE creg_compare_value END, ', ' ORDER BY creg_compare_value) AS creg_compare_value
+        FROM creg_ref
+        GROUP BY creg_student_no
+    ),
+    prod_ref AS (
+        SELECT DISTINCT UPPER(TRIM(CAST(PROD.""{m.ProdStudentNoCol}"" AS text))) AS prod_student_no
+        FROM ""{schema}"".""{prod}"" PROD
+        WHERE PROD.""{m.ProdStudentNoCol}"" IS NOT NULL
+          AND TRIM(CAST(PROD.""{m.ProdStudentNoCol}"" AS text)) <> ''
+    ),
+    stud_pop AS (
+        SELECT DISTINCT
+            UPPER(TRIM(CAST(STUD.""{m.StudStudentNoCol}"" AS text))) AS student_no,
+            UPPER(TRIM(COALESCE(CAST(STUD.""{m.StudCompareValueCol}"" AS text), ''))) AS stud_compare_value
+        FROM ""{schema}"".""{stud}"" STUD
+        WHERE STUD.""{m.StudStudentNoCol}"" IS NOT NULL
+          AND TRIM(CAST(STUD.""{m.StudStudentNoCol}"" AS text)) <> ''
+    ),
+    creg_student_match AS (
+        SELECT DISTINCT P.student_no
+        FROM stud_pop P
+        INNER JOIN creg_ref CR ON CR.creg_student_no = P.student_no AND CR.creg_compare_value = P.stud_compare_value
+    ),
+    results AS (
+        SELECT
+            'STUD' AS source_table,
+            COALESCE(P.student_no, '') AS student_no,
+            COALESCE(CS.creg_student_no, '') AS creg_student_no,
+            COALESCE(PR.prod_student_no, '') AS prod_student_no,
+            COALESCE(P.stud_compare_value, '') AS stud_compare_value,
+            COALESCE(CS.creg_compare_value, '') AS creg_compare_value,
+            CASE
+                WHEN CS.creg_student_no IS NULL THEN 'NOTE'
+                WHEN MM.student_no IS NULL THEN 'MISMATCH'
+                ELSE ''
+            END AS error_code,
+            CASE
+                WHEN CS.creg_student_no IS NULL THEN 'FAIL'
+                WHEN MM.student_no IS NULL THEN 'FAIL'
+                ELSE 'PASS'
+            END AS validation_result,
+            CASE
+                WHEN CS.creg_student_no IS NULL AND PR.prod_student_no IS NULL
+                    THEN 'FAIL: STUD.{m.StudStudentNoCol} student number ''' || P.student_no || ''' was not found in CREG.{m.CregStudentNoCol}. Note: this student should not appear in production. Confirmation: it was not found in STUD PRODUCTION.{m.ProdStudentNoCol}.'
+                WHEN CS.creg_student_no IS NULL
+                    THEN 'FAIL: STUD.{m.StudStudentNoCol} student number ''' || P.student_no || ''' was not found in CREG.{m.CregStudentNoCol}. Note: this student should not appear in production. Confirmation: it exists in STUD PRODUCTION.{m.ProdStudentNoCol} as ''' || PR.prod_student_no || '''.'
+                WHEN MM.student_no IS NULL
+                    THEN 'FAIL: STUD.{m.StudStudentNoCol} student number ''' || P.student_no || ''' exists in CREG.{m.CregStudentNoCol}, but none of the student''s {m.StudCompareValueCol} values match any CREG.{m.CregCompareValueCol} value(s). CREG has: ''' || COALESCE(CS.creg_compare_value, '') || '''.'
+                ELSE 'PASS: STUD.{m.StudStudentNoCol} student number ''' || P.student_no || ''' exists in CREG.{m.CregStudentNoCol} with at least one matching {m.CregCompareValueCol} value. CREG {m.CregCompareValueCol} value(s): ''' || COALESCE(CS.creg_compare_value, '') || '''.'
+            END AS validation_explanation
+        FROM stud_pop P
+        LEFT JOIN creg_summary       CS ON CS.creg_student_no = P.student_no
+        LEFT JOIN creg_student_match MM ON MM.student_no = P.student_no
+        LEFT JOIN prod_ref           PR ON PR.prod_student_no = P.student_no
+    )";
         }
+
+        // ── SQL generation ────────────────────────────────────────────────────
 
         public string GenerateSql(Rule64ValidationRequest request)
         {
-            NormalizeRequest(request.StudTable, request.CregTable, request.ProdTable, request.ColumnMapping, out var studTable, out var cregTable, out var prodTable, out var mapping);
+            var m = NormalizeMapping(request.ColumnMapping);
+            var cteSql = BuildValidationCtes("{schema}", request.StudTable, request.CregTable, request.ProdTable, m);
 
             return $@"-- ============================================================
 -- HEMIS RULE 64 - STUD to CREG Student Number Validation
 -- Generated : {DateTime.Now:yyyy-MM-dd HH:mm:ss}
--- Database  : {request.Database}
--- Tables    : [{Sanitise(studTable)}] STUD | [{Sanitise(cregTable)}] CREG | [{Sanitise(prodTable)}] STUD PRODUCTION
--- Join      : STUD.{mapping.StudStudentNoCol} -> CREG.{mapping.CregStudentNoCol}
--- Compare   : STUD.{mapping.StudCompareValueCol} -> CREG.{mapping.CregCompareValueCol}
--- Confirm   : STUD.{mapping.StudStudentNoCol} -> STUD PRODUCTION.{mapping.ProdStudentNoCol}
+-- Source    : this engagement's own uploaded tables (schema engagement_{{ClientId}}), not a live SQL Server.
+-- Tables    : ""{Sanitise(request.StudTable)}"" STUD | ""{Sanitise(request.CregTable)}"" CREG | ""{Sanitise(request.ProdTable)}"" STUD PRODUCTION
+-- Join      : STUD.{m.StudStudentNoCol} -> CREG.{m.CregStudentNoCol}
+-- Compare   : STUD.{m.StudCompareValueCol} -> CREG.{m.CregCompareValueCol}
+-- Confirm   : STUD.{m.StudStudentNoCol} -> STUD PRODUCTION.{m.ProdStudentNoCol}
 -- Rule      : PASS when the STUD student number exists in CREG and AT LEAST ONE of the student's compare values matches
 --           : PASS even if a specific row's compare value doesn't match, as long as another row for the same student matches
 --           : FAIL when the student number is missing from CREG entirely
 --           : FAIL when the student number exists in CREG but NONE of the student's compare values match any CREG compare values
 -- Fail Note : Student should not appear in production; confirmation uses STUD PRODUCTION
 -- ============================================================
-{BuildValidationSql(studTable, cregTable, prodTable, mapping)}";
+WITH {cteSql}
+SELECT * FROM results
+ORDER BY
+    CASE WHEN validation_result = 'FAIL' THEN 0 ELSE 1 END,
+    student_no;".Trim();
         }
+
+        // ─── Save / Load ───────────────────────────────────────────────────────
 
         private async Task<int> SaveValidationRunAsync(Rule64ValidationRequest request, Rule64ValidationSummary summary, string? userEmail, string? userName)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            await EnsureClientNotArchivedAsync(connection, request.ClientId);
-            await MarkPreviousRunsHistoricalAsync(connection, request.ClientId, 64);
+            await _systemDb.EnsureClientNotArchivedAsync(request.ClientId);
+            await _systemDb.MarkPreviousRuleRunsHistoricalAsync(request.ClientId, 64);
 
-            var systemUserId = await GetSystemUserIdByEmailAsync(connection, userEmail);
-            if (!systemUserId.HasValue)
-                throw new InvalidOperationException("The current analyst could not be resolved in the system database.");
-
-            var previousHash = await GetLatestValidationHashAsync(connection, request.ClientId, 64);
-            var persisted = CloneSummaryForPersistence(summary);
-
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-INSERT INTO dbo.ValidationRuns
-(
-    ClientID, UserID, RuleNumber, RuleName, Status, TotalRecords, PassCount, FailCount, ExceptionRate, RunTimestamp,
-    HemisServer, AuditDatabase, StudTable, DeceasedTable, BridgeTable, StudColumn, DeceasedColumn,
-    ExceptionsJSON, ResultsJSON, RunByUserName, LastEditedByUserName, LastEditedAt, PreviousHash, RecordHash, IsCurrent
-)
-VALUES
-(
-    @ClientID, @UserID, 64, 'STUD to CREG Student Number Validation', @Status, @TotalRecords, @PassCount, @FailCount, @ExceptionRate, GETDATE(),
-    @HemisServer, @AuditDatabase, @StudTable, @CregTable, @ProdTable, @StudStudentNoCol, @CregStudentNoCol,
-    @ExceptionsJSON, @ResultsJSON, @RunByUserName, NULL, NULL, @PreviousHash, NULL, 1
-);
-SELECT CAST(SCOPE_IDENTITY() AS int);";
-
-            command.Parameters.AddWithValue("@ClientID", request.ClientId);
-            command.Parameters.AddWithValue("@UserID", systemUserId.Value);
-            command.Parameters.AddWithValue("@Status", summary.Status);
-            command.Parameters.AddWithValue("@TotalRecords", summary.TotalCount);
-            command.Parameters.AddWithValue("@PassCount", summary.PassCount);
-            command.Parameters.AddWithValue("@FailCount", summary.FailCount);
-            command.Parameters.AddWithValue("@ExceptionRate", summary.ExceptionRate);
-            command.Parameters.AddWithValue("@HemisServer", request.Server);
-            command.Parameters.AddWithValue("@AuditDatabase", request.Database);
-            command.Parameters.AddWithValue("@StudTable", request.StudTable);
-            command.Parameters.AddWithValue("@CregTable", request.CregTable);
-            command.Parameters.AddWithValue("@ProdTable", request.ProdTable);
-            command.Parameters.AddWithValue("@StudStudentNoCol", request.ColumnMapping.StudStudentNoCol);
-            command.Parameters.AddWithValue("@CregStudentNoCol", request.ColumnMapping.CregStudentNoCol);
-            command.Parameters.AddWithValue("@ExceptionsJSON", ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(persisted.FailRows)));
-            command.Parameters.AddWithValue("@ResultsJSON", ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(persisted)));
-            command.Parameters.AddWithValue("@RunByUserName", (object?)userName ?? (object?)userEmail ?? DBNull.Value);
-            command.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-
-            var runId = Convert.ToInt32(await command.ExecuteScalarAsync());
-            summary.SavedRunId = runId;
-
-            await using var hashCommand = connection.CreateConfiguredCommand();
-            hashCommand.CommandText = "UPDATE dbo.ValidationRuns SET RecordHash = @RecordHash WHERE RunID = @RunID;";
-            hashCommand.Parameters.AddWithValue("@RunID", runId);
-            hashCommand.Parameters.AddWithValue("@RecordHash", ComputeHash($"ValidationRun|Rule64|{runId}|{request.ClientId}|{systemUserId.Value}|{summary.Status}|{summary.TotalCount}|{summary.ExceptionRate}|{summary.Timestamp}|{previousHash}"));
-            await hashCommand.ExecuteNonQueryAsync();
+            var runId = await _systemDb.SaveValidationRunAsync(new SaveValidationRunRequest
+            {
+                ClientId = request.ClientId,
+                RuleNumber = 64,
+                RuleName = "STUD to CREG Student Number Validation",
+                Status = summary.Status,
+                TotalRecords = summary.TotalCount,
+                PassCount = summary.PassCount,
+                FailCount = summary.FailCount,
+                ExceptionRate = summary.ExceptionRate,
+                StudTable = request.StudTable,
+                DeceasedTable = request.CregTable,
+                StudColumn = request.ProdTable,
+                DeceasedColumn = request.ColumnMapping.StudStudentNoCol,
+                ExceptionsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary.FailRows)),
+                ResultsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary))
+            }, userEmail, userName);
 
             return runId;
         }
 
-        public async Task<int?> GetClientIdForRunAsync(int runId)
+        public async Task<int?> GetClientIdForRunAsync(int runId) => await _systemDb.GetClientIdForRunAsync(runId);
+
+        public async Task<Rule64ValidationSummary?> GetStoredSummaryAsync(int runId)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT ClientID FROM dbo.ValidationRuns WHERE RunID = @RunID AND RuleNumber = 64;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            var result = await command.ExecuteScalarAsync();
-            return result == null || result == DBNull.Value ? null : Convert.ToInt32(result);
+            var row = await _systemDb.GetRuleRunByIdAsync(runId, 64);
+            if (row == null) return null;
+            var summary = DeserializeSummary(row.ResultsJSON);
+            if (summary != null) summary.SavedRunId = runId;
+            return summary;
         }
 
         public async Task<Rule64WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var currentUserId = await GetSystemUserIdByEmailAsync(connection, currentUserEmail);
+            var row = await _systemDb.GetCurrentRuleRunAsync(clientId, 64);
+            if (row == null) return null;
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT TOP 1
-    vr.RunID, vr.ClientID,
-    ISNULL(vr.HemisServer, '') AS HemisServer,
-    ISNULL(vr.AuditDatabase, '') AS AuditDatabase,
-    ISNULL(vr.StudTable, '') AS StudTable,
-    ISNULL(vr.DeceasedTable, '') AS CregTable,
-    ISNULL(vr.BridgeTable, '') AS ProdTable,
-    ISNULL(vr.Status, '') AS Status,
-    vr.LastEditedByUserName, vr.LastEditedAt, vr.ResultsJSON
-FROM dbo.ValidationRuns vr
-WHERE vr.ClientID = @ClientID AND vr.RuleNumber = 64 AND vr.IsCurrent = 1
-ORDER BY vr.RunTimestamp DESC, vr.RunID DESC;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-                return null;
-
-            var summary = DeserializeSummary(reader.IsDBNull(10) ? null : reader.GetString(10));
-            if (summary != null)
-                ApplyBrowserPreview(summary);
+            var summary = DeserializeSummary(row.ResultsJSON);
+            if (summary != null) ApplyBrowserPreview(summary);
 
             var workspace = new Rule64WorkspaceStateViewModel
             {
-                ClientId = reader.GetInt32(1),
-                RunId = reader.GetInt32(0),
-                Server = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                Database = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                StudTable = reader.IsDBNull(4) ? "dbo_STUD" : reader.GetString(4),
-                CregTable = reader.IsDBNull(5) ? "dbo_CREG" : reader.GetString(5),
-                ProdTable = reader.IsDBNull(6) ? "dbo_STUD_PRODUCTION" : reader.GetString(6),
-                CurrentStatus = reader.IsDBNull(7) ? "" : reader.GetString(7),
-                LastEditedByUserName = reader.IsDBNull(8) ? null : reader.GetString(8),
-                LastEditedAt = reader.IsDBNull(9) ? null : reader.GetDateTime(9),
-                Summary = summary,
-                ColumnMapping = summary?.ColumnMapping ?? new Rule64ColumnMapping()
+                ClientId      = row.ClientId,
+                RunId         = row.RunId,
+                StudTable     = summary?.StudTable ?? (string.IsNullOrWhiteSpace(row.StudTable) ? "dbo_STUD" : row.StudTable),
+                CregTable     = summary?.CregTable ?? (string.IsNullOrWhiteSpace(row.DeceasedTable) ? "dbo_CREG" : row.DeceasedTable),
+                ProdTable     = summary?.ProdTable ?? (string.IsNullOrWhiteSpace(row.StudColumn) ? "dbo_STUD_PRODUCTION" : row.StudColumn),
+                ColumnMapping = summary?.ColumnMapping ?? new Rule64ColumnMapping(),
+                CurrentStatus = row.Status,
+                LastEditedByUserName = row.LastEditedByUserName,
+                LastEditedAt  = row.LastEditedAt,
+                Summary       = summary
             };
 
-            if (summary != null)
-                workspace.CurrentStatus = summary.Status;
+            if (summary != null) workspace.CurrentStatus = summary.Status;
 
-            await reader.CloseAsync();
-
-            workspace.Driver = "ODBC Driver 17 for SQL Server";
-            workspace.CurrentUserEngagementRole = currentUserId.HasValue
-                ? await GetEngagementRoleAsync(connection, clientId, currentUserId.Value) ?? ""
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            workspace.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(clientId, currentUser.Id) ?? ""
                 : "";
 
-            var signoffs = await GetRunSignoffsAsync(connection, workspace.RunId!.Value, currentUserId);
+            var signoffs = await _systemDb.GetRuleRunSignoffsAsync(workspace.RunId!.Value, currentUser?.Id);
             workspace.HasDataAnalystSignoff = signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
-            var mySignoff = signoffs.FirstOrDefault(s =>
-                ValidationRunAccessPolicy.IsSignoffOwnedByEngagementRole(s.SignoffRole, workspace.CurrentUserEngagementRole));
-            workspace.CurrentUserHasSignedOff = mySignoff != null;
+            var mySignoff = signoffs.FirstOrDefault(s => ValidationRunAccessPolicy.IsSignoffOwnedByEngagementRole(s.SignoffRole, workspace.CurrentUserEngagementRole));
+            workspace.CurrentUserHasSignedOff   = mySignoff != null;
             workspace.CurrentUserSignoffComment = mySignoff?.Comment ?? "";
-            workspace.IsWorkspaceSaved = await IsWorkspaceSavedAsync(connection, workspace.RunId!.Value);
+            workspace.IsWorkspaceSaved          = await _systemDb.IsWorkspaceSavedAsync(workspace.RunId!.Value);
 
-            if (workspace.Summary != null)
-                workspace.Summary.SavedRunId = workspace.RunId;
-
+            if (workspace.Summary != null) workspace.Summary.SavedRunId = workspace.RunId;
             return workspace;
         }
 
         public async Task<Rule64RunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var currentUserId = await GetSystemUserIdByEmailAsync(connection, currentUserEmail);
+            var row = await _systemDb.GetRuleRunByIdAsync(runId, 64);
+            if (row == null) return null;
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT vr.RunID, vr.ClientID, vr.IsCurrent, c.EngagementName, c.MaconomyNumber, vr.HemisServer, vr.ResultsJSON
-FROM dbo.ValidationRuns vr
-INNER JOIN dbo.Clients c ON c.ClientID = vr.ClientID
-WHERE vr.RunID = @RunID AND vr.RuleNumber = 64;";
-            command.Parameters.AddWithValue("@RunID", runId);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-                return null;
-
-            var summary = DeserializeSummary(reader.IsDBNull(6) ? null : reader.GetString(6));
-            if (summary == null)
-                return null;
-
+            var summary = DeserializeSummary(row.ResultsJSON);
+            if (summary == null) return null;
+            summary.SavedRunId = runId;
             ApplyBrowserPreview(summary);
 
-            var clientId = reader.GetInt32(1);
-            var review = new Rule64RunReviewViewModel
+            var viewModel = new Rule64RunReviewViewModel
             {
-                RunId = reader.GetInt32(0),
-                ClientId = clientId,
-                IsCurrentRun = !reader.IsDBNull(2) && reader.GetBoolean(2),
-                EngagementName = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                MaconomyNumber = reader.IsDBNull(4) ? "" : reader.GetString(4),
-                SourceServer = reader.IsDBNull(5) ? "" : reader.GetString(5),
-                Summary = summary
+                RunId          = row.RunId,
+                ClientId       = row.ClientId,
+                IsCurrentRun   = row.IsCurrent,
+                EngagementName = row.EngagementName,
+                MaconomyNumber = row.MaconomyNumber,
+                Summary        = summary
             };
 
-            await reader.CloseAsync();
-
-            summary.SavedRunId = review.RunId;
-            review.CurrentUserEngagementRole = currentUserId.HasValue
-                ? await GetEngagementRoleAsync(connection, clientId, currentUserId.Value) ?? ""
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            viewModel.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(viewModel.ClientId, currentUser.Id) ?? ""
                 : "";
-
-            var signoffs = await GetRunSignoffsAsync(connection, runId, currentUserId);
-            review.Signoffs = signoffs;
-            review.HasDataAnalystSignoff = signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
-            review.GeneratedSql = GenerateSql(new Rule64ValidationRequest
+            viewModel.Signoffs              = await _systemDb.GetRuleRunSignoffsAsync(runId, currentUser?.Id);
+            viewModel.HasDataAnalystSignoff = viewModel.Signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+            viewModel.GeneratedSql = GenerateSql(new Rule64ValidationRequest
             {
-                ClientId = clientId,
-                Database = summary.Database,
+                ClientId = viewModel.ClientId,
                 StudTable = summary.StudTable,
                 CregTable = summary.CregTable,
                 ProdTable = summary.ProdTable,
                 ColumnMapping = summary.ColumnMapping
             });
 
-            return review;
+            return viewModel;
         }
 
         public async Task<Rule64WorkspaceSaveResult> SaveWorkspaceAsync(Rule64ValidationRequest request, string reviewerEmail, string? reviewerName = null)
         {
             try
             {
-                await using var connection = await OpenSystemConnectionAsync();
-                await EnsureClientNotArchivedAsync(connection, request.ClientId);
-                var reviewerId = await GetSystemUserIdByEmailAsync(connection, reviewerEmail);
-                if (!reviewerId.HasValue)
-                    return new Rule64WorkspaceSaveResult { Success = false, Error = "Your account could not be resolved in the system database." };
+                if (request.RunId is null || request.RunId <= 0)
+                    return new Rule64WorkspaceSaveResult { Success = false, Error = "Run the validation first." };
 
-                if (!request.RunId.HasValue || request.RunId.Value <= 0)
-                    return new Rule64WorkspaceSaveResult { Success = false, Error = "No saved run exists. Run Rule 64 first." };
+                var clientId = await _systemDb.GetClientIdForRunAsync(request.RunId.Value);
+                if (!clientId.HasValue || clientId.Value != request.ClientId)
+                    return new Rule64WorkspaceSaveResult { Success = false, Error = "The saved run could not be found for this engagement." };
 
-                NormalizeRequest(request.StudTable, request.CregTable, request.ProdTable, request.ColumnMapping, out var studTable, out var cregTable, out var prodTable, out var mapping);
-                request.StudTable = studTable;
-                request.CregTable = cregTable;
-                request.ProdTable = prodTable;
-                request.ColumnMapping = mapping;
+                request.ColumnMapping = NormalizeMapping(request.ColumnMapping);
 
-                var cleared = await ClearSignoffsAsync(connection, request.RunId.Value);
-                var previousHash = await GetLatestValidationHashAsync(connection, request.ClientId, 64);
+                await _systemDb.EnsureClientNotArchivedAsync(request.ClientId);
+                var cleared = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(request.RunId.Value);
 
-                await using var command = connection.CreateConfiguredCommand();
-                command.CommandText = @"
-UPDATE dbo.ValidationRuns SET
-    HemisServer          = @HemisServer,
-    AuditDatabase        = @AuditDatabase,
-    StudTable            = @StudTable,
-    DeceasedTable        = @CregTable,
-    BridgeTable          = @ProdTable,
-    LastEditedByUserName = @LastEditedByUserName,
-    LastEditedAt         = GETDATE(),
-    WorkspaceSavedAt     = GETDATE(),
-    Status               = 'Needs Review',
-    RecordHash           = @RecordHash
-WHERE RunID = @RunID AND RuleNumber = 64;";
-                command.Parameters.AddWithValue("@HemisServer", request.Server);
-                command.Parameters.AddWithValue("@AuditDatabase", request.Database);
-                command.Parameters.AddWithValue("@StudTable", request.StudTable);
-                command.Parameters.AddWithValue("@CregTable", request.CregTable);
-                command.Parameters.AddWithValue("@ProdTable", request.ProdTable);
-                command.Parameters.AddWithValue("@LastEditedByUserName", reviewerName ?? reviewerEmail);
-                command.Parameters.AddWithValue("@RecordHash", ComputeHash($"WorkspaceSave|Rule64|{request.RunId.Value}|{request.ClientId}|{reviewerEmail}|{DateTime.UtcNow:o}|{previousHash}"));
-                command.Parameters.AddWithValue("@RunID", request.RunId.Value);
-                await command.ExecuteNonQueryAsync();
-
-                var storedSummary = await GetStoredSummaryAsync(request.RunId.Value);
-                if (storedSummary != null)
+                await _systemDb.SaveRuleWorkspaceFieldsAsync(new SaveRuleWorkspaceFieldsRequest
                 {
-                    storedSummary.StudTable = request.StudTable;
-                    storedSummary.CregTable = request.CregTable;
-                    storedSummary.ProdTable = request.ProdTable;
-                    storedSummary.ColumnMapping = request.ColumnMapping;
-                    await UpdateStoredSummaryAsync(connection, request.RunId.Value, storedSummary);
-                }
+                    RunId = request.RunId.Value,
+                    ClientId = request.ClientId,
+                    StudTable = request.StudTable,
+                    DeceasedTable = request.CregTable,
+                    StudColumn = request.ProdTable,
+                    DeceasedColumn = request.ColumnMapping.StudStudentNoCol
+                }, reviewerName ?? reviewerEmail);
 
                 var workspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail);
                 return new Rule64WorkspaceSaveResult
                 {
-                    Success = true,
-                    Message = cleared > 0 ? $"Workspace saved. {cleared} signoff(s) were cleared." : "Workspace saved.",
-                    SignoffsCleared = cleared > 0,
+                    Success             = true,
+                    Message             = cleared > 0 ? $"Workspace saved. {cleared} signoff(s) were cleared." : "Workspace saved.",
+                    SignoffsCleared     = cleared > 0,
                     ClearedSignoffCount = cleared,
-                    Workspace = workspace
+                    Workspace           = workspace
                 };
             }
-            catch (Exception ex)
-            {
-                return new Rule64WorkspaceSaveResult { Success = false, Error = ex.Message };
-            }
+            catch (Exception ex) { return new Rule64WorkspaceSaveResult { Success = false, Error = ex.Message }; }
         }
 
         public async Task<Rule64WorkspaceSaveResult> BeginWorkspaceEditAsync(int runId, string reviewerEmail, string? reviewerName = null)
         {
             try
             {
-                await using var connection = await OpenSystemConnectionAsync();
-                var clientId = await GetClientIdForRunAsync(connection, runId);
+                var clientId = await _systemDb.GetClientIdForRunAsync(runId);
                 if (!clientId.HasValue)
                     return new Rule64WorkspaceSaveResult { Success = false, Error = "Saved run not found." };
 
-                await EnsureClientNotArchivedAsync(connection, clientId.Value);
-                var cleared = await ClearSignoffsAsync(connection, runId);
-                var previousHash = await GetLatestValidationHashAsync(connection, clientId.Value, 64);
-
-                await using var command = connection.CreateConfiguredCommand();
-                command.CommandText = @"
-UPDATE dbo.ValidationRuns SET
-    LastEditedByUserName = @LastEditedByUserName,
-    LastEditedAt         = GETDATE(),
-    RecordHash           = @RecordHash
-WHERE RunID = @RunID;";
-                command.Parameters.AddWithValue("@LastEditedByUserName", reviewerName ?? reviewerEmail);
-                command.Parameters.AddWithValue("@RecordHash", ComputeHash($"BeginWorkspaceEdit|Rule64|{runId}|{reviewerEmail}|{DateTime.UtcNow:o}|{previousHash}"));
-                command.Parameters.AddWithValue("@RunID", runId);
-                await command.ExecuteNonQueryAsync();
+                await _systemDb.EnsureClientNotArchivedAsync(clientId.Value);
+                var cleared = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(runId);
+                await _systemDb.MarkRuleWorkspaceEditStartedAsync(runId, reviewerName ?? reviewerEmail);
 
                 var workspace = await GetCurrentWorkspaceStateAsync(clientId.Value, reviewerEmail);
                 return new Rule64WorkspaceSaveResult
                 {
-                    Success = true,
-                    Message = cleared > 0 ? $"Workspace unlocked for editing. {cleared} signoff(s) cleared." : "Workspace unlocked for editing.",
-                    SignoffsCleared = cleared > 0,
+                    Success             = true,
+                    Message             = cleared > 0 ? $"Workspace unlocked for editing. {cleared} signoff(s) cleared." : "Workspace unlocked for editing.",
+                    SignoffsCleared     = cleared > 0,
                     ClearedSignoffCount = cleared,
-                    Workspace = workspace
+                    Workspace           = workspace
                 };
             }
-            catch (Exception ex)
-            {
-                return new Rule64WorkspaceSaveResult { Success = false, Error = ex.Message };
-            }
+            catch (Exception ex) { return new Rule64WorkspaceSaveResult { Success = false, Error = ex.Message }; }
         }
 
         public async Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var reviewerId = await GetSystemUserIdByEmailAsync(connection, reviewerEmail)
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
                 ?? throw new InvalidOperationException("Your account could not be resolved in the system database.");
-            var role = await GetRunEngagementRoleAsync(connection, runId, reviewerId)
-                ?? throw new InvalidOperationException("You are not assigned to this engagement.");
-            var clientId = await GetClientIdForRunAsync(connection, runId)
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
                 ?? throw new InvalidOperationException("Validation run not found.");
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-IF EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND ReviewerID = @ReviewerID)
-    UPDATE dbo.ReviewSignoffs SET SignoffRole=@Role, ReviewType='Final', Comment=@Comment, SignedOffAt=GETDATE() WHERE RunID=@RunID AND ReviewerID=@ReviewerID;
-ELSE
-    INSERT INTO dbo.ReviewSignoffs (ClientID,RunID,ReviewerID,SignoffRole,ReviewType,Comment,SignedOffAt)
-    VALUES (@ClientID,@RunID,@ReviewerID,@Role,'Final',@Comment,GETDATE());";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@ReviewerID", reviewerId);
-            command.Parameters.AddWithValue("@Comment", string.IsNullOrWhiteSpace(comment) ? DBNull.Value : comment.Trim());
-            command.Parameters.AddWithValue("@Role", role);
-            await command.ExecuteNonQueryAsync();
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
+
+            if (!await _systemDb.RuleWorkspaceReadyForSignoffAsync(runId))
+                throw new InvalidOperationException("The data analyst must save the workspace before signoff is available.");
+
+            var role = await _systemDb.GetRawEngagementRoleAsync(clientId, reviewer.Id);
+            if (!CanSignOffAsRole(role))
+                throw new InvalidOperationException("Only assigned data analysts, managers, and directors can sign off.");
+
+            if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) &&
+                !await _systemDb.HasRuleSignoffRoleAsync(runId, "DataAnalyst"))
+                throw new InvalidOperationException("The assigned data analyst must sign off first.");
+
+            await _systemDb.AddOrUpdateRuleSignoffAsync(runId, clientId, reviewer.Id, role!, comment);
         }
 
         public async Task RemoveSignoffAsync(int runId, string reviewerEmail)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var reviewerId = await GetSystemUserIdByEmailAsync(connection, reviewerEmail)
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
                 ?? throw new InvalidOperationException("Your account could not be resolved.");
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
+                ?? throw new InvalidOperationException("Validation run not found.");
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "DELETE FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND ReviewerID = @ReviewerID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@ReviewerID", reviewerId);
-            await command.ExecuteNonQueryAsync();
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
+            await _systemDb.RemoveRuleSignoffByReviewerAsync(runId, reviewer.Id);
         }
+
+        // ─── Utilities ─────────────────────────────────────────────────────────
 
         private static void ApplyBrowserPreview(Rule64ValidationSummary? summary)
         {
@@ -785,43 +567,6 @@ ELSE
             summary.FailRows = failRows.Take(BrowserPreviewRowLimit).ToList();
             summary.PassRows = passRows.Take(BrowserPreviewRowLimit).ToList();
             summary.PreviewLimit = summary.IsPreviewOnly ? BrowserPreviewRowLimit : 0;
-        }
-
-        private static void EnsureDerivedSummaryData(Rule64ValidationSummary? summary)
-        {
-            if (summary == null)
-                return;
-
-            summary.PassRows = DeduplicateRows(summary.PassRows ?? new List<Rule64ReviewRow>());
-            summary.FailRows = DeduplicateRows(summary.FailRows ?? new List<Rule64ReviewRow>());
-            summary.ExceptionCategories ??= new List<Rule64ExceptionCategoryViewModel>();
-            AssignRowNumbers(summary.PassRows);
-            AssignRowNumbers(summary.FailRows);
-
-            var hasDetailRows = summary.PassRows.Count > 0 || summary.FailRows.Count > 0;
-            if (hasDetailRows)
-            {
-                summary.PassCount = summary.PassRows.Count;
-                summary.FailCount = summary.FailRows.Count;
-                summary.TotalCount = summary.PassCount + summary.FailCount;
-            }
-            else if (summary.TotalCount <= 0)
-            {
-                summary.TotalCount = summary.PassCount + summary.FailCount;
-            }
-
-            summary.ExceptionDetailCount = hasDetailRows
-                ? summary.FailRows.Count
-                : Math.Max(summary.ExceptionDetailCount, summary.FailRows.Count);
-            summary.ExceptionRate = summary.TotalCount == 0
-                ? 0m
-                : Math.Round((decimal)summary.FailCount / summary.TotalCount * 100m, 2);
-
-            if (string.IsNullOrWhiteSpace(summary.Status))
-                summary.Status = summary.FailCount == 0 ? "PASS" : "FAIL";
-
-            if (summary.PassRows.Count > 0 || summary.FailRows.Count > 0)
-                summary.ExceptionCategories = BuildExceptionCategories(summary.PassRows, summary.FailRows);
         }
 
         private static List<Rule64ExceptionCategoryViewModel> BuildExceptionCategories(
@@ -912,269 +657,100 @@ ELSE
                 _ => category
             };
 
-        public async Task<Rule64ValidationSummary?> GetStoredSummaryAsync(int runId)
+        private static Rule64ColumnMapping NormalizeMapping(Rule64ColumnMapping? m)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT TOP 1 ResultsJSON
-FROM dbo.ValidationRuns
-WHERE RunID = @RunID AND RuleNumber = 64;";
-            command.Parameters.AddWithValue("@RunID", runId);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync()) return null;
-
-            var summary = DeserializeSummary(reader.IsDBNull(0) ? null : reader.GetString(0));
-            if (summary != null)
+            m ??= new Rule64ColumnMapping();
+            return new Rule64ColumnMapping
             {
-                summary.SavedRunId = runId;
-                EnsureDerivedSummaryData(summary);
-            }
-            return summary;
+                StudStudentNoCol    = ColOrDef(m.StudStudentNoCol, "_007"),
+                CregStudentNoCol    = ColOrDef(m.CregStudentNoCol, "_007"),
+                StudCompareValueCol = ColOrDef(m.StudCompareValueCol, "_001"),
+                CregCompareValueCol = ColOrDef(m.CregCompareValueCol, "_001"),
+                ProdStudentNoCol    = ColOrDef(m.ProdStudentNoCol, "IAGSTNO")
+            };
         }
 
-        private static Rule64ValidationSummary CloneSummaryForPersistence(Rule64ValidationSummary source) =>
-            JsonConvert.DeserializeObject<Rule64ValidationSummary>(JsonConvert.SerializeObject(source)) ?? new Rule64ValidationSummary();
+        private static string ColOrDef(string? v, string def) => string.IsNullOrWhiteSpace(v) ? def : v.Trim();
+
+        private static string Sanitise(string name) => name.Replace("\"", "").Replace("'", "").Replace(";", "").Trim();
+
+        private static string? GetString(System.Data.Common.DbDataReader reader, string columnName)
+        {
+            var ordinal = reader.GetOrdinal(columnName);
+            if (reader.IsDBNull(ordinal)) return null;
+            var value = Convert.ToString(reader.GetValue(ordinal));
+            return string.IsNullOrEmpty(value) ? null : value;
+        }
+
+        private static async Task<int> CountAsync(NpgsqlConnection conn, string sql)
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
+        // Column names come from defaults or a previously-saved workspace and may not match this
+        // engagement's actual uploaded table - check before querying so a mismatch surfaces as a
+        // clear message instead of a raw Postgres "column does not exist" error.
+        private async Task ValidateColumnsExistAsync(int clientId, string tableName, IEnumerable<string> requiredColumns)
+        {
+            var actual  = await _datasets.GetValidatedColumnsAsync(clientId, tableName);
+            var missing = requiredColumns.Where(c => !string.IsNullOrWhiteSpace(c) && !actual.Contains(c, StringComparer.OrdinalIgnoreCase)).Distinct().ToList();
+            if (missing.Count > 0)
+                throw new InvalidOperationException(
+                    $"Column(s) {string.Join(", ", missing.Select(m => $"\"{m}\""))} were not found in table \"{tableName}\". " +
+                    "Update the column mapping to match your uploaded data, then run again.");
+        }
+
+        private static string? FindFirst(IEnumerable<string> values, string[] exactMatches, string[] containsMatches)
+        {
+            foreach (var exact in exactMatches)
+            {
+                var m = values.FirstOrDefault(v => string.Equals(v, exact, StringComparison.OrdinalIgnoreCase));
+                if (m != null) return m;
+            }
+            foreach (var fragment in containsMatches)
+            {
+                var m = values.FirstOrDefault(v => v.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0);
+                if (m != null) return m;
+            }
+            return null;
+        }
+
+        private static string? FindFirstContainsAll(IEnumerable<string> values, params string[] fragments) =>
+            values.FirstOrDefault(v => fragments.All(f => v.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0));
 
         private static Rule64ValidationSummary? DeserializeSummary(string? json)
         {
             if (string.IsNullOrWhiteSpace(json)) return null;
-            try
+            try { return JsonConvert.DeserializeObject<Rule64ValidationSummary>(ValidationPayloadCodec.Decode(json)); }
+            catch { return null; }
+        }
+
+        private static bool CanSignOffAsRole(string? role) =>
+            string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(role, "Manager",     StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(role, "Director",    StringComparison.OrdinalIgnoreCase);
+
+        private async Task<(NpgsqlConnection Connection, string Schema)> OpenEngagementConnectionAsync(int clientId)
+        {
+            var database = await _datasets.GetDatabaseAsync(clientId)
+                ?? throw new InvalidOperationException("Create a database for this engagement before running this rule.");
+
+            var connectionString = HemisAudit.Data.PostgresConnectionStringHelper.WithResiliencyDefaults(
+                _configuration.GetConnectionString("Postgres")
+                    ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured."),
+                commandTimeoutSeconds: 0);
+
+            var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync();
+            await using (var setTimeout = connection.CreateCommand())
             {
-                var decoded = ValidationPayloadCodec.Decode(json);
-                if (string.IsNullOrWhiteSpace(decoded))
-                    return null;
-                var summary = JsonConvert.DeserializeObject<Rule64ValidationSummary>(decoded);
-                EnsureDerivedSummaryData(summary);
-                return summary;
+                setTimeout.CommandText = "SET statement_timeout = 0;";
+                await setTimeout.ExecuteNonQueryAsync();
             }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static async Task UpdateStoredSummaryAsync(SqlConnection connection, int runId, Rule64ValidationSummary summary)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-UPDATE dbo.ValidationRuns
-SET ResultsJSON = @ResultsJSON
-WHERE RunID = @RunID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@ResultsJSON", ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary)));
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private static void NormalizeRequest(
-            string studTableIn,
-            string cregTableIn,
-            string prodTableIn,
-            Rule64ColumnMapping? mappingIn,
-            out string studTable,
-            out string cregTable,
-            out string prodTable,
-            out Rule64ColumnMapping mapping)
-        {
-            studTable = (studTableIn ?? "dbo_STUD").Trim();
-            cregTable = (cregTableIn ?? "dbo_CREG").Trim();
-            prodTable = (prodTableIn ?? "dbo_STUD_PRODUCTION").Trim();
-            mapping = mappingIn ?? new Rule64ColumnMapping();
-
-            mapping.StudStudentNoCol = ColumnOrDefault(mapping.StudStudentNoCol, "_007");
-            mapping.CregStudentNoCol = ColumnOrDefault(mapping.CregStudentNoCol, "_007");
-            mapping.StudCompareValueCol = ColumnOrDefault(mapping.StudCompareValueCol, "_001");
-            mapping.CregCompareValueCol = ColumnOrDefault(mapping.CregCompareValueCol, "_001");
-            mapping.ProdStudentNoCol = ColumnOrDefault(mapping.ProdStudentNoCol, "IAGSTNO");
-
-            ValidateObjectName(studTable);
-            ValidateObjectName(cregTable);
-            ValidateObjectName(prodTable);
-            ValidateObjectName(mapping.StudStudentNoCol);
-            ValidateObjectName(mapping.CregStudentNoCol);
-            ValidateObjectName(mapping.StudCompareValueCol);
-            ValidateObjectName(mapping.CregCompareValueCol);
-            ValidateObjectName(mapping.ProdStudentNoCol);
-        }
-
-        private static string ColumnOrDefault(string? value, string defaultValue) =>
-            string.IsNullOrWhiteSpace(value) ? defaultValue : value.Trim();
-
-        private static string? FindFirst(List<string> items, string[] exactMatches, string[] partials)
-        {
-            foreach (var exact in exactMatches)
-            {
-                if (items.Any(item => string.Equals(item, exact, StringComparison.OrdinalIgnoreCase)))
-                    return exact;
-            }
-
-            foreach (var partial in partials)
-            {
-                var match = items.FirstOrDefault(item => item.IndexOf(partial, StringComparison.OrdinalIgnoreCase) >= 0);
-                if (match != null)
-                    return match;
-            }
-
-            return null;
-        }
-
-        private static string Sanitise(string name) =>
-            name.Replace("]", "").Replace("[", "").Replace("'", "").Replace(";", "").Trim();
-
-        private static void ValidateObjectName(string name)
-        {
-            name = (name ?? "").Trim();
-            if (string.IsNullOrWhiteSpace(name))
-                throw new InvalidOperationException("Object name cannot be blank.");
-
-            if (name.Any(ch => !(char.IsLetterOrDigit(ch) || ch == '_' || ch == '.' || ch == '-')))
-                throw new InvalidOperationException($"Invalid object name '{name}'.");
-        }
-
-        private static string ComputeHash(string input)
-        {
-            var bytes = System.Text.Encoding.UTF8.GetBytes(input);
-            return Convert.ToHexString(SHA256.HashData(bytes));
-        }
-
-        private static async Task<int> ExecuteCountAsync(SqlConnection connection, string sql)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandTimeout = SqlCommandTimeoutSeconds;
-            command.CommandText = sql;
-            return Convert.ToInt32(await command.ExecuteScalarAsync());
-        }
-
-        private async Task<int?> GetSystemUserIdByEmailAsync(SqlConnection connection, string? email)
-        {
-            if (string.IsNullOrWhiteSpace(email)) return null;
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 UserID FROM dbo.Users WHERE Email = @Email;";
-            command.Parameters.AddWithValue("@Email", email);
-            var result = await command.ExecuteScalarAsync();
-            return result == null || result == DBNull.Value ? null : Convert.ToInt32(result);
-        }
-
-        private async Task<string?> GetEngagementRoleAsync(SqlConnection connection, int clientId, int userId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 EngagementRole FROM dbo.UserClientAssignments WHERE ClientID = @ClientID AND UserID = @UserID;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@UserID", userId);
-            var result = await command.ExecuteScalarAsync();
-            return result == null || result == DBNull.Value ? null : result.ToString();
-        }
-
-        private async Task<string?> GetRunEngagementRoleAsync(SqlConnection connection, int runId, int userId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT TOP 1 uca.EngagementRole FROM dbo.UserClientAssignments uca
-INNER JOIN dbo.ValidationRuns vr ON vr.ClientID = uca.ClientID
-WHERE vr.RunID = @RunID AND uca.UserID = @UserID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@UserID", userId);
-            var result = await command.ExecuteScalarAsync();
-            return result == null || result == DBNull.Value ? null : result.ToString();
-        }
-
-        private async Task<int?> GetClientIdForRunAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT ClientID FROM dbo.ValidationRuns WHERE RunID = @RunID AND RuleNumber = 64;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            var result = await command.ExecuteScalarAsync();
-            return result == null || result == DBNull.Value ? null : Convert.ToInt32(result);
-        }
-
-        private async Task MarkPreviousRunsHistoricalAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "UPDATE dbo.ValidationRuns SET IsCurrent = 0 WHERE ClientID = @ClientID AND RuleNumber = @RuleNumber AND IsCurrent = 1;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private async Task EnsureClientNotArchivedAsync(SqlConnection connection, int clientId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 Status FROM dbo.Clients WHERE ClientID = @ClientID;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            var result = await command.ExecuteScalarAsync();
-            if (string.Equals(Convert.ToString(result), "Archived", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("This engagement is archived and cannot accept new validation runs.");
-        }
-
-        private async Task<string?> GetLatestValidationHashAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 RecordHash FROM dbo.ValidationRuns WHERE ClientID = @ClientID AND RuleNumber = @RuleNumber ORDER BY RunTimestamp DESC, RunID DESC;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            var result = await command.ExecuteScalarAsync();
-            return result == null || result == DBNull.Value ? null : result.ToString();
-        }
-
-        private async Task<List<RunSignoffViewModel>> GetRunSignoffsAsync(SqlConnection connection, int runId, int? currentUserId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT rs.SignoffRole, rs.Comment, rs.SignedOffAt, u.Email,
-       LTRIM(RTRIM(ISNULL(u.FirstName,'')+' '+ISNULL(u.LastName,''))) AS ReviewerName,
-       CASE WHEN @CurrentUserID IS NOT NULL AND rs.ReviewerID = @CurrentUserID THEN CAST(1 AS BIT) ELSE CAST(0 AS BIT) END AS IsCurrentUser
-FROM dbo.ReviewSignoffs rs
-INNER JOIN dbo.Users u ON u.UserID = rs.ReviewerID
-WHERE rs.RunID = @RunID
-ORDER BY CASE ISNULL(rs.SignoffRole,'') WHEN 'DataAnalyst' THEN 1 WHEN 'Manager' THEN 2 WHEN 'Director' THEN 3 ELSE 4 END, rs.SignedOffAt DESC;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@CurrentUserID", currentUserId.HasValue ? currentUserId.Value : DBNull.Value);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            var items = new List<RunSignoffViewModel>();
-            while (await reader.ReadAsync())
-            {
-                items.Add(new RunSignoffViewModel
-                {
-                    SignoffRole = reader.IsDBNull(0) ? "" : reader.GetString(0),
-                    Comment = reader.IsDBNull(1) ? "" : reader.GetString(1),
-                    SignedOffAt = reader.IsDBNull(2) ? DateTime.MinValue : reader.GetDateTime(2),
-                    ReviewerEmail = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                    ReviewerName = reader.IsDBNull(4) ? "" : reader.GetString(4),
-                    IsCurrentUser = !reader.IsDBNull(5) && reader.GetBoolean(5)
-                });
-            }
-
-            return items;
-        }
-
-        private async Task<int> ClearSignoffsAsync(SqlConnection connection, int runId)
-        {
-            await using var countCommand = connection.CreateConfiguredCommand();
-            countCommand.CommandText = "SELECT COUNT(1) FROM dbo.ReviewSignoffs WHERE RunID = @RunID;";
-            countCommand.Parameters.AddWithValue("@RunID", runId);
-            var count = Convert.ToInt32(await countCommand.ExecuteScalarAsync());
-
-            await using var deleteCommand = connection.CreateConfiguredCommand();
-            deleteCommand.CommandText = "DELETE FROM dbo.ReviewSignoffs WHERE RunID = @RunID;";
-            deleteCommand.Parameters.AddWithValue("@RunID", runId);
-            await deleteCommand.ExecuteNonQueryAsync();
-
-            return count;
-        }
-
-        private async Task<bool> IsWorkspaceSavedAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT CASE WHEN EXISTS (
-    SELECT 1 FROM dbo.ValidationRuns WHERE RunID = @RunID
-    AND (WorkspaceSavedAt IS NOT NULL OR EXISTS (
-        SELECT 1 FROM dbo.ReviewSignoffs rs WHERE rs.RunID = ValidationRuns.RunID AND rs.SignoffRole = 'DataAnalyst'))
-) THEN 1 ELSE 0 END;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            return Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
+            var schema = string.IsNullOrWhiteSpace(database.SchemaName) ? $"engagement_{clientId}" : database.SchemaName;
+            return (connection, schema);
         }
     }
 }

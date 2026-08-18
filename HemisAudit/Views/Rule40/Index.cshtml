@@ -64,29 +64,15 @@
     <div class="accordion-stack">
         <div class="accordion-item">
             <button class="accordion-toggle" type="button" onclick="toggleAccordion('r40-conn')">
-                <span class="acc-icon">DB</span><span>Database Connection</span><span class="acc-chevron">v</span>
+                <span class="acc-icon">DB</span><span>Engagement Dataset</span><span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-r40-conn">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label for="r40Server">Server Name</label>
-                        <input id="r40Server" type="text" placeholder="SERVER\INSTANCE or (localdb)\MSSQLLocalDB" />
-                    </div>
-                    <div class="field-group">
-                        <label for="r40Driver">Driver</label>
-                        <select id="r40Driver">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group">
-                        <label for="r40Db">Database</label>
-                        <select id="r40Db" onchange="r40LoadTables()"></select>
-                    </div>
+                <div class="alert alert--info" id="r40DatasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
-                <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
-                    <button type="button" class="btn btn-primary" onclick="r40Connect()">Connect</button>
+                <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
+                    <a class="btn btn-secondary" id="r40DatasetsLink" href="#">Manage Datasets</a>
+                    <button type="button" class="btn btn-primary" onclick="r40LoadTables()">Refresh Tables</button>
                 </div>
                 <div id="r40ConnOut" class="status-output"></div>
             </div>
@@ -316,8 +302,7 @@ window.r40Tab = function(tab) {
     function loadOneCols(tableName, side) {
         if (!tableName) return;
         post(API + '/GetTableColumns', {
-            server: gv('r40Server').trim(), database: gv('r40Db'), driver: gv('r40Driver'),
-            tableName: tableName
+            clientId: st.clientId, tableName: tableName
         }).then(function(d) {
             if (!d.success || !d.columns) return;
             if (side === 'valpac') {
@@ -378,38 +363,33 @@ window.r40Tab = function(tab) {
     window.r40RemovePair = function(i) { st.pairs.splice(i, 1); renderPairs(); };
     window.r40AddPair    = function() { st.pairs.push({ valpacCol: '', asciiCol: '', label: '' }); renderPairs(); };
 
-    /* ── Connection ── */
-    window.r40Connect = function() {
-        var server = gv('r40Server').trim();
-        if (!server) { setWs('Enter a server name first.', 'warning'); return; }
-        spin('Connecting to server...');
-        post(API + '/GetDatabases', { server: server, driver: gv('r40Driver') })
-        .then(function(d) {
-            unspin();
-            if (!d.success) { setOut('r40ConnOut', d.error || 'Connection failed.', 'error'); return; }
-            fillSel('r40Db', d.databases || []);
-            setOut('r40ConnOut', 'Connected — ' + (d.databases || []).length + ' database(s) found.', 'success');
-            if ((d.databases || []).length) r40LoadTables();
-        }).catch(function(e) { unspin(); setOut('r40ConnOut', e.message, 'error'); });
-    };
-
-    window.r40LoadTables = function() {
-        var db = gv('r40Db'); if (!db) return;
+    /* ── Table Loading (this engagement's uploaded datasets) ── */
+    window.r40LoadTables = function(options) {
+        options = options || {};
+        if (!st.clientId) return Promise.resolve(null);
         spin('Loading tables...');
-        post(API + '/GetTables', { server: gv('r40Server').trim(), database: db, driver: gv('r40Driver') })
+        return post(API + '/GetTables', { clientId: st.clientId })
         .then(function(d) {
             unspin();
-            if (!d.success) { setOut('r40TableOut', d.error || 'Failed to load tables.', 'error'); return; }
+            if (!d.success) {
+                setOut('r40TableOut', d.error || 'Failed to load tables.', 'error');
+                var alertEl = g('r40DatasetStatusAlert');
+                if (alertEl) { alertEl.className = 'alert alert--error'; alertEl.textContent = d.error || 'Failed to load tables.'; }
+                return null;
+            }
             var tables = d.tables || [];
-            fillSel('r40ValpacTable', tables, d.autoValpacTable);
-            fillSel('r40AsciiTable',  tables, d.autoAsciiTable);
+            fillSel('r40ValpacTable', tables, options.preferredValpacTable || d.autoValpacTable);
+            fillSel('r40AsciiTable',  tables, options.preferredAsciiTable  || d.autoAsciiTable);
             show('body-r40-tables', true);
             show('body-r40-colmap', true);
-            setOut('r40TableOut', 'Loaded ' + tables.length + ' tables — VALPAC and ASCII auto-detected.', 'success');
-            st.pairs = DEF_PAIRS.slice();
+            if (!options.silent) setOut('r40TableOut', 'Loaded ' + tables.length + ' tables — VALPAC and ASCII auto-detected.', 'success');
+            var alertEl2 = g('r40DatasetStatusAlert');
+            if (alertEl2) { alertEl2.className = 'alert alert--success'; alertEl2.textContent = 'Loaded ' + tables.length + " table(s) from this engagement's dataset."; }
+            if (!options.preservePairs) st.pairs = DEF_PAIRS.slice();
             renderPairs();
             r40LoadColumns();
-        }).catch(function(e) { unspin(); setOut('r40TableOut', e.message, 'error'); });
+            return d;
+        }).catch(function(e) { unspin(); setOut('r40TableOut', e.message, 'error'); return null; });
     };
 
     window.r40Verify = function() {
@@ -417,8 +397,7 @@ window.r40Tab = function(tab) {
         if (!vt || !at) { setOut('r40TableOut', 'Select both tables first.', 'error'); return; }
         spin('Verifying tables...');
         post(API + '/VerifyTables', {
-            server: gv('r40Server').trim(), database: gv('r40Db'), driver: gv('r40Driver'),
-            valpacTable: vt, asciiTable: at
+            clientId: st.clientId, valpacTable: vt, asciiTable: at
         }).then(function(d) {
             unspin();
             if (!d.success) { setOut('r40TableOut', d.error || 'Verification failed.', 'error'); return; }
@@ -430,7 +409,6 @@ window.r40Tab = function(tab) {
         var activePairs = (st.pairs || DEF_PAIRS).filter(function(p) { return p.valpacCol && p.asciiCol; });
         return {
             clientId: st.clientId, runId: st.runId,
-            server: gv('r40Server').trim(), database: gv('r40Db'), driver: gv('r40Driver') || 'ODBC Driver 17 for SQL Server',
             valpacTable: gv('r40ValpacTable'), asciiTable: gv('r40AsciiTable'),
             valpacKeyCol: gv('r40ValpacKey') || st.valpacKey || '_037',
             asciiKeyCol:  gv('r40AsciiKey')  || st.asciiKey  || '_037',
@@ -467,7 +445,10 @@ window.r40Tab = function(tab) {
         }).catch(function(e) { unspin(); alert(e.message); });
     };
 
-    window.r40DlAll = function() { if (st.runId) window.open(API + '/DownloadExcel?runId=' + st.runId, '_blank'); };
+    function r40DownloadSaved(url, filename) {
+        return window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
+    }
+    window.r40DlAll = function() { if (st.runId) r40DownloadSaved(API + '/DownloadExcel?runId=' + st.runId, 'Rule40_Run_' + st.runId + '.xlsx'); };
 
     /* ── Workspace ── */
     window.r40SaveWorkspace = function() {
@@ -553,6 +534,9 @@ window.r40Tab = function(tab) {
     }
 
     function applyWorkspace(ws, resultsVisible) {
+        var datasetsLink = g('r40DatasetsLink');
+        if (datasetsLink) datasetsLink.href = st.clientId ? '/EngagementDatasets?clientId=' + st.clientId : '#';
+
         if (!ws) {
             st.runId = null; st.summary = null; st.isWorkspaceSaved = false;
             st.currentUserHasSignedOff = false; st.resultsVisible = false; st.currentUserEngagementRole = '';
@@ -562,7 +546,9 @@ window.r40Tab = function(tab) {
             var sl = g('r40StatusLabel'); if (sl) sl.textContent = '-';
             var el = g('r40EditedLabel'); if (el) el.textContent = '-';
             st.pairs = DEF_PAIRS.slice(); renderPairs();
-            applySummary(null, false); updateButtons(); return;
+            applySummary(null, false); updateButtons();
+            if (!IS_RESULTS_ONLY) r40LoadTables().catch(function() {});
+            return;
         }
         st.runId = ws.runId || null;
         st.isWorkspaceSaved = !!ws.isWorkspaceSaved;
@@ -570,19 +556,10 @@ window.r40Tab = function(tab) {
         st.resultsVisible = !!resultsVisible;
         st.currentUserEngagementRole = ws.currentUserEngagementRole || '';
 
-        if (!IS_RESULTS_ONLY) {
-            var sv = g('r40Server'); if (sv && ws.server) sv.value = ws.server;
-            var dv = g('r40Driver'); if (dv && ws.driver) dv.value = ws.driver;
-            if (ws.database)    fillSel('r40Db',         [ws.database],    ws.database);
-            if (ws.valpacTable) fillSel('r40ValpacTable',[ws.valpacTable], ws.valpacTable);
-            if (ws.asciiTable)  fillSel('r40AsciiTable', [ws.asciiTable],  ws.asciiTable);
-        }
         // restore key cols from saved summary
         var savedValpacKey = (ws.summary && ws.summary.valpacKeyCol) || (ws.valpacKeyCol) || '_037';
         var savedAsciiKey  = (ws.summary && ws.summary.asciiKeyCol)  || (ws.asciiKeyCol)  || '_037';
         st.valpacKey = savedValpacKey; st.asciiKey = savedAsciiKey;
-        fillKeySel('r40ValpacKey', st.valpacCols.length ? st.valpacCols : [savedValpacKey], savedValpacKey);
-        fillKeySel('r40AsciiKey',  st.asciiCols.length  ? st.asciiCols  : [savedAsciiKey],  savedAsciiKey);
 
         applyWsMeta(ws);
         var sc = g('r40SignoffComment'); if (sc && ws.currentUserSignoffComment) sc.value = ws.currentUserSignoffComment;
@@ -590,7 +567,19 @@ window.r40Tab = function(tab) {
         // restore column pairs from saved summary
         var savedPairs = ws.summary && ws.summary.pairs && ws.summary.pairs.length ? ws.summary.pairs : null;
         st.pairs = savedPairs ? savedPairs.map(function(p) { return { valpacCol: p.valpacCol||p.ValpacCol||'', asciiCol: p.asciiCol||p.AsciiCol||'', label: p.label||p.Label||'' }; }) : DEF_PAIRS.slice();
-        if (!IS_RESULTS_ONLY) renderPairs();
+
+        if (!IS_RESULTS_ONLY) {
+            r40LoadTables({
+                preferredValpacTable: ws.valpacTable || '',
+                preferredAsciiTable: ws.asciiTable || '',
+                preservePairs: true,
+                silent: true
+            }).then(function() {
+                fillKeySel('r40ValpacKey', st.valpacCols.length ? st.valpacCols : [savedValpacKey], savedValpacKey);
+                fillKeySel('r40AsciiKey',  st.asciiCols.length  ? st.asciiCols  : [savedAsciiKey],  savedAsciiKey);
+                renderPairs();
+            }).catch(function() {});
+        }
 
         if (!resultsVisible) { setWs('Saved Rule 40 results are not available for your role.', 'info'); applySummary(null, false); updateButtons(); return; }
         setWs(ws.summary ? 'Saved Rule 40 workspace loaded.' : 'Rule 40 workspace loaded. Run validation to generate results.', 'success');
@@ -608,9 +597,9 @@ window.r40Tab = function(tab) {
         renderExceptions(summary);
         renderAgree(summary);
         if (summary && st.runId) {
-            var dlE = g('r40DlExcel'); if (dlE) dlE.onclick = function() { window.open(API + '/DownloadExcel?runId=' + st.runId, '_blank'); };
-            var dlC = g('r40DlCsv');   if (dlC) dlC.onclick = function() { window.open(API + '/DownloadCsv?runId='   + st.runId, '_blank'); };
-            var dlS = g('r40DlSql');   if (dlS) dlS.onclick = function() { window.open(API + '/DownloadSql?runId='   + st.runId, '_blank'); };
+            var dlE = g('r40DlExcel'); if (dlE) dlE.onclick = function() { r40DownloadSaved(API + '/DownloadExcel?runId=' + st.runId, 'Rule40_Run_' + st.runId + '.xlsx'); };
+            var dlC = g('r40DlCsv');   if (dlC) dlC.onclick = function() { r40DownloadSaved(API + '/DownloadCsv?runId='   + st.runId, 'Rule40_Run_' + st.runId + '.csv'); };
+            var dlS = g('r40DlSql');   if (dlS) dlS.onclick = function() { r40DownloadSaved(API + '/DownloadSql?runId='   + st.runId, 'Rule40_Run_' + st.runId + '.sql'); };
         }
         updateButtons();
     }
@@ -630,7 +619,6 @@ window.r40Tab = function(tab) {
             statCard('Overall', '<span class="badge ' + sc + '">' + esc(s.status) + '</span>', '') +
             '</div>' +
             '<div class="card" style="padding:16px"><div class="form-grid">' +
-            '<div><div class="stat-label">Database</div><div>' + esc(s.database || '') + '</div></div>' +
             '<div><div class="stat-label">VALPAC Table</div><div>' + esc(s.valpacTable || '') + '</div></div>' +
             '<div><div class="stat-label">ASCII Table</div><div>' + esc(s.asciiTable || '') + '</div></div>' +
             '<div><div class="stat-label">Timestamp</div><div>' + esc(s.timestamp || '') + '</div></div>' +

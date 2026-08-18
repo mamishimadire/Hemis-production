@@ -10,12 +10,12 @@ public static class Rule60RScriptGenerator
     public static string Generate(Rule41ValidationRequest req)
     {
         var table1  = RString(req.StudTable);
-        var table2  = RString(req.AuditTable);
+        var table2  = RString(req.H16Table);
         var key1    = RString(req.StudKey);
-        var key2    = RString(req.AuditKey);
+        var key2    = RString(req.H16Key);
         var pairs   = req.Pairs ?? new();
         var pairsR  = string.Join(",\n  ",
-            pairs.Select(p => $"list(col1='{RString(p.StudCol)}', col2='{RString(p.AuditCol)}', label='{RString(p.Label)}')"));
+            pairs.Select(p => $"list(col1='{RString(p.StudCol)}', col2='{RString(p.H16Col)}', label='{RString(p.Label)}')"));
         var pairsSection = string.IsNullOrEmpty(pairsR)
             ? $"list(col1='{key1}', col2='{key2}', label='Key')"
             : pairsR;

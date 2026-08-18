@@ -19,9 +19,9 @@
     var sqlRequestJson = System.Text.Json.JsonSerializer.Serialize(new Rule65ValidationRequest
     {
         ClientId = Model.ClientId,
-        Database = summary.Database,
         CancellationTable = summary.CancellationTable,
         ClientTable = summary.ClientTable,
+        UseClientCensusTable = summary.UseClientCensusTable,
         ColumnMapping = summary.ColumnMapping
     });
     var summaryJson = System.Text.Json.JsonSerializer.Serialize(summary);
@@ -124,10 +124,6 @@
         <div>
             <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Rule</div>
             <div>Rule 65 - Cancellation Census Date Validation</div>
-        </div>
-        <div>
-            <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Database</div>
-            <div>@summary.Database</div>
         </div>
         <div>
             <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Cancellation Table</div>

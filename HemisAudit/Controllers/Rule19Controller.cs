@@ -153,8 +153,6 @@ namespace HemisAudit.Controllers
                 review.GeneratedSql = await _rule19.GenerateSqlAsync(new Rule19ValidationRequest
                 {
                     ClientId = review.ClientId,
-                    Server = review.SourceServer,
-                    Database = review.Summary.Database,
                     StudTable = review.Summary.StudTable,
                     QualTable = review.Summary.QualTable,
                     QualCodeColumn = review.Summary.QualCodeColumn,
@@ -182,21 +180,17 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule19.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule19.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule19.GetTablesAsync(model.Server, model.Database, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] Rule19GetColumnsRequest model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule19.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName)));
+        public async Task<IActionResult> GetColumns([FromBody] Rule16ColumnsRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule19.GetColumnsAsync(model.ClientId, model.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> LoadFilterValues([FromBody] Rule19FilterValueRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule19.GetFilterValuesAsync(model.Server, model.Database, model.Driver, model.StudTable, model.FulfilledColumn)));
+                await _rule19.GetFilterValuesAsync(model.ClientId, model.StudTable, model.FulfilledColumn)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule19VerifyRequest request) =>
@@ -618,8 +612,6 @@ namespace HemisAudit.Controllers
             var request = new Rule19ValidationRequest
             {
                 ClientId = review.ClientId,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 QualTable = review.Summary.QualTable,
                 QualCodeColumn = review.Summary.QualCodeColumn,

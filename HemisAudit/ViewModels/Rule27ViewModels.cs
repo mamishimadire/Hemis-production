@@ -4,9 +4,7 @@ namespace HemisAudit.ViewModels
 {
     public class Rule27GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
     }
 
@@ -21,9 +19,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule27FilterValueRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public string FilterColumn { get; set; } = "";
     }
@@ -45,9 +41,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule27VerifyRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public string FilterColumn { get; set; } = "";
         public string FilterValue { get; set; } = "";
@@ -71,9 +65,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string TableName { get; set; } = "";
         public string FilterColumn { get; set; } = "";
         public string FilterValue { get; set; } = "Fatal";
@@ -107,7 +98,6 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string TableName { get; set; } = "";
         public string FilterColumn { get; set; } = "";
         public string FilterValue { get; set; } = "";
@@ -117,6 +107,7 @@ namespace HemisAudit.ViewModels
         public bool Sampled { get; set; }
         public int ClientId { get; set; }
         public int? SavedRunId { get; set; }
+        public bool MatchingRowsTruncated { get; set; }
         public List<Rule27BreakdownItemViewModel> Breakdown { get; set; } = new();
         public List<Rule27ValidationRowRecord> MatchingRows { get; set; } = new();
         public string? Warning { get; set; }
@@ -130,7 +121,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule27ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -148,9 +138,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string TableName { get; set; } = "";
         public string FilterColumn { get; set; } = "";
         public string FilterValue { get; set; } = "Fatal";

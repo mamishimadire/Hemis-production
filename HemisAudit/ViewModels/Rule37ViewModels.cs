@@ -10,9 +10,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
         // CESM table (_001, _006)
         public string CesmTable { get; set; } = "";
         public string CesmIdCol { get; set; } = "";
@@ -68,7 +65,6 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string CesmTable { get; set; } = "";
         public string QualTable { get; set; } = "";
         public string PqmTable { get; set; } = "";
@@ -81,16 +77,16 @@ namespace HemisAudit.ViewModels
         public string PqmCode2Col { get; set; } = "";
         public int ClientId { get; set; }
         public int? SavedRunId { get; set; }
+        public bool RowsTruncated { get; set; }
         public List<Rule37ValidationRow> ValidationRows { get; set; } = new();
         public List<Rule37ExceptionRecord> Exceptions { get; set; } = new();
+        public string? Warning { get; set; }
         public string? Error { get; set; }
     }
 
     public class Rule37VerifyRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string CesmTable { get; set; } = "";
         public string QualTable { get; set; } = "";
         public string PqmTable { get; set; } = "";
@@ -118,13 +114,16 @@ namespace HemisAudit.ViewModels
         public string? Error { get; set; }
     }
 
+    // Shared with Rule46Controller.cs, which is not yet migrated and still needs Server/Database/Driver.
+    // Rule37 itself only reads ClientId/TableName/TableRole.
     public class Rule37GetColumnsRequest
     {
+        public int ClientId { get; set; }
         public string Server { get; set; } = "";
         public string Database { get; set; } = "";
         public string Driver { get; set; } = "";
         public string TableName { get; set; } = "";
-        public string TableRole { get; set; } = "";   // "cesm" | "qual" | "pqm"
+        public string TableRole { get; set; } = "";   // "cesm_id" | "cesm_code" | "qual_id" | "qual_name" | "pqm_name" | "pqm_code1" | "pqm_code2"
     }
 
     public class Rule37WorkspaceStateViewModel
@@ -132,9 +131,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string CesmTable { get; set; } = "";
         public string QualTable { get; set; } = "";
         public string PqmTable { get; set; } = "";
@@ -173,7 +169,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule37ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();

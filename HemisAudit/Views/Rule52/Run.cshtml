@@ -44,7 +44,6 @@
 <div class="card" style="padding:20px;margin-bottom:20px">
     <h3 class="section-title" style="margin-top:0">Run Summary</h3>
     <div class="form-grid">
-        <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Database</div><div>@Model.Summary.Database</div></div>
         <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Source Table (dbo_QUAL)</div><div>@Model.Summary.ValpacTable</div></div>
         <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Target Table (MT-audit-prod-QUAL)</div><div>@Model.Summary.ProdTable</div></div>
         <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Column Mapping</div><div style="font-size:12px">@Model.Summary.TableLinkageText</div></div>
@@ -100,10 +99,10 @@
 }
 
 <div class="card" style="padding:20px">
-    <h3 class="section-title" style="margin-top:0">Result Rows <small style="font-weight:normal;font-size:13px">(browser preview)</small></h3>
-    @if (Model.Summary.IsPreviewOnly)
+    <h3 class="section-title" style="margin-top:0">Result Rows</h3>
+    @if (Model.Summary.TotalValidated > Model.Summary.ValidationRows.Count)
     {
-        <div class="alert alert--warning" style="margin-bottom:12px">Showing a preview of @Model.Summary.PreviewLimit rows. Download Excel or CSV for the full result set.</div>
+        <div class="alert alert--warning" style="margin-bottom:12px">@Model.Summary.TotalValidated.ToString("N0") rows were found; only the first @Model.Summary.ValidationRows.Count.ToString("N0") are stored and shown here. All totals above are exact.</div>
     }
     <div class="table-wrapper" style="overflow-x:auto">
         <table class="data-table" style="min-width:500px;font-size:12px;font-family:Consolas,monospace">
@@ -117,15 +116,13 @@
                 </tr>
             </thead>
             <tbody>
-                @foreach (var row in Model.Summary.ReviewRows)
+                @foreach (var row in Model.Summary.ValidationRows)
                 {
-                    var dv = row.DisplayValues;
-                    string DV(string k) => dv.TryGetValue(k, out var val) ? (val ?? "") : "";
                     <tr style="background:@(row.ValidationResult == "FAIL" ? "#FFF3F3" : "#F3FFF3")">
-                        <td>@row.ValidationNumber</td>
-                        <td>@DV("VALPAC_SUBJ")</td>
-                        <td>@DV("VALPAC_APPROVAL_STATUS")</td>
-                        <td>@DV("PROD_SUBJ")</td>
+                        <td>@row.RowNumber</td>
+                        <td>@row.ValpacSubj</td>
+                        <td>@row.ApprovalStatus</td>
+                        <td>@row.ProdSubj</td>
                         <td><span class="badge @(row.ValidationResult == "FAIL" ? "badge--fail" : "badge--pass")">@row.ValidationResult</span></td>
                     </tr>
                 }

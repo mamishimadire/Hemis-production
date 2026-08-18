@@ -56,30 +56,16 @@
         <div class="accordion-item">
             <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
                 <span class="acc-icon">DB</span>
-                <span>Database Connection</span>
+                <span>Engagement Dataset</span>
                 <span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-connection">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label for="server">Server Name</label>
-                        <input id="server" type="text" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                    </div>
-                    <div class="field-group">
-                        <label for="driver">Driver</label>
-                        <select id="driver">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group">
-                        <label for="database">Database</label>
-                        <select id="database"></select>
-                    </div>
+                <div class="alert alert--info" id="datasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
                 <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                    <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
+                    <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                    <button type="button" class="btn btn-primary" id="connectBtn">Refresh Tables</button>
                     <button type="button" class="btn btn-info" id="verifyBtn">Verify Tables</button>
                 </div>
                 <div id="connectionOutput" class="status-output"></div>
@@ -285,7 +271,6 @@
 (() => {
     const currentSystemRole = '@currentSystemRole';
     const apiBasePath = '/Rule26';
-    const preferredDatabaseName = 'HEMIS_2025';
     const state = {
         clientId: @(selectedClientId > 0 ? selectedClientId : 0),
         currentRunId: null,
@@ -306,9 +291,8 @@
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'),
-        driver: document.getElementById('driver'),
-        database: document.getElementById('database'),
+        datasetStatusAlert: document.getElementById('datasetStatusAlert'),
+        datasetsLink: document.getElementById('datasetsLink'),
         profTable: document.getElementById('profTable'),
         payrollTable: document.getElementById('payrollTable'),
         profPersonnel: document.getElementById('profPersonnel'),
@@ -444,9 +428,6 @@
         return {
             clientId: Number(els.clientId.value || 0),
             runId: state.currentRunId,
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
             profTable: els.profTable.value,
             payrollTable: els.payrollTable.value,
             profPersonnelColumn: els.profPersonnel.value,
@@ -466,9 +447,7 @@
     function buildVerifyRequest() {
         const request = buildValidationRequest();
         return {
-            server: request.server,
-            database: request.database,
-            driver: request.driver,
+            clientId: request.clientId,
             profTable: request.profTable,
             payrollTable: request.payrollTable,
             profPersonnelColumn: request.profPersonnelColumn,
@@ -1019,9 +998,6 @@
         state.summary = workspace?.summary || state.summary;
 
         if (workspace) {
-            if (workspace.server) els.server.value = workspace.server;
-            if (workspace.driver) els.driver.value = workspace.driver;
-            if (workspace.database) ensureOptionSelected(els.database, workspace.database);
             if (workspace.profTable) ensureOptionSelected(els.profTable, workspace.profTable);
             if (workspace.payrollTable) ensureOptionSelected(els.payrollTable, workspace.payrollTable);
             setSelectValue(els.profPersonnel, workspace.profPersonnelColumn);
@@ -1132,64 +1108,46 @@
         }
 
         try {
+            if (els.datasetsLink) els.datasetsLink.href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
             const result = await getJson(`${apiBasePath}/GetWorkspaceState?clientId=${state.clientId}`);
             state.resultsVisible = !!result.resultsVisible;
             hydrateWorkspace(result.workspace || null, true);
-            if (result.workspace?.server) {
-                await connectServer(true);
-            }
+            await loadTables(true);
         } catch (error) {
             els.workspaceInfo.className = 'alert alert--error';
             els.workspaceInfo.textContent = toFriendlyRequestError(error);
         }
     }
 
-    async function connectServer(preserveSelection) {
-        const savedDb = state.summary?.database || (preserveSelection ? els.database.value : null);
+    async function loadTables(preserveSelection) {
+        if (!state.clientId) {
+            els.connectionOutput.innerHTML = `<div class="alert alert--warning">Select an engagement first.</div>`;
+            return;
+        }
         try {
-            showSpinner('Loading databases...');
-            const result = await postJson(`${apiBasePath}/GetDatabases`, {
-                server: els.server.value.trim(),
-                driver: els.driver.value
-            });
-            if (!result.success) throw new Error(result.error || 'Could not load databases.');
-            populateSelect(els.database, result.databases || []);
-            if (preserveSelection && savedDb) {
-                ensureOptionSelected(els.database, savedDb);
-            } else if ((result.databases || []).includes(preferredDatabaseName)) {
-                els.database.value = preferredDatabaseName;
-            }
-            els.connectionOutput.innerHTML = `<div class="alert alert--success">Loaded ${(result.databases || []).length} databases.</div>`;
-            await loadTables(preserveSelection);
+            showSpinner('Loading tables...');
+            const result = await postJson(`${apiBasePath}/GetTables`, { clientId: state.clientId });
+            if (!result.success) throw new Error(result.error || 'Could not load tables.');
+            populateSelect(els.profTable, result.tables || [], preserveSelection ? state.summary?.profTable : (result.autoStudTable || ''));
+            populateSelect(els.payrollTable, result.tables || [], preserveSelection ? state.summary?.payrollTable : (result.autoDeceasedTable || ''));
+            if (els.profTable.value) await loadColumns(true, preserveSelection);
+            if (els.payrollTable.value) await loadColumns(false, preserveSelection);
+            els.connectionOutput.innerHTML = `<div class="alert alert--success">Loaded ${(result.tables || []).length} table(s).</div>`;
+            if (els.datasetStatusAlert) { els.datasetStatusAlert.className = 'alert alert--success'; els.datasetStatusAlert.textContent = `Loaded ${(result.tables || []).length} table(s) from this engagement's dataset.`; }
         } catch (error) {
             els.connectionOutput.innerHTML = `<div class="alert alert--error">${escapeHtml(toFriendlyRequestError(error))}</div>`;
+            if (els.datasetStatusAlert) { els.datasetStatusAlert.className = 'alert alert--error'; els.datasetStatusAlert.textContent = toFriendlyRequestError(error); }
         } finally {
             hideSpinner();
         }
     }
 
-    async function loadTables(preserveSelection) {
-        if (!els.database.value) return;
-        const result = await postJson(`${apiBasePath}/GetTables`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value
-        });
-        if (!result.success) throw new Error(result.error || 'Could not load tables.');
-        populateSelect(els.profTable, result.tables || [], preserveSelection ? state.summary?.profTable : (result.autoStudTable || ''));
-        populateSelect(els.payrollTable, result.tables || [], preserveSelection ? state.summary?.payrollTable : (result.autoDeceasedTable || ''));
-        if (els.profTable.value) await loadColumns(true, preserveSelection);
-        if (els.payrollTable.value) await loadColumns(false, preserveSelection);
-    }
-
     async function loadColumns(isProfTable, preserveSelection) {
         const tableName = isProfTable ? els.profTable.value : els.payrollTable.value;
-        if (!tableName || !els.database.value) return;
+        if (!tableName || !state.clientId) return;
 
         const result = await postJson(`${apiBasePath}/GetColumns`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
+            clientId: state.clientId,
             tableName,
             isProfTable
         });
@@ -1214,8 +1172,8 @@
 
     async function verifyTables() {
         const request = buildVerifyRequest();
-        if (!request.server || !request.database || !request.profTable || !request.payrollTable || !request.profPersonnelColumn || !request.payrollPersonnelColumn) {
-            els.connectionOutput.innerHTML = `<div class="alert alert--warning">Select the server, database, PROF table, Payroll table, and personnel columns first.</div>`;
+        if (!request.clientId || !request.profTable || !request.payrollTable || !request.profPersonnelColumn || !request.payrollPersonnelColumn) {
+            els.connectionOutput.innerHTML = `<div class="alert alert--warning">Select the engagement, PROF table, Payroll table, and personnel columns first.</div>`;
             return;
         }
 
@@ -1393,7 +1351,7 @@
     }
 
     [
-        els.server, els.driver, els.database, els.profTable, els.payrollTable,
+        els.profTable, els.payrollTable,
         els.profPersonnel, els.profEmployment, els.profGender, els.profGroup, els.profBirth,
         els.blankPayrollGroupPassCodes,
         els.payrollPersonnel, els.payrollEmployment, els.payrollGender, els.payrollGroup, els.payrollBirth,
@@ -1404,9 +1362,8 @@
         if (element && element.tagName === 'TEXTAREA') element.addEventListener('input', markWorkspaceDirty);
     });
 
-    els.clientId.addEventListener('change', loadWorkspaceState);
-    els.connectBtn.addEventListener('click', () => connectServer(false));
-    els.database.addEventListener('change', () => loadTables(false));
+    els.clientId.addEventListener('change', () => { state.clientId = Number(els.clientId.value || 0); loadWorkspaceState(); });
+    els.connectBtn.addEventListener('click', () => loadTables(false));
     els.profTable.addEventListener('change', () => loadColumns(true, false));
     els.payrollTable.addEventListener('change', () => loadColumns(false, false));
     els.verifyBtn.addEventListener('click', verifyTables);

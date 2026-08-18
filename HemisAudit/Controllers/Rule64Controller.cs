@@ -142,7 +142,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = _rule64.GenerateSql(new Rule64ValidationRequest
             {
                 ClientId = review.ClientId,
-                Database = review.Summary.Database,
                 StudTable = review.Summary.StudTable,
                 CregTable = review.Summary.CregTable,
                 ProdTable = review.Summary.ProdTable,
@@ -153,19 +152,15 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule64.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule64.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule64.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule64GetColumnsRequest request) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule64.GetColumnsAsync(request.Server, request.Database, request.Driver, request.TableName)));
+            Json(await RequireDataAnalystAsync(async () => await _rule64.GetColumnsAsync(request.ClientId, request.TableName, request.TableRole)));
 
         [HttpPost]
-        public async Task<IActionResult> VerifyTables([FromBody] Rule64VerifyRequest request) =>
+        public async Task<IActionResult> VerifyTables([FromBody] Rule64ValidationRequest request) =>
             Json(await RequireDataAnalystAsync(async () => await _rule64.VerifyTablesAsync(request)));
 
         [HttpPost]
@@ -321,7 +316,7 @@ namespace HemisAudit.Controllers
         public async Task<IActionResult> DownloadExcel([FromBody] Rule64ValidationSummary summary)
         {
             var resolved = await ResolveDownloadSummaryAsync(summary);
-            var bytes = BuildExcelExport(resolved);
+            var bytes = _export.ExportRule64Excel(resolved);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule64_STUD_CREG_Student_Number_Validation_{Ts()}.xlsx");
         }
@@ -342,60 +337,42 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule64_STUD_CREG_Student_Number_Validation_{Ts()}.sql");
         }
 
-        private static string Ts() => DateTime.Now.ToString("yyyyMMdd_HHmmss");
-
-        private static byte[] BuildExcelExport(Rule64ValidationSummary summary)
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
-            var failRows = summary.FailRows ?? new List<Rule64ReviewRow>();
-            var exceptionCategories = summary.ExceptionCategories ?? new List<Rule64ExceptionCategoryViewModel>();
-            using var workbook = new XLWorkbook();
-
-            var summarySheet = workbook.Worksheets.Add("Summary");
-            summarySheet.Cell(1, 1).Value = "HEMIS RULE 64 - STUD to CREG Student Number Validation";
-            summarySheet.Range(1, 1, 1, 2).Merge();
-            summarySheet.Cell(1, 1).Style.Font.Bold = true;
-            summarySheet.Cell(1, 1).Style.Font.FontSize = 14;
-
-            var summaryRows = new (string Label, string Value)[]
-            {
-                ("Database", summary.Database),
-                ("Timestamp", summary.Timestamp),
-                ("STUD Table", summary.StudTable),
-                ("CREG Table", summary.CregTable),
-                ("STUD PRODUCTION Table", summary.ProdTable),
-                ("STUD Student No Column", summary.ColumnMapping?.StudStudentNoCol ?? "_007"),
-                ("CREG Student No Column", summary.ColumnMapping?.CregStudentNoCol ?? "_007"),
-                ("STUD Compare Column", summary.ColumnMapping?.StudCompareValueCol ?? "_001"),
-                ("CREG Compare Column", summary.ColumnMapping?.CregCompareValueCol ?? "_001"),
-                ("STUD PRODUCTION Student No Column", summary.ColumnMapping?.ProdStudentNoCol ?? "IAGSTNO"),
-                ("Total Rows", summary.TotalCount.ToString()),
-                ("Clear Rows", summary.PassCount.ToString()),
-                ("Flagged Rows", summary.FailCount.ToString()),
-                ("Exception Rate", $"{summary.ExceptionRate:F2}%"),
-                ("Status", summary.Status)
-            };
-
-            summarySheet.Cell(3, 1).Value = "Field";
-            summarySheet.Cell(3, 2).Value = "Value";
-            summarySheet.Range(3, 1, 3, 2).Style.Font.Bold = true;
-            summarySheet.Range(3, 1, 3, 2).Style.Fill.BackgroundColor = XLColor.FromHtml("#D9EAF7");
-
-            var rowIndex = 4;
-            foreach (var item in summaryRows)
-            {
-                summarySheet.Cell(rowIndex, 1).Value = item.Label;
-                summarySheet.Cell(rowIndex, 2).Value = item.Value;
-                rowIndex++;
-            }
-            summarySheet.Columns(1, 2).AdjustToContents();
-
-            WriteExceptionBreakdownWorksheet(workbook, exceptionCategories);
-            WriteExceptionResultWorksheets(workbook, failRows);
-
-            using var stream = new MemoryStream();
-            workbook.SaveAs(stream);
-            return stream.ToArray();
+            var stored = await _rule64.GetStoredSummaryAsync(runId);
+            var resolved = await ResolveDownloadSummaryAsync(stored ?? new Rule64ValidationSummary { SavedRunId = runId });
+            var bytes = _export.ExportRule64Excel(resolved);
+            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule64_STUD_CREG_Student_Number_Validation_Run_{runId}.xlsx");
         }
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedCsv(int runId)
+        {
+            var stored = await _rule64.GetStoredSummaryAsync(runId);
+            var resolved = await ResolveDownloadSummaryAsync(stored ?? new Rule64ValidationSummary { SavedRunId = runId });
+            var bytes = BuildCsvExport(resolved);
+            return File(bytes, "text/csv", $"Rule64_STUD_CREG_Student_Number_Validation_Run_{runId}.csv");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedSql(int runId)
+        {
+            var stored = await _rule64.GetStoredSummaryAsync(runId);
+            if (stored == null) return NotFound();
+            var sql = _rule64.GenerateSql(new Rule64ValidationRequest
+            {
+                ClientId = stored.ClientId,
+                StudTable = stored.StudTable,
+                CregTable = stored.CregTable,
+                ProdTable = stored.ProdTable,
+                ColumnMapping = stored.ColumnMapping
+            });
+            var bytes = System.Text.Encoding.UTF8.GetBytes(sql);
+            return File(bytes, "application/sql", $"Rule64_STUD_CREG_Student_Number_Validation_Run_{runId}.sql");
+        }
+
+        private static string Ts() => DateTime.Now.ToString("yyyyMMdd_HHmmss");
 
         private static byte[] BuildCsvExport(Rule64ValidationSummary summary)
         {
@@ -404,7 +381,6 @@ namespace HemisAudit.Controllers
             using var stream = new MemoryStream();
             using var writer = new StreamWriter(stream, System.Text.Encoding.UTF8);
             writer.WriteLine("\"HEMIS RULE 64 - STUD to CREG Student Number Validation\"");
-            writer.WriteLine($"\"Database\",\"{summary.Database}\"");
             writer.WriteLine($"\"Timestamp\",\"{summary.Timestamp}\"");
             writer.WriteLine($"\"Status\",\"{summary.Status}\"");
             writer.WriteLine($"\"Total Rows\",{summary.TotalCount},\"Clear Rows\",{summary.PassCount},\"Flagged Rows\",{summary.FailCount}");
@@ -436,152 +412,6 @@ namespace HemisAudit.Controllers
         }
 
         private static string CsvValue(string? value) => "\"" + (value ?? string.Empty).Replace("\"", "\"\"") + "\"";
-
-        private static void WriteWorksheet(XLWorkbook workbook, string sheetName, IEnumerable<Rule64ReviewRow> rows)
-        {
-            var worksheet = workbook.Worksheets.Add(sheetName);
-            var headers = new[]
-            {
-                "Source Table",
-                "STUD Student No",
-                "CREG Student No",
-                "STUD Compare Value",
-                "CREG Compare Value",
-                "PRODUCTION Student No",
-                "Error Code",
-                "Result",
-                "Explanation"
-            };
-
-            for (var index = 0; index < headers.Length; index++)
-            {
-                var cell = worksheet.Cell(1, index + 1);
-                cell.Value = headers[index];
-                cell.Style.Font.Bold = true;
-                cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#D9EAF7");
-            }
-
-            var rowIndex = 2;
-            foreach (var row in rows)
-            {
-                worksheet.Cell(rowIndex, 1).Value = row.SourceTable;
-                worksheet.Cell(rowIndex, 2).Value = row.StudentNo;
-                worksheet.Cell(rowIndex, 3).Value = row.CregStudentNo;
-                worksheet.Cell(rowIndex, 4).Value = row.StudCompareValue;
-                worksheet.Cell(rowIndex, 5).Value = row.CregCompareValue;
-                worksheet.Cell(rowIndex, 6).Value = row.ProdStudentNo;
-                worksheet.Cell(rowIndex, 7).Value = row.ErrorCode;
-                worksheet.Cell(rowIndex, 8).Value = row.ValidationResult;
-                worksheet.Cell(rowIndex, 9).Value = row.ValidationExplanation;
-                rowIndex++;
-            }
-
-            worksheet.Columns().AdjustToContents();
-        }
-
-        private static void WriteExceptionResultWorksheets(
-            XLWorkbook workbook,
-            IReadOnlyCollection<Rule64ReviewRow> failRows)
-        {
-            var missingInCregRows = failRows
-                .Where(row =>
-                {
-                    var category = GetCategoryKey(row);
-                    return category.Equals("NOT_FOUND_IN_CREG__FOUND_IN_PRODUCTION", StringComparison.OrdinalIgnoreCase)
-                        || category.Equals("NOT_FOUND_IN_CREG__NOT_IN_PRODUCTION", StringComparison.OrdinalIgnoreCase);
-                })
-                .ToList();
-
-            if (missingInCregRows.Count > 0)
-                WriteWorksheet(workbook, "Student No not in CREG", missingInCregRows);
-
-            var groupedRows = failRows
-                .GroupBy(GetCategoryKey, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
-
-            var categorySheetOrder = new[]
-            {
-                "VALUE_MISMATCH__FOUND_IN_CREG",
-                "NOT_FOUND_IN_CREG__FOUND_IN_PRODUCTION",
-                "NOT_FOUND_IN_CREG__NOT_IN_PRODUCTION"
-            };
-
-            foreach (var category in categorySheetOrder)
-            {
-                if (!groupedRows.TryGetValue(category, out var rows) || rows.Count == 0)
-                    continue;
-
-                WriteWorksheet(workbook, GetCategorySheetName(category), rows);
-            }
-        }
-
-        private static void WriteExceptionBreakdownWorksheet(XLWorkbook workbook, IReadOnlyCollection<Rule64ExceptionCategoryViewModel> categories)
-        {
-            var worksheet = workbook.Worksheets.Add("Exception Breakdown");
-            worksheet.Cell(1, 1).Value = "RULE 64 EXCEPTION CATEGORY BREAKDOWN";
-            worksheet.Range(1, 1, 1, 3).Merge();
-            worksheet.Cell(1, 1).Style.Font.Bold = true;
-            worksheet.Cell(1, 1).Style.Font.FontSize = 14;
-
-            var headers = new[] { "Category", "Description", "Count" };
-            for (var index = 0; index < headers.Length; index++)
-            {
-                var cell = worksheet.Cell(3, index + 1);
-                cell.Value = headers[index];
-                cell.Style.Font.Bold = true;
-                cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#F57C00");
-                cell.Style.Font.FontColor = XLColor.White;
-            }
-
-            var rowIndex = 4;
-            if (categories.Count == 0)
-            {
-                worksheet.Cell(rowIndex, 1).Value = "No categories available.";
-                worksheet.Range(rowIndex, 1, rowIndex, 3).Merge();
-            }
-            else
-            {
-                foreach (var category in categories)
-                {
-                    worksheet.Cell(rowIndex, 1).Value = category.Category;
-                    worksheet.Cell(rowIndex, 2).Value = category.Description;
-                    worksheet.Cell(rowIndex, 3).Value = category.Count;
-                    worksheet.Range(rowIndex, 1, rowIndex, 3).Style.Fill.BackgroundColor = XLColor.FromHtml("#FFF8E1");
-                    worksheet.Cell(rowIndex, 1).Style.Font.Bold = true;
-                    worksheet.Cell(rowIndex, 1).Style.Font.FontName = "Consolas";
-                    worksheet.Cell(rowIndex, 3).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
-                    worksheet.Cell(rowIndex, 3).Style.Font.Bold = true;
-                    rowIndex++;
-                }
-            }
-
-            worksheet.Columns().AdjustToContents();
-        }
-
-        private static string GetCategoryKey(Rule64ReviewRow row)
-        {
-            if (!string.IsNullOrWhiteSpace(row.ExceptionCategory))
-                return row.ExceptionCategory;
-
-            if (string.Equals(row.ValidationResult, "PASS", StringComparison.OrdinalIgnoreCase))
-                return "PASS_FOUND_IN_CREG__VALUE_MATCH";
-
-            if (!string.IsNullOrWhiteSpace(row.CregStudentNo))
-                return "VALUE_MISMATCH__FOUND_IN_CREG";
-
-            return string.IsNullOrWhiteSpace(row.ProdStudentNo)
-                ? "NOT_FOUND_IN_CREG__NOT_IN_PRODUCTION"
-                : "NOT_FOUND_IN_CREG__FOUND_IN_PRODUCTION";
-        }
-
-        private static string GetCategorySheetName(string category) =>
-            category.ToUpperInvariant() switch
-            {
-                "VALUE_MISMATCH__FOUND_IN_CREG" => "Found in CREG - Value Mismatch",
-                "NOT_FOUND_IN_CREG__FOUND_IN_PRODUCTION" => "Not in CREG - In STUD PROD",
-                "NOT_FOUND_IN_CREG__NOT_IN_PRODUCTION" => "Not in CREG - Not in STUD PROD",
-                _ => "Rule64 Category"
-            };
 
         private async Task<Rule64ValidationSummary> ResolveDownloadSummaryAsync(Rule64ValidationSummary? summary)
         {
@@ -651,30 +481,6 @@ namespace HemisAudit.Controllers
             if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
                 return new { success = false, error = "Only the assigned data analyst can configure Rule 64." };
             return (object?)await action() ?? new { success = false, error = "No data returned." };
-        }
-
-        [HttpPost]
-        public async Task<IActionResult> DownloadExcel([FromBody] System.Text.Json.JsonElement payload)
-        {
-            try
-            {
-                int savedRunId = 0;
-                if (payload.TryGetProperty("savedRunId", out var ridProp)) savedRunId = ridProp.GetInt32();
-
-                Rule64ValidationSummary? summary = null;
-                if (savedRunId > 0)
-                    summary = await _rule64.GetStoredSummaryAsync(savedRunId);
-
-                if (summary == null)
-                    return BadRequest(new { success = false, error = "Could not load Rule 64 results." });
-
-                var bytes = _export.ExportRule64Excel(summary);
-                return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Rule64_STUD_CREG_Student_Number_Validation.xlsx");
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(new { success = false, error = ex.Message });
-            }
         }
     }
 }

@@ -1,79 +1,85 @@
 using System.Globalization;
-using System.Security.Cryptography;
+using HemisAudit.Helpers;
+using HemisAudit.Models;
 using HemisAudit.ViewModels;
-using Microsoft.Data.SqlClient;
+using Microsoft.AspNetCore.Identity;
 using Newtonsoft.Json;
+using Npgsql;
 
 namespace HemisAudit.Services
 {
+    // Rule 15: validates against the engagement's own uploaded Supabase data instead of a live
+    // SQL Server connection, and saves through the shared Postgres-native persistence layer.
+    // Ported from the Rule16 pattern. Data source is 3 uploaded tables — the C# property names
+    // are misleading (a pre-existing quirk, preserved for compatibility): StudTable actually
+    // holds the CRED table, BridgeTable holds the QUAL (approval filter) table, and CrseTable
+    // holds the CREG (registration) table. The UI labels these correctly ("CRED Table (base)",
+    // "QUAL Table (approval filter)") and the auto-detect/JS layer already compensates for the
+    // property-name mismatch — this migration preserves that contract exactly.
     public class Rule15Service : IRule15Service
     {
         private const int BrowserPreviewRowLimit = 10;
         private readonly IConfiguration _configuration;
+        private readonly IEngagementDatasetService _datasets;
+        private readonly ISystemDatabaseService _systemDb;
+        private readonly UserManager<ApplicationUser> _userManager;
         private readonly IPendingValidationCacheService _pendingValidationCache;
 
-        public Rule15Service(IConfiguration configuration, IPendingValidationCacheService pendingValidationCache)
+        public Rule15Service(
+            IConfiguration configuration,
+            IEngagementDatasetService datasets,
+            ISystemDatabaseService systemDb,
+            UserManager<ApplicationUser> userManager,
+            IPendingValidationCacheService pendingValidationCache)
         {
             _configuration = configuration;
+            _datasets = datasets;
+            _systemDb = systemDb;
+            _userManager = userManager;
             _pendingValidationCache = pendingValidationCache;
         }
 
-        public async Task<DatabaseListResult> GetDatabasesAsync(string server, string driver)
+        // ── Engagement data source (uploaded tables, not a live SQL Server) ────────────────
+
+        public async Task<Rule15TableDiscoveryResult> GetTablesAsync(int clientId)
         {
             try
             {
-                var connStr = BuildConnectionString(server, "master", driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
-
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT name FROM sys.databases WHERE name NOT IN ('master','tempdb','model','msdb') ORDER BY name;";
-                await using var reader = await cmd.ExecuteReaderAsync();
-
-                var items = new List<string>();
-                while (await reader.ReadAsync())
-                    items.Add(reader.GetString(0));
-
-                return new DatabaseListResult { Success = true, Databases = items };
-            }
-            catch (Exception ex)
-            {
-                return new DatabaseListResult { Success = false, Error = ex.Message };
-            }
-        }
-
-        public async Task<Rule15TableDiscoveryResult> GetTablesAsync(string server, string database, string driver)
-        {
-            try
-            {
-                var connStr = BuildConnectionString(server, database, driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
-
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME;";
-                await using var reader = await cmd.ExecuteReaderAsync();
-
-                var tables = new List<string>();
-                while (await reader.ReadAsync())
-                    tables.Add(reader.GetString(0));
+                var tables = await _datasets.ListTableNamesAsync(clientId);
+                if (tables.Count == 0)
+                {
+                    return new Rule15TableDiscoveryResult
+                    {
+                        Success = false,
+                        Error = "No tables have been uploaded for this engagement yet. Upload data under Datasets first."
+                    };
+                }
 
                 return new Rule15TableDiscoveryResult
                 {
                     Success = true,
                     Tables = tables,
-                    AutoStudTable = FindFirst(tables, ["dbo_QUAL", "QUAL"], ["qual"]),
-                    AutoBridgeTable = FindFirst(tables, ["dbo_CRED", "CRED"], ["cred"]),
-                    AutoCrseTable = FindFirst(tables, ["dbo_CREG", "CREG"], ["creg"])
+                    AutoStudTable = FindFirst(tables, ["dbo_QUAL", "dbo_qual", "QUAL", "qual"], ["qual"]),
+                    AutoBridgeTable = FindFirst(tables, ["dbo_CRED", "dbo_cred", "CRED", "cred"], ["cred"]),
+                    AutoCrseTable = FindFirst(tables, ["dbo_CREG", "dbo_creg", "CREG", "creg"], ["creg"])
                 };
             }
             catch (Exception ex)
             {
-                return new Rule15TableDiscoveryResult
-                {
-                    Success = false,
-                    Error = ex.Message
-                };
+                return new Rule15TableDiscoveryResult { Success = false, Error = ex.Message };
+            }
+        }
+
+        public async Task<ColumnListResult> GetColumnsAsync(int clientId, string tableName)
+        {
+            try
+            {
+                var columns = await _datasets.GetValidatedColumnsAsync(clientId, tableName);
+                return new ColumnListResult { Success = true, Columns = columns, AutoSelected = columns.FirstOrDefault() };
+            }
+            catch (Exception ex)
+            {
+                return new ColumnListResult { Success = false, Error = ex.Message };
             }
         }
 
@@ -81,23 +87,31 @@ namespace HemisAudit.Services
         {
             try
             {
-                ValidateRequest(request);
-                await EnsureColumnsExistAsync(request.Server, request.Database, request.Driver, request.StudTable, request.BridgeTable, request.CrseTable, request.QualApprovedCol ?? "_004", request.CredQualJoinCol ?? "_001", request.CredCregJoinCol1 ?? "_001", request.CredCregJoinCol2 ?? "_030", request.CregStudentCol ?? "_007");
+                ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
+                var qualApprovedCol = string.IsNullOrWhiteSpace(request.QualApprovedCol) ? "_004" : request.QualApprovedCol;
+                var credQualJoinCol = string.IsNullOrWhiteSpace(request.CredQualJoinCol) ? "_001" : request.CredQualJoinCol;
+                var credCregJoinCol1 = string.IsNullOrWhiteSpace(request.CredCregJoinCol1) ? "_001" : request.CredCregJoinCol1;
+                var credCregJoinCol2 = string.IsNullOrWhiteSpace(request.CredCregJoinCol2) ? "_030" : request.CredCregJoinCol2;
+                var cregStudentCol = string.IsNullOrWhiteSpace(request.CregStudentCol) ? "_007" : request.CregStudentCol;
 
-                var connStr = BuildConnectionString(request.Server, request.Database, request.Driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
+                await ValidateColumnsExistAsync(request.ClientId, request.StudTable, credQualJoinCol, credCregJoinCol1, credCregJoinCol2);
+                await ValidateColumnsExistAsync(request.ClientId, request.BridgeTable, credQualJoinCol, qualApprovedCol);
+                await ValidateColumnsExistAsync(request.ClientId, request.CrseTable, credCregJoinCol1, credCregJoinCol2, cregStudentCol);
 
-                var studTable = Sanitise(request.StudTable);
-                var bridgeTable = Sanitise(request.BridgeTable);
-                var crseTable = Sanitise(request.CrseTable);
+                var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+                await using var connection = conn;
 
-                var studCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{studTable}];");
-                var bridgeCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{bridgeTable}];");
-                var crseCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{crseTable}];");
+                var credTable = request.StudTable;
+                var qualTable = request.BridgeTable;
+                var cregTable = request.CrseTable;
+                const string qualApprovedVal = "A";
 
-                await using var command = conn.CreateConfiguredCommand();
-                command.CommandText = BuildPopulationCountSql(studTable, bridgeTable, crseTable);
+                var studCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{credTable}\";");
+                var bridgeCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{qualTable}\";");
+                var crseCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{cregTable}\";");
+
+                await using var command = connection.CreateCommand();
+                command.CommandText = BuildPopulationCountSql(schema, credTable, qualTable, cregTable, qualApprovedCol, qualApprovedVal, credQualJoinCol, credCregJoinCol1, credCregJoinCol2);
                 await using var reader = await command.ExecuteReaderAsync();
 
                 var result = new Rule15VerifyResult
@@ -114,19 +128,13 @@ namespace HemisAudit.Services
                     result.ApprovedCredentialCount = GetInt(reader, 1);
                     result.RegisteredCredentialCount = GetInt(reader, 2);
                     result.Control1PopulationCount = result.ApprovedCredentialCount;
-                    result.Control2PopulationCount = 0;
-                    result.Control3PopulationCount = 0;
                 }
 
                 return result;
             }
             catch (Exception ex)
             {
-                return new Rule15VerifyResult
-                {
-                    Success = false,
-                    Error = ex.Message
-                };
+                return new Rule15VerifyResult { Success = false, Error = ex.Message };
             }
         }
 
@@ -134,18 +142,25 @@ namespace HemisAudit.Services
         {
             try
             {
-                ValidateRequest(request);
-                await EnsureColumnsExistAsync(request.Server, request.Database, request.Driver, request.StudTable, request.BridgeTable, request.CrseTable, request.QualApprovedCol ?? "_004", request.CredQualJoinCol ?? "_001", request.CredCregJoinCol1 ?? "_001", request.CredCregJoinCol2 ?? "_030", request.CregStudentCol ?? "_007");
+                ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
+                var qualApprovedCol = string.IsNullOrWhiteSpace(request.QualApprovedCol) ? "_004" : request.QualApprovedCol;
+                var credQualJoinCol = string.IsNullOrWhiteSpace(request.CredQualJoinCol) ? "_001" : request.CredQualJoinCol;
+                var credCregJoinCol1 = string.IsNullOrWhiteSpace(request.CredCregJoinCol1) ? "_001" : request.CredCregJoinCol1;
+                var credCregJoinCol2 = string.IsNullOrWhiteSpace(request.CredCregJoinCol2) ? "_030" : request.CredCregJoinCol2;
+                var cregStudentCol = string.IsNullOrWhiteSpace(request.CregStudentCol) ? "_007" : request.CregStudentCol;
 
-                // Run once with all rows — used for both save and browser preview
-                var summary = await AnalyseAsync(request, includeAllReviewRows: true);
+                await ValidateColumnsExistAsync(request.ClientId, request.StudTable, credQualJoinCol, credCregJoinCol1, credCregJoinCol2);
+                await ValidateColumnsExistAsync(request.ClientId, request.BridgeTable, credQualJoinCol, qualApprovedCol);
+                await ValidateColumnsExistAsync(request.ClientId, request.CrseTable, credCregJoinCol1, credCregJoinCol2, cregStudentCol);
+
+                var summary = await AnalyseAsync(request, includeAllReviewRows: true, failRowsOnlyForFullLoad: true);
                 if (summary.Success && request.ClientId > 0)
                 {
                     try
                     {
                         var summaryToPersist = CloneSummary(summary);
                         summaryToPersist.SavedRunId = null;
-                        summary.SavedRunId = await SaveValidationRunAsync(request, summaryToPersist, userEmail, userName, markWorkspaceSaved: false);
+                        summary.SavedRunId = await SaveValidationRunAsync(request, summaryToPersist, userEmail, userName);
 
                         if (!string.IsNullOrWhiteSpace(userEmail))
                             _pendingValidationCache.ClearPending(15, request.ClientId, userEmail!);
@@ -175,18 +190,13 @@ namespace HemisAudit.Services
             }
             catch (Exception ex)
             {
-                return new Rule15ValidationSummary
-                {
-                    Success = false,
-                    Error = ex.Message
-                };
+                return new Rule15ValidationSummary { Success = false, Error = ex.Message };
             }
         }
 
         public async Task<Rule15ValidationSummary> GetExportSummaryAsync(Rule15ValidationRequest request)
         {
-            ValidateRequest(request);
-            await EnsureColumnsExistAsync(request.Server, request.Database, request.Driver, request.StudTable, request.BridgeTable, request.CrseTable);
+            ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
             return await AnalyseAsync(request, includeAllReviewRows: true);
         }
 
@@ -206,85 +216,52 @@ namespace HemisAudit.Services
         public Task<bool> HasPendingValidationAsync(int clientId, string reviewerEmail)
             => Task.FromResult(_pendingValidationCache.HasPending(15, clientId, reviewerEmail));
 
-        public async Task<int?> GetClientIdForRunAsync(int runId)
-        {
-            await using var connection = await OpenSystemConnectionAsync();
-            return await GetClientIdForRunAsync(connection, runId);
-        }
+        public async Task<int?> GetClientIdForRunAsync(int runId) => await _systemDb.GetClientIdForRunAsync(runId);
 
         public async Task<Rule15WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null, bool includeSummary = true)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var currentUserId = await GetSystemUserIdByEmailAsync(connection, currentUserEmail);
+            var row = await _systemDb.GetCurrentRuleRunAsync(clientId, 15);
+            if (row == null) return null;
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT TOP 1
-    vr.RunID,
-    vr.ClientID,
-    ISNULL(vr.HemisServer, '') AS HemisServer,
-    ISNULL(vr.AuditDatabase, '') AS AuditDatabase,
-    ISNULL(vr.StudTable, '') AS StudTable,
-    ISNULL(vr.DeceasedTable, '') AS BridgeTable,
-    ISNULL(vr.StudColumn, '') AS CrseTable,
-    ISNULL(vr.Status, '') AS Status,
-    vr.LastEditedByUserName,
-    vr.LastEditedAt,
-    vr.ResultsJSON
-FROM dbo.ValidationRuns vr
-WHERE vr.ClientID = @ClientID
-  AND vr.RuleNumber = 15
-  AND vr.IsCurrent = 1
-ORDER BY vr.RunTimestamp DESC, vr.RunID DESC;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-                return null;
-
-            var deserializedSummary = DeserializeSummary(reader.IsDBNull(10) ? null : reader.GetString(10));
+            var deserializedSummary = DeserializeSummary(row.ResultsJSON);
             if (deserializedSummary != null && includeSummary)
                 ApplyBrowserPreview(deserializedSummary);
             var summary = includeSummary ? deserializedSummary : null;
 
             var workspace = new Rule15WorkspaceStateViewModel
             {
-                ClientId = reader.GetInt32(1),
-                RunId = reader.GetInt32(0),
-                Server = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                Database = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                StudTable = reader.IsDBNull(4) ? "dbo_CRED" : reader.GetString(4),
-                BridgeTable = reader.IsDBNull(5) ? "dbo_QUAL" : reader.GetString(5),
-                CrseTable = reader.IsDBNull(6) ? "dbo_CREG" : reader.GetString(6),
+                ClientId = row.ClientId,
+                RunId = row.RunId,
+                StudTable = row.StudTable,
+                BridgeTable = row.DeceasedTable,
+                CrseTable = row.StudColumn,
                 QualApprovedCol = deserializedSummary?.QualApprovedCol ?? "_004",
                 QualApprovedVal = deserializedSummary?.QualApprovedVal ?? "A",
                 CredQualJoinCol = deserializedSummary?.CredQualJoinCol ?? "_001",
                 CredCregJoinCol1 = deserializedSummary?.CredCregJoinCol1 ?? "_001",
                 CredCregJoinCol2 = deserializedSummary?.CredCregJoinCol2 ?? "_030",
                 CregStudentCol = deserializedSummary?.CregStudentCol ?? "_007",
-                CurrentStatus = reader.IsDBNull(7) ? "" : reader.GetString(7),
-                LastEditedByUserName = reader.IsDBNull(8) ? null : reader.GetString(8),
-                LastEditedAt = reader.IsDBNull(9) ? null : reader.GetDateTime(9),
+                CurrentStatus = row.Status,
+                LastEditedByUserName = row.LastEditedByUserName,
+                LastEditedAt = row.LastEditedAt,
                 Summary = summary
             };
 
             if (summary != null)
                 workspace.CurrentStatus = summary.Status;
 
-            await reader.CloseAsync();
-
-            workspace.Driver = "ODBC Driver 17 for SQL Server";
-            workspace.CurrentUserEngagementRole = currentUserId.HasValue
-                ? await GetEngagementRoleAsync(connection, clientId, currentUserId.Value) ?? ""
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            workspace.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(clientId, currentUser.Id) ?? ""
                 : "";
 
-            var signoffs = await GetRunSignoffsAsync(connection, workspace.RunId!.Value, currentUserId);
+            var signoffs = await _systemDb.GetRuleRunSignoffsAsync(workspace.RunId!.Value, currentUser?.Id);
             workspace.HasDataAnalystSignoff = signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
             var currentRoleSignoff = signoffs.FirstOrDefault(s =>
-                HemisAudit.Helpers.ValidationRunAccessPolicy.IsSignoffOwnedByEngagementRole(s.SignoffRole, workspace.CurrentUserEngagementRole));
+                ValidationRunAccessPolicy.IsSignoffOwnedByEngagementRole(s.SignoffRole, workspace.CurrentUserEngagementRole));
             workspace.CurrentUserHasSignedOff = currentRoleSignoff != null;
             workspace.CurrentUserSignoffComment = currentRoleSignoff?.Comment ?? "";
-            workspace.IsWorkspaceSaved = await IsWorkspaceSavedAsync(connection, workspace.RunId!.Value);
+            workspace.IsWorkspaceSaved = await _systemDb.IsWorkspaceSavedAsync(workspace.RunId!.Value);
 
             if (workspace.Summary != null)
                 workspace.Summary.SavedRunId = workspace.RunId;
@@ -294,35 +271,15 @@ ORDER BY vr.RunTimestamp DESC, vr.RunID DESC;";
 
         public async Task<Rule15RunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null, bool includeFullResults = false)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var currentUserId = await GetSystemUserIdByEmailAsync(connection, currentUserEmail);
+            var row = await _systemDb.GetRuleRunByIdAsync(runId, 15);
+            if (row == null) return null;
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT vr.RunID, vr.ClientID, vr.IsCurrent, c.EngagementName, c.MaconomyNumber, vr.HemisServer, vr.ResultsJSON
-FROM dbo.ValidationRuns vr
-INNER JOIN dbo.Clients c ON c.ClientID = vr.ClientID
-WHERE vr.RunID = @RunID
-  AND vr.RuleNumber = 15;";
-            command.Parameters.AddWithValue("@RunID", runId);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-                return null;
-
-            var sourceServer = reader.IsDBNull(5) ? "" : reader.GetString(5);
-            var summary = DeserializeSummary(reader.IsDBNull(6) ? null : reader.GetString(6));
-            if (summary == null)
-                return null;
-
-            var clientId = reader.GetInt32(1);
-            summary.ClientId = clientId;
-            if (summary.SavedRunId.GetValueOrDefault() <= 0)
-                summary.SavedRunId = runId;
+            var summary = DeserializeSummary(row.ResultsJSON);
+            if (summary == null) return null;
 
             if (includeFullResults)
             {
-                summary = await ExpandSavedSummaryIfNeededAsync(summary, sourceServer);
+                summary = await ExpandSavedSummaryIfNeededAsync(summary, row.ClientId);
                 summary.DisplayedCount = summary.ReviewRows.Count;
                 summary.IsPreviewOnly = false;
                 summary.PreviewLimit = 0;
@@ -334,21 +291,20 @@ WHERE vr.RunID = @RunID
 
             var review = new Rule15RunReviewViewModel
             {
-                RunId = reader.GetInt32(0),
-                ClientId = clientId,
-                IsCurrentRun = !reader.IsDBNull(2) && reader.GetBoolean(2),
-                EngagementName = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                MaconomyNumber = reader.IsDBNull(4) ? "" : reader.GetString(4),
-                SourceServer = sourceServer,
+                RunId = row.RunId,
+                ClientId = row.ClientId,
+                IsCurrentRun = row.IsCurrent,
+                EngagementName = row.EngagementName,
+                MaconomyNumber = row.MaconomyNumber,
                 Summary = summary
             };
 
-            await reader.CloseAsync();
-
-            review.CurrentUserEngagementRole = currentUserId.HasValue
-                ? await GetEngagementRoleAsync(connection, clientId, currentUserId.Value) ?? ""
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            review.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(review.ClientId, currentUser.Id) ?? ""
                 : "";
-            review.Signoffs = await GetRunSignoffsAsync(connection, runId, currentUserId);
+
+            review.Signoffs = await _systemDb.GetRuleRunSignoffsAsync(runId, currentUser?.Id);
             review.HasDataAnalystSignoff = review.Signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
 
             return review;
@@ -358,48 +314,31 @@ WHERE vr.RunID = @RunID
         {
             try
             {
-                ValidateRequest(request);
+                ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
 
                 if (request.RunId.HasValue && request.RunId.Value > 0)
                 {
-                    await using var connection = await OpenSystemConnectionAsync();
-                    var clientId = await GetClientIdForRunAsync(connection, request.RunId.Value);
+                    var clientId = await _systemDb.GetClientIdForRunAsync(request.RunId.Value);
                     if (!clientId.HasValue || clientId.Value != request.ClientId)
+                        return new Rule15WorkspaceSaveResult { Success = false, Error = "The saved workspace could not be found for this engagement." };
+
+                    await _systemDb.EnsureClientNotArchivedAsync(request.ClientId);
+                    var clearedSignoffs = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(request.RunId.Value);
+
+                    await _systemDb.SaveRuleWorkspaceFieldsAsync(new SaveRuleWorkspaceFieldsRequest
                     {
-                        return new Rule15WorkspaceSaveResult
-                        {
-                            Success = false,
-                            Error = "The saved workspace could not be found for this engagement."
-                        };
-                    }
-
-                    await EnsureClientNotArchivedAsync(connection, request.ClientId);
-
-                    var clearedSignoffs = await ClearSignoffsAndFlagForReviewAsync(connection, request.RunId.Value);
-                    var previousHash = await GetValidationRecordHashAsync(connection, request.RunId.Value);
-
-                    await using var command = connection.CreateConfiguredCommand();
-                    command.CommandText = @"
-UPDATE dbo.ValidationRuns
-SET LastEditedByUserName = @LastEditedByUserName,
-    LastEditedAt = GETDATE(),
-    WorkspaceSavedAt = GETDATE(),
-    PreviousHash = @PreviousHash,
-    RecordHash = @RecordHash,
-    Status = 'Needs Review'
-WHERE RunID = @RunID
-  AND ClientID = @ClientID;";
-                    command.Parameters.AddWithValue("@RunID", request.RunId.Value);
-                    command.Parameters.AddWithValue("@ClientID", request.ClientId);
-                    command.Parameters.AddWithValue("@LastEditedByUserName", (object?)reviewerName ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@RecordHash", ComputeHash($@"WorkspaceSave|Rule15|{request.RunId.Value}|{request.ClientId}|{(reviewerName ?? reviewerEmail)}|{DateTime.UtcNow:o}|{previousHash}"));
-                    await command.ExecuteNonQueryAsync();
+                        RunId = request.RunId.Value,
+                        ClientId = request.ClientId,
+                        StudTable = request.StudTable,
+                        DeceasedTable = request.BridgeTable,
+                        StudColumn = request.CrseTable,
+                        DeceasedColumn = ""
+                    }, reviewerName ?? reviewerEmail);
 
                     if (!string.IsNullOrWhiteSpace(reviewerEmail))
                         _pendingValidationCache.ClearPending(15, request.ClientId, reviewerEmail);
 
-                    var currentWorkspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail, includeSummary: false);
+                    var currentWorkspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail);
                     return new Rule15WorkspaceSaveResult
                     {
                         Success = true,
@@ -414,34 +353,30 @@ WHERE RunID = @RunID
 
                 var pending = _pendingValidationCache.GetPending<Rule15ValidationRequest, Rule15ValidationSummary>(15, request.ClientId, reviewerEmail);
                 if (pending == null)
-                {
-                    return new Rule15WorkspaceSaveResult
-                    {
-                        Success = false,
-                        Error = "Run Rule 15 first so the current workspace is written to the system database."
-                    };
-                }
+                    return new Rule15WorkspaceSaveResult { Success = false, Error = "Run Rule 15 first so the current workspace is written to the system database." };
 
                 if (!RequestsMatchForPendingSave(request, pending.Request))
-                {
-                    return new Rule15WorkspaceSaveResult
-                    {
-                        Success = false,
-                        Error = "Workspace settings changed after validation. Run Rule 15 again before saving."
-                    };
-                }
+                    return new Rule15WorkspaceSaveResult { Success = false, Error = "Workspace settings changed after validation. Run Rule 15 again before saving." };
 
                 var summaryToSave = CloneSummary(pending.Summary);
                 if (summaryToSave.IsPreviewOnly || summaryToSave.ReviewRows.Count < summaryToSave.TotalValidated)
-                {
-                    summaryToSave = await AnalyseAsync(pending.Request, includeAllReviewRows: true);
-                }
+                    summaryToSave = await AnalyseAsync(pending.Request, includeAllReviewRows: true, failRowsOnlyForFullLoad: true);
 
                 summaryToSave.SavedRunId = null;
-                var savedRunId = await SaveValidationRunAsync(pending.Request, summaryToSave, reviewerEmail, reviewerName ?? pending.ReviewerName, markWorkspaceSaved: true);
+                var savedRunId = await SaveValidationRunAsync(pending.Request, summaryToSave, reviewerEmail, reviewerName);
                 _pendingValidationCache.ClearPending(15, request.ClientId, reviewerEmail);
 
-                var workspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail, includeSummary: false);
+                await _systemDb.SaveRuleWorkspaceFieldsAsync(new SaveRuleWorkspaceFieldsRequest
+                {
+                    RunId = savedRunId,
+                    ClientId = request.ClientId,
+                    StudTable = request.StudTable,
+                    DeceasedTable = request.BridgeTable,
+                    StudColumn = request.CrseTable,
+                    DeceasedColumn = ""
+                }, reviewerName ?? reviewerEmail);
+
+                var workspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail);
                 return new Rule15WorkspaceSaveResult
                 {
                     Success = true,
@@ -453,11 +388,7 @@ WHERE RunID = @RunID
             }
             catch (Exception ex)
             {
-                return new Rule15WorkspaceSaveResult
-                {
-                    Success = false,
-                    Error = ex.Message
-                };
+                return new Rule15WorkspaceSaveResult { Success = false, Error = ex.Message };
             }
         }
 
@@ -465,41 +396,18 @@ WHERE RunID = @RunID
         {
             try
             {
-                await using var connection = await OpenSystemConnectionAsync();
-                var clientId = await GetClientIdForRunAsync(connection, runId);
+                var clientId = await _systemDb.GetClientIdForRunAsync(runId);
                 if (!clientId.HasValue)
-                {
-                    return new Rule15WorkspaceSaveResult
-                    {
-                        Success = false,
-                        Error = "Saved workspace was not found."
-                    };
-                }
+                    return new Rule15WorkspaceSaveResult { Success = false, Error = "Saved workspace was not found." };
 
-                await EnsureClientNotArchivedAsync(connection, clientId.Value);
-                var clearedSignoffs = await ClearSignoffsAndFlagForReviewAsync(connection, runId);
-                var previousHash = await GetValidationRecordHashAsync(connection, runId);
-
-                await using var markEdit = connection.CreateConfiguredCommand();
-                markEdit.CommandText = @"
-UPDATE dbo.ValidationRuns
-SET LastEditedByUserName = @LastEditedByUserName,
-    LastEditedAt = GETDATE(),
-    WorkspaceSavedAt = NULL,
-    PreviousHash = @PreviousHash,
-    RecordHash = @RecordHash,
-    Status = 'Needs Review'
-WHERE RunID = @RunID;";
-                markEdit.Parameters.AddWithValue("@RunID", runId);
-                markEdit.Parameters.AddWithValue("@LastEditedByUserName", (object?)reviewerName ?? DBNull.Value);
-                markEdit.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-                markEdit.Parameters.AddWithValue("@RecordHash", ComputeHash($@"BeginWorkspaceEdit|Rule15|{runId}|{reviewerEmail}|{DateTime.UtcNow:o}|{previousHash}"));
-                await markEdit.ExecuteNonQueryAsync();
+                await _systemDb.EnsureClientNotArchivedAsync(clientId.Value);
+                var clearedSignoffs = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(runId);
+                await _systemDb.MarkRuleWorkspaceEditStartedAsync(runId, reviewerName ?? reviewerEmail);
 
                 if (!string.IsNullOrWhiteSpace(reviewerEmail))
                     _pendingValidationCache.ClearPending(15, clientId.Value, reviewerEmail);
 
-                var workspace = await GetCurrentWorkspaceStateAsync(clientId.Value, reviewerEmail, includeSummary: false);
+                var workspace = await GetCurrentWorkspaceStateAsync(clientId.Value, reviewerEmail);
                 return new Rule15WorkspaceSaveResult
                 {
                     Success = true,
@@ -513,182 +421,157 @@ WHERE RunID = @RunID;";
             }
             catch (Exception ex)
             {
-                return new Rule15WorkspaceSaveResult
-                {
-                    Success = false,
-                    Error = ex.Message
-                };
+                return new Rule15WorkspaceSaveResult { Success = false, Error = ex.Message };
             }
         }
 
         public async Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var reviewerId = await GetSystemUserIdByEmailAsync(connection, reviewerEmail);
-            if (!reviewerId.HasValue)
-                throw new InvalidOperationException("The reviewer could not be resolved in the system database.");
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
+                ?? throw new InvalidOperationException("The reviewer could not be resolved in the system database.");
 
-            var clientId = await GetClientIdForRunAsync(connection, runId);
-            if (!clientId.HasValue)
-                throw new InvalidOperationException("The selected Rule 15 run could not be found.");
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
+                ?? throw new InvalidOperationException("The selected Rule 15 run could not be found.");
 
-            await EnsureClientNotArchivedAsync(connection, clientId.Value);
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
 
-            if (!await IsWorkspaceSavedAsync(connection, runId))
+            if (!await _systemDb.RuleWorkspaceReadyForSignoffAsync(runId))
                 throw new InvalidOperationException("The data analyst must save the workspace before signoff is available.");
 
-            var signoffRole = await GetEngagementRoleAsync(connection, clientId.Value, reviewerId.Value);
+            var signoffRole = await _systemDb.GetRawEngagementRoleAsync(clientId, reviewer.Id);
             if (!CanSignOffAsRole(signoffRole))
                 throw new InvalidOperationException("Only the assigned data analyst, manager, or director can sign off a Rule 15 run.");
 
             if (!string.Equals(signoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase) &&
-                !await HasSignoffRoleAsync(connection, runId, "DataAnalyst"))
+                !await _systemDb.HasRuleSignoffRoleAsync(runId, "DataAnalyst"))
             {
                 throw new InvalidOperationException("The assigned data analyst must sign off before this review can be completed.");
             }
 
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-IF EXISTS (
-    SELECT 1
-    FROM dbo.ReviewSignoffs
-    WHERE RunID = @RunID
-      AND ReviewerID = @ReviewerID
-)
-BEGIN
-    UPDATE dbo.ReviewSignoffs
-    SET SignoffRole = @SignoffRole,
-        ReviewType = 'Final',
-        Comment = @Comment,
-        SignedOffAt = GETDATE()
-    WHERE RunID = @RunID
-      AND ReviewerID = @ReviewerID;
-END
-ELSE
-BEGIN
-    INSERT INTO dbo.ReviewSignoffs (ClientID, RunID, ReviewerID, SignoffRole, ReviewType, Comment, SignedOffAt)
-    VALUES (@ClientID, @RunID, @ReviewerID, @SignoffRole, 'Final', @Comment, GETDATE());
-END";
-            command.Parameters.AddWithValue("@ClientID", clientId.Value);
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@ReviewerID", reviewerId.Value);
-            command.Parameters.AddWithValue("@SignoffRole", signoffRole!);
-            command.Parameters.AddWithValue("@Comment", string.IsNullOrWhiteSpace(comment) ? DBNull.Value : comment.Trim());
-            await command.ExecuteNonQueryAsync();
-
-            await UpdateRunStatusFromSignoffsAsync(connection, runId);
+            await _systemDb.AddOrUpdateRuleSignoffAsync(runId, clientId, reviewer.Id, signoffRole!, comment);
         }
 
         public async Task RemoveSignoffAsync(int runId, string reviewerEmail)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            var reviewerId = await GetSystemUserIdByEmailAsync(connection, reviewerEmail);
-            if (!reviewerId.HasValue)
-                throw new InvalidOperationException("The reviewer could not be resolved in the system database.");
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
+                ?? throw new InvalidOperationException("The reviewer could not be resolved in the system database.");
 
-            var clientId = await GetClientIdForRunAsync(connection, runId);
-            if (!clientId.HasValue)
-                throw new InvalidOperationException("The selected Rule 15 run could not be found.");
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
+                ?? throw new InvalidOperationException("The selected Rule 15 run could not be found.");
 
-            await EnsureClientNotArchivedAsync(connection, clientId.Value);
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
 
-            var engagementRole = await GetEngagementRoleAsync(connection, clientId.Value, reviewerId.Value);
-            if (!HemisAudit.Helpers.ValidationRunAccessPolicy.CanAssignedUserRemoveSignoff(engagementRole))
+            var engagementRole = await _systemDb.GetRawEngagementRoleAsync(clientId, reviewer.Id);
+            if (!ValidationRunAccessPolicy.CanAssignedUserRemoveSignoff(engagementRole))
                 throw new InvalidOperationException("Only the assigned data analyst, manager, or director can remove signoff from this run.");
 
-            var removal = await ReviewSignoffSqlHelper.RemoveRoleSignoffWithVersioningAsync(connection, runId, engagementRole!, reviewerEmail);
-            if (removal.RemovedCount <= 0)
-                return;
+            await _systemDb.RemoveRuleSignoffByReviewerAsync(runId, reviewer.Id);
         }
 
         public Task<string> GenerateSqlAsync(Rule15ValidationRequest request)
         {
-            ValidateRequest(request);
+            ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
 
-            var credTable = Sanitise(request.StudTable);
-            var qualTable = Sanitise(request.BridgeTable);
-            var cregTable = Sanitise(request.CrseTable);
-            var aCol  = Sanitise(request.QualApprovedCol ?? "_004");
-            var aVal  = request.QualApprovedVal ?? "A";
-            var qjCol = Sanitise(request.CredQualJoinCol ?? "_001");
-            var cj1   = Sanitise(request.CredCregJoinCol1 ?? "_001");
-            var cj2   = Sanitise(request.CredCregJoinCol2 ?? "_030");
-            var sCol  = Sanitise(request.CregStudentCol ?? "_007");
+            var credTable = request.StudTable;
+            var qualTable = request.BridgeTable;
+            var cregTable = request.CrseTable;
+            var aCol = string.IsNullOrWhiteSpace(request.QualApprovedCol) ? "_004" : request.QualApprovedCol;
+            var aVal = request.QualApprovedVal ?? "A";
+            var qjCol = string.IsNullOrWhiteSpace(request.CredQualJoinCol) ? "_001" : request.CredQualJoinCol;
+            var cj1 = string.IsNullOrWhiteSpace(request.CredCregJoinCol1) ? "_001" : request.CredCregJoinCol1;
+            var cj2 = string.IsNullOrWhiteSpace(request.CredCregJoinCol2) ? "_030" : request.CredCregJoinCol2;
+            var sCol = string.IsNullOrWhiteSpace(request.CregStudentCol) ? "_007" : request.CregStudentCol;
 
             var sql = $@"-- HEMIS RULE 15: COURSE CREDENTIALS VALIDATION
--- Step 1: Extract 100% CRED population from [{credTable}]
--- Step 2: Extract approved qualifications from [{qualTable}] where {aCol} = '{aVal}'
--- Step 3: Extract CREG registration population from [{cregTable}]
+-- Source: this engagement's own uploaded tables (schema engagement_{{ClientId}}), not a live SQL Server.
+-- Step 1: Extract 100% CRED population from ""{credTable}""
+-- Step 2: Extract approved qualifications from ""{qualTable}"" where {aCol} = '{aVal}'
+-- Step 3: Extract CREG registration population from ""{cregTable}""
 -- Step 4: Validate CRED -> QUAL -> CREG linkage (PASS when both links found)
 
-{BuildRule15PrepSql(credTable, qualTable, cregTable, aCol, aVal, qjCol, cj1, cj2, sCol, true, true, true, true)}
+{BuildRule15PrepSql("{schema}", credTable, qualTable, cregTable, aCol, aVal, qjCol, cj1, cj2, sCol, true, true, true, true)}
 
 -- Step 5: Full CRED population
-SELECT * FROM #Rule15_CRED_Population ORDER BY [Extract_Number];
+SELECT * FROM rule15_cred_population ORDER BY extract_number;
 
 -- Step 6: Full validation result
-SELECT * FROM #Rule15_Validation ORDER BY [Extract_Number];
+SELECT * FROM rule15_validation ORDER BY extract_number;
 
 -- Step 7: Exceptions only
-SELECT * FROM #Rule15_Validation WHERE [Validation_Result] = 'FAIL' ORDER BY [Extract_Number];
+SELECT * FROM rule15_validation WHERE validation_result = 'FAIL' ORDER BY extract_number;
 
 -- Step 8: Summary
 SELECT
-    (SELECT COUNT(1) FROM #Rule15_Approved_QUAL)   AS [Approved_Qualifications],
-    (SELECT COUNT(1) FROM #Rule15_CRED_Population) AS [Total_Course_Credentials],
-    SUM(CASE WHEN [Validation_Result] = 'PASS' THEN 1 ELSE 0 END) AS [PASS_Count],
-    SUM(CASE WHEN [Validation_Result] = 'FAIL' THEN 1 ELSE 0 END) AS [FAIL_Count],
-    CAST(SUM(CASE WHEN [Validation_Result] = 'FAIL' THEN 1 ELSE 0 END) * 100.0
-        / NULLIF(COUNT(*), 0) AS DECIMAL(5,2)) AS [Exception_Rate_Pct]
-FROM #Rule15_Validation;
-
-DROP TABLE IF EXISTS #Rule15_CRED_Population;
-DROP TABLE IF EXISTS #Rule15_Approved_QUAL;
-DROP TABLE IF EXISTS #Rule15_CREG_Population;
-DROP TABLE IF EXISTS #Rule15_Validation;";
+    (SELECT COUNT(1) FROM rule15_approved_qual)   AS approved_qualifications,
+    (SELECT COUNT(1) FROM rule15_cred_population) AS total_course_credentials,
+    SUM(CASE WHEN validation_result = 'PASS' THEN 1 ELSE 0 END) AS pass_count,
+    SUM(CASE WHEN validation_result = 'FAIL' THEN 1 ELSE 0 END) AS fail_count,
+    ROUND(SUM(CASE WHEN validation_result = 'FAIL' THEN 1 ELSE 0 END) * 100.0
+        / NULLIF(COUNT(*), 0), 2) AS exception_rate_pct
+FROM rule15_validation;";
 
             return Task.FromResult(sql.Trim());
         }
 
-        private async Task<Rule15ValidationSummary> AnalyseAsync(Rule15ValidationRequest request, bool includeAllReviewRows)
+        private async Task<Rule15ValidationSummary> AnalyseAsync(Rule15ValidationRequest request, bool includeAllReviewRows, bool failRowsOnlyForFullLoad = false)
         {
-            var connStr = BuildConnectionString(request.Server, request.Database, request.Driver);
-            await using var conn = new SqlConnection(connStr);
-            await conn.OpenAsync();
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
 
             // StudTable = CRED (primary), BridgeTable = QUAL (filter), CrseTable = CREG (registration)
-            var credTable        = Sanitise(request.StudTable);
-            var qualTable        = Sanitise(request.BridgeTable);
-            var cregTable        = Sanitise(request.CrseTable);
-            var qualApprovedCol  = Sanitise(string.IsNullOrWhiteSpace(request.QualApprovedCol)  ? "_004" : request.QualApprovedCol);
-            var qualApprovedVal  = request.QualApprovedVal ?? "A";
-            var credQualJoinCol  = Sanitise(string.IsNullOrWhiteSpace(request.CredQualJoinCol)  ? "_001" : request.CredQualJoinCol);
-            var credCregJoinCol1 = Sanitise(string.IsNullOrWhiteSpace(request.CredCregJoinCol1) ? "_001" : request.CredCregJoinCol1);
-            var credCregJoinCol2 = Sanitise(string.IsNullOrWhiteSpace(request.CredCregJoinCol2) ? "_030" : request.CredCregJoinCol2);
-            var cregStudentCol   = Sanitise(string.IsNullOrWhiteSpace(request.CregStudentCol)   ? "_007" : request.CregStudentCol);
+            var credTable = request.StudTable;
+            var qualTable = request.BridgeTable;
+            var cregTable = request.CrseTable;
+            var qualApprovedCol = string.IsNullOrWhiteSpace(request.QualApprovedCol) ? "_004" : request.QualApprovedCol;
+            var qualApprovedVal = request.QualApprovedVal ?? "A";
+            var credQualJoinCol = string.IsNullOrWhiteSpace(request.CredQualJoinCol) ? "_001" : request.CredQualJoinCol;
+            var credCregJoinCol1 = string.IsNullOrWhiteSpace(request.CredCregJoinCol1) ? "_001" : request.CredCregJoinCol1;
+            var credCregJoinCol2 = string.IsNullOrWhiteSpace(request.CredCregJoinCol2) ? "_030" : request.CredCregJoinCol2;
+            var cregStudentCol = string.IsNullOrWhiteSpace(request.CregStudentCol) ? "_007" : request.CregStudentCol;
 
-            // Check which optional display columns exist
-            var credCols = new HashSet<string>(await GetColumnsOnConnectionAsync(conn, credTable), StringComparer.OrdinalIgnoreCase);
-            var qualCols = new HashSet<string>(await GetColumnsOnConnectionAsync(conn, qualTable), StringComparer.OrdinalIgnoreCase);
-            bool hasCredFiller  = credCols.Contains("_065");
-            bool hasCredCredit1 = credCols.Contains("_036");
-            bool hasCredCredit2 = credCols.Contains("_050");
-            bool hasQualName    = qualCols.Contains("_003");
+            var credCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{credTable}\";");
+            var qualCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{qualTable}\";");
+            var cregCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{cregTable}\";");
 
-            var credCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{credTable}];");
-            var qualCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{qualTable}];");
-            var cregCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{cregTable}];");
+            // These optional display columns don't always exist on an analyst's uploaded CRED/
+            // QUAL table — degrade gracefully to NULL rather than failing the whole validation.
+            var credColumns = new HashSet<string>(await _datasets.GetValidatedColumnsAsync(request.ClientId, credTable), StringComparer.OrdinalIgnoreCase);
+            var qualColumns = new HashSet<string>(await _datasets.GetValidatedColumnsAsync(request.ClientId, qualTable), StringComparer.OrdinalIgnoreCase);
+            var hasCredFiller = credColumns.Contains("_065");
+            var hasCredCredit1 = credColumns.Contains("_036");
+            var hasCredCredit2 = credColumns.Contains("_050");
+            var hasQualName = qualColumns.Contains("_003");
 
-            var (approvedQualCount, credPopCount, passCount, failCount) =
-                await RunRule15PrepAndGetCountsAsync(conn, credTable, qualTable, cregTable,
-                    qualApprovedCol, qualApprovedVal, credQualJoinCol, credCregJoinCol1, credCregJoinCol2, cregStudentCol,
-                    hasCredFiller, hasCredCredit1, hasCredCredit2, hasQualName);
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule15PrepSql(schema, credTable, qualTable, cregTable, qualApprovedCol, qualApprovedVal, credQualJoinCol, credCregJoinCol1, credCregJoinCol2, cregStudentCol, hasCredFiller, hasCredCredit1, hasCredCredit2, hasQualName);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
 
-            var reviewRows = await LoadControlRowsFromPrepAsync(conn, includeAllReviewRows ? null : BrowserPreviewRowLimit);
+            int approvedQualCount, credPopCount, passCount, failCount;
+            await using (var countCommand = connection.CreateCommand())
+            {
+                countCommand.CommandText = BuildRule15CountAfterPrepSql();
+                await using var countReader = await countCommand.ExecuteReaderAsync();
+                approvedQualCount = credPopCount = passCount = failCount = 0;
+                if (await countReader.ReadAsync())
+                {
+                    approvedQualCount = GetInt(countReader, 0);
+                    credPopCount = GetInt(countReader, 1);
+                    passCount = GetInt(countReader, 2);
+                    failCount = GetInt(countReader, 3);
+                }
+            }
+
+            List<Rule15ValidationRowRecord> reviewRows;
+            if (includeAllReviewRows && failRowsOnlyForFullLoad)
+                reviewRows = await LoadControlRowsFromPrepAsync(connection, null, resultFilter: "FAIL");
+            else
+                reviewRows = await LoadControlRowsFromPrepAsync(connection, includeAllReviewRows ? (int?)null : BrowserPreviewRowLimit);
             reviewRows = NormalizeReviewRows(reviewRows);
 
             var totalValidated = credPopCount;
-            var isPreviewOnly  = !includeAllReviewRows && totalValidated > reviewRows.Count;
+            var isPreviewOnly = !includeAllReviewRows && totalValidated > reviewRows.Count;
 
             var controlSummaries = BuildControlSummaries(credPopCount, passCount, qualApprovedCol, qualApprovedVal, credQualJoinCol, credCregJoinCol1, credCregJoinCol2);
 
@@ -711,7 +594,6 @@ DROP TABLE IF EXISTS #Rule15_Validation;";
                 ExceptionRate = totalValidated == 0 ? 0m : Math.Round(failCount * 100m / totalValidated, 2),
                 Status = failCount == 0 ? "PASS" : "FAIL",
                 Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                Database = request.Database,
                 StudTable = request.StudTable,
                 BridgeTable = request.BridgeTable,
                 CrseTable = request.CrseTable,
@@ -723,7 +605,7 @@ DROP TABLE IF EXISTS #Rule15_Validation;";
                 CregStudentCol = cregStudentCol,
                 TableLinkageText = $"{request.StudTable} -> {request.BridgeTable} -> {request.CrseTable}",
                 RuleModeText = "100% population testing of CRED rows (CRED -> QUAL approval filter -> CREG registration check)",
-                ProcedureSteps = BuildProcedureSteps(request.StudTable, request.BridgeTable, request.CrseTable),
+                ProcedureSteps = BuildProcedureSteps(request.BridgeTable, request.StudTable, request.CrseTable),
                 ClientId = request.ClientId,
                 ControlSummaries = controlSummaries,
                 ReviewRows = reviewRows,
@@ -731,258 +613,223 @@ DROP TABLE IF EXISTS #Rule15_Validation;";
             };
         }
 
-        private async Task<int> SaveValidationRunAsync(Rule15ValidationRequest request, Rule15ValidationSummary summary, string? userEmail, string? userName, bool markWorkspaceSaved)
+        private async Task<int> SaveValidationRunAsync(Rule15ValidationRequest request, Rule15ValidationSummary summary, string? userEmail, string? userName)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            await EnsureClientNotArchivedAsync(connection, request.ClientId);
-            await MarkPreviousRunsHistoricalAsync(connection, request.ClientId, 15);
+            await _systemDb.MarkPreviousRuleRunsHistoricalAsync(request.ClientId, 15);
 
-            var systemUserId = await GetSystemUserIdByEmailAsync(connection, userEmail);
-            if (!systemUserId.HasValue)
-                throw new InvalidOperationException("The current analyst could not be resolved in the system database.");
+            var runId = await _systemDb.SaveValidationRunAsync(new SaveValidationRunRequest
+            {
+                ClientId = request.ClientId,
+                RuleNumber = 15,
+                RuleName = "Course Credentials Validation",
+                Status = summary.Status,
+                TotalRecords = summary.TotalValidated,
+                PassCount = summary.PassCount,
+                FailCount = summary.FailCount,
+                ExceptionRate = summary.ExceptionRate,
+                StudTable = request.StudTable,
+                DeceasedTable = request.BridgeTable,
+                StudColumn = request.CrseTable,
+                DeceasedColumn = "",
+                ExceptionsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary.ReviewRows.Where(r => string.Equals(r.ValidationResult, "FAIL", StringComparison.OrdinalIgnoreCase)))),
+                ResultsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary))
+            }, userEmail, userName);
 
-            var previousHash = await GetLatestValidationHashAsync(connection, request.ClientId, 15);
-            var failRows = summary.ReviewRows.Where(row => string.Equals(row.ValidationResult, "FAIL", StringComparison.OrdinalIgnoreCase)).ToList();
-
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-INSERT INTO dbo.ValidationRuns
-(
-    ClientID, UserID, RuleNumber, RuleName, Status, TotalRecords, PassCount, FailCount, ExceptionRate, RunTimestamp,
-    HemisServer, AuditDatabase, StudTable, DeceasedTable, StudColumn, DeceasedColumn,
-    ExceptionsJSON, ResultsJSON, RunByUserName, LastEditedByUserName, LastEditedAt, PreviousHash, RecordHash, WorkspaceSavedAt, IsCurrent
-)
-VALUES
-(
-    @ClientID, @UserID, 15, @RuleName, @Status, @TotalRecords, @PassCount, @FailCount, @ExceptionRate, GETDATE(),
-    @HemisServer, @AuditDatabase, @StudTable, @BridgeTable, @CrseTable, NULL,
-    @ExceptionsJSON, @ResultsJSON, @RunByUserName, NULL, NULL, @PreviousHash, NULL, @WorkspaceSavedAt, 1
-);
-SELECT CAST(SCOPE_IDENTITY() AS int);";
-            command.Parameters.AddWithValue("@ClientID", request.ClientId);
-            command.Parameters.AddWithValue("@UserID", systemUserId.Value);
-            command.Parameters.AddWithValue("@RuleName", "Course Credentials Validation");
-            command.Parameters.AddWithValue("@Status", summary.Status);
-            command.Parameters.AddWithValue("@TotalRecords", summary.TotalValidated);
-            command.Parameters.AddWithValue("@PassCount", summary.PassCount);
-            command.Parameters.AddWithValue("@FailCount", summary.FailCount);
-            command.Parameters.AddWithValue("@ExceptionRate", summary.ExceptionRate);
-            command.Parameters.AddWithValue("@HemisServer", request.Server);
-            command.Parameters.AddWithValue("@AuditDatabase", request.Database);
-            command.Parameters.AddWithValue("@StudTable", request.StudTable);
-            command.Parameters.AddWithValue("@BridgeTable", request.BridgeTable);
-            command.Parameters.AddWithValue("@CrseTable", request.CrseTable);
-            var persistedSummary = CloneSummary(summary);
-            persistedSummary.SavedRunId = summary.SavedRunId;
-            command.Parameters.AddWithValue("@ExceptionsJSON", ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(failRows)));
-            command.Parameters.AddWithValue("@ResultsJSON", ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(persistedSummary)));
-            command.Parameters.AddWithValue("@RunByUserName", (object?)userName ?? (object?)userEmail ?? DBNull.Value);
-            command.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-            command.Parameters.AddWithValue("@WorkspaceSavedAt", markWorkspaceSaved ? DateTime.UtcNow : (object)DBNull.Value);
-
-            var runId = Convert.ToInt32(await command.ExecuteScalarAsync());
             summary.SavedRunId = runId;
-
-            await using var hashCommand = connection.CreateConfiguredCommand();
-            hashCommand.CommandText = @"
-UPDATE dbo.ValidationRuns
-SET RecordHash = @RecordHash
-WHERE RunID = @RunID;";
-            hashCommand.Parameters.AddWithValue("@RunID", runId);
-            hashCommand.Parameters.AddWithValue("@RecordHash", ComputeHash($@"ValidationRun|Rule15|{runId}|{request.ClientId}|{systemUserId.Value}|{summary.Status}|{summary.TotalValidated}|{summary.FailCount}|{summary.ExceptionRate}|{summary.Timestamp}|{previousHash}"));
-            await hashCommand.ExecuteNonQueryAsync();
-
             return runId;
         }
 
         private static string BuildPopulationCountSql(
-            string credTable, string qualTable, string cregTable,
-            string qualApprovedCol = "_004", string qualApprovedVal = "A",
-            string credQualJoinCol = "_001", string credCregJoinCol1 = "_001", string credCregJoinCol2 = "_030") => $@"
-WITH CredPop AS (
+            string schema, string credTable, string qualTable, string cregTable,
+            string qualApprovedCol, string qualApprovedVal,
+            string credQualJoinCol, string credCregJoinCol1, string credCregJoinCol2) => $@"
+WITH cred_pop AS (
     SELECT DISTINCT
-        CONVERT(nvarchar(255), CRED.[{credCregJoinCol1}]) AS CRED__LINK1,
-        CONVERT(nvarchar(255), CRED.[{credCregJoinCol2}]) AS CRED__LINK2,
-        CONVERT(nvarchar(255), CRED.[{credQualJoinCol}])  AS CRED__QUAL_KEY
-    FROM [{credTable}] CRED
-    WHERE CRED.[{credCregJoinCol1}] IS NOT NULL AND CRED.[{credCregJoinCol2}] IS NOT NULL
+        CAST(cred.""{credCregJoinCol1}"" AS text) AS link1,
+        CAST(cred.""{credCregJoinCol2}"" AS text) AS link2,
+        CAST(cred.""{credQualJoinCol}""  AS text) AS qual_key
+    FROM ""{schema}"".""{credTable}"" cred
+    WHERE cred.""{credCregJoinCol1}"" IS NOT NULL AND cred.""{credCregJoinCol2}"" IS NOT NULL
 ),
-ApprQual AS (
-    SELECT DISTINCT CONVERT(nvarchar(255), QUAL.[{credQualJoinCol}]) AS QUAL__LINK
-    FROM [{qualTable}] QUAL
-    WHERE ISNULL(CONVERT(nvarchar(255), QUAL.[{qualApprovedCol}]), '') = '{qualApprovedVal}'
+appr_qual AS (
+    SELECT DISTINCT CAST(qual.""{credQualJoinCol}"" AS text) AS link
+    FROM ""{schema}"".""{qualTable}"" qual
+    WHERE COALESCE(CAST(qual.""{qualApprovedCol}"" AS text), '') = '{EscapeSqlString(qualApprovedVal)}'
 ),
-CregSmp AS (
-    SELECT CONVERT(nvarchar(255), CREG.[{credCregJoinCol1}]) AS CREG__LINK1,
-           CONVERT(nvarchar(255), CREG.[{credCregJoinCol2}]) AS CREG__LINK2
-    FROM [{cregTable}] CREG
-    WHERE CREG.[{credCregJoinCol1}] IS NOT NULL AND CREG.[{credCregJoinCol2}] IS NOT NULL
-    GROUP BY CREG.[{credCregJoinCol1}], CREG.[{credCregJoinCol2}]
+creg_smp AS (
+    SELECT CAST(creg.""{credCregJoinCol1}"" AS text) AS link1,
+           CAST(creg.""{credCregJoinCol2}"" AS text) AS link2
+    FROM ""{schema}"".""{cregTable}"" creg
+    WHERE creg.""{credCregJoinCol1}"" IS NOT NULL AND creg.""{credCregJoinCol2}"" IS NOT NULL
+    GROUP BY creg.""{credCregJoinCol1}"", creg.""{credCregJoinCol2}""
 )
 SELECT
-    (SELECT COUNT(*) FROM ApprQual) AS ApprovedQualificationCount,
-    COUNT(1) AS ApprovedCredentialCount,
-    SUM(CASE WHEN CS.CREG__LINK1 IS NOT NULL THEN 1 ELSE 0 END) AS RegisteredCredentialCount
-FROM CredPop CP
-INNER JOIN ApprQual AQ ON AQ.QUAL__LINK = CP.CRED__QUAL_KEY
-LEFT JOIN CregSmp CS ON CS.CREG__LINK1 = CP.CRED__LINK1 AND CS.CREG__LINK2 = CP.CRED__LINK2;";
-
-        // ── New prep-SQL pattern (like Rule 12) ───────────────────────────────────
+    (SELECT COUNT(*) FROM appr_qual) AS approved_qualification_count,
+    COUNT(1) AS approved_credential_count,
+    SUM(CASE WHEN cs.link1 IS NOT NULL THEN 1 ELSE 0 END) AS registered_credential_count
+FROM cred_pop cp
+INNER JOIN appr_qual aq ON aq.link = cp.qual_key
+LEFT JOIN creg_smp cs ON cs.link1 = cp.link1 AND cs.link2 = cp.link2;";
 
         private static string BuildRule15PrepSql(
-            string credTable, string qualTable, string cregTable,
+            string schema, string credTable, string qualTable, string cregTable,
             string qualApprovedCol, string qualApprovedVal,
             string credQualJoinCol, string credCregJoinCol1, string credCregJoinCol2, string cregStudentCol,
             bool hasCredFiller, bool hasCredCredit1, bool hasCredCredit2, bool hasQualName)
         {
-            var credFillerSel  = hasCredFiller  ? "    CONVERT(NVARCHAR(255), CRED.[_065]) AS [Filler1]," : "    NULL AS [Filler1],";
-            var credCredit1Sel = hasCredCredit1 ? "    CONVERT(NVARCHAR(255), CRED.[_036]) AS [Course_Level_Credit_Value]," : "    NULL AS [Course_Level_Credit_Value],";
-            var credCredit2Sel = hasCredCredit2 ? "    CONVERT(NVARCHAR(255), CRED.[_050]) AS [Completed_Research_Course_Credit_Value]" : "    NULL AS [Completed_Research_Course_Credit_Value]";
-            var qualNameSel    = hasQualName    ? $"    CONVERT(NVARCHAR(500), QUAL.[_003]) AS [Qualification_Name_Designator]," : "    NULL AS [Qualification_Name_Designator],";
+            var av = EscapeSqlString(qualApprovedVal);
             var ctrlLabel = $"CRED.{credCregJoinCol1} AND QUAL.{qualApprovedCol}=''{qualApprovedVal}'' AND CRED.{credCregJoinCol1}=CREG.{credCregJoinCol1} AND CRED.{credCregJoinCol2}=CREG.{credCregJoinCol2}";
+            var credFillerSel = hasCredFiller ? @"CAST(cred.""_065"" AS text)" : "NULL::text";
+            var credCredit1Sel = hasCredCredit1 ? @"CAST(cred.""_036"" AS text)" : "NULL::text";
+            var credCredit2Sel = hasCredCredit2 ? @"CAST(cred.""_050"" AS text)" : "NULL::text";
+            var qualNameSel = hasQualName ? @"CAST(qual.""_003"" AS text)" : "NULL::text";
 
             return $@"
-DROP TABLE IF EXISTS #Rule15_CRED_Extracted_Population;
-DROP TABLE IF EXISTS #Rule15_Approved_Qualifications;
-DROP TABLE IF EXISTS #Rule15_CREG_Extracted_Population;
-DROP TABLE IF EXISTS #Rule15_Validation;
+DROP TABLE IF EXISTS rule15_cred_population;
+DROP TABLE IF EXISTS rule15_approved_qual;
+DROP TABLE IF EXISTS rule15_creg_population;
+DROP TABLE IF EXISTS rule15_validation;
 
 -- STEP 1: Extract 100% CRED population
+CREATE TEMP TABLE rule15_cred_population AS
 SELECT DISTINCT
     ROW_NUMBER() OVER (ORDER BY
-        UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(255), CRED.[{credCregJoinCol1}])))),
-        UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(255), CRED.[{credCregJoinCol2}]))))
-    ) AS [Extract_Number],
-    UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(255), CRED.[{credCregJoinCol1}])))) AS [Qualification_Code],
-    UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(255), CRED.[{credCregJoinCol2}])))) AS [Course_Code],
-    UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(255), CRED.[{credQualJoinCol}])))) AS [CRED__QUAL_KEY],
-{credFillerSel}
-{credCredit1Sel}
-{credCredit2Sel}
-INTO #Rule15_CRED_Extracted_Population
-FROM [{credTable}] CRED
-WHERE CRED.[{credCregJoinCol1}] IS NOT NULL
-  AND CRED.[{credCregJoinCol2}] IS NOT NULL
-  AND LTRIM(RTRIM(CONVERT(NVARCHAR(255), CRED.[{credCregJoinCol1}]))) <> ''
-  AND LTRIM(RTRIM(CONVERT(NVARCHAR(255), CRED.[{credCregJoinCol2}]))) <> '';
+        UPPER(TRIM(CAST(cred.""{credCregJoinCol1}"" AS text))),
+        UPPER(TRIM(CAST(cred.""{credCregJoinCol2}"" AS text)))
+    ) AS extract_number,
+    UPPER(TRIM(CAST(cred.""{credCregJoinCol1}"" AS text))) AS qualification_code,
+    UPPER(TRIM(CAST(cred.""{credCregJoinCol2}"" AS text))) AS course_code,
+    UPPER(TRIM(CAST(cred.""{credQualJoinCol}""  AS text))) AS cred_qual_key,
+    {credFillerSel} AS filler1,
+    {credCredit1Sel} AS course_level_credit_value,
+    {credCredit2Sel} AS completed_research_course_credit_value
+FROM ""{schema}"".""{credTable}"" cred
+WHERE cred.""{credCregJoinCol1}"" IS NOT NULL
+  AND cred.""{credCregJoinCol2}"" IS NOT NULL
+  AND TRIM(CAST(cred.""{credCregJoinCol1}"" AS text)) <> ''
+  AND TRIM(CAST(cred.""{credCregJoinCol2}"" AS text)) <> '';
 
-CREATE INDEX IX_Rule15_CRED ON #Rule15_CRED_Extracted_Population ([Qualification_Code], [Course_Code]);
+CREATE INDEX ON rule15_cred_population (qualification_code, course_code);
+ANALYZE rule15_cred_population;
 
 -- STEP 2: Extract approved QUAL population
+CREATE TEMP TABLE rule15_approved_qual AS
 SELECT DISTINCT
-    UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(255), QUAL.[{credQualJoinCol}])))) AS [QUAL__JOIN_KEY],
-{qualNameSel}
-    UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(50), QUAL.[{qualApprovedCol}])))) AS [Approval_Status]
-INTO #Rule15_Approved_Qualifications
-FROM [{qualTable}] QUAL
-WHERE UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(50), QUAL.[{qualApprovedCol}])))) = '{qualApprovedVal}'
-  AND QUAL.[{credQualJoinCol}] IS NOT NULL
-  AND LTRIM(RTRIM(CONVERT(NVARCHAR(255), QUAL.[{credQualJoinCol}]))) <> '';
+    UPPER(TRIM(CAST(qual.""{credQualJoinCol}"" AS text))) AS qual_join_key,
+    {qualNameSel} AS qualification_name_designator,
+    UPPER(TRIM(CAST(qual.""{qualApprovedCol}"" AS text))) AS approval_status
+FROM ""{schema}"".""{qualTable}"" qual
+WHERE UPPER(TRIM(CAST(qual.""{qualApprovedCol}"" AS text))) = '{av}'
+  AND qual.""{credQualJoinCol}"" IS NOT NULL
+  AND TRIM(CAST(qual.""{credQualJoinCol}"" AS text)) <> '';
 
-CREATE INDEX IX_Rule15_QUAL ON #Rule15_Approved_Qualifications ([QUAL__JOIN_KEY]);
+CREATE INDEX ON rule15_approved_qual (qual_join_key);
+ANALYZE rule15_approved_qual;
 
 -- STEP 3: Extract CREG registration population
+CREATE TEMP TABLE rule15_creg_population AS
 SELECT
-    UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(255), CREG.[{credCregJoinCol1}])))) AS [CREG__JOIN_KEY1],
-    UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(255), CREG.[{credCregJoinCol2}])))) AS [CREG__JOIN_KEY2],
-    MIN(CONVERT(NVARCHAR(255), CREG.[{cregStudentCol}])) AS [First_Student_Number],
-    COUNT(DISTINCT CONVERT(NVARCHAR(255), CREG.[{cregStudentCol}])) AS [Registered_Student_Count]
-INTO #Rule15_CREG_Extracted_Population
-FROM [{cregTable}] CREG
-WHERE CREG.[{credCregJoinCol1}] IS NOT NULL
-  AND CREG.[{credCregJoinCol2}] IS NOT NULL
-  AND LTRIM(RTRIM(CONVERT(NVARCHAR(255), CREG.[{credCregJoinCol1}]))) <> ''
-  AND LTRIM(RTRIM(CONVERT(NVARCHAR(255), CREG.[{credCregJoinCol2}]))) <> ''
+    UPPER(TRIM(CAST(creg.""{credCregJoinCol1}"" AS text))) AS creg_join_key1,
+    UPPER(TRIM(CAST(creg.""{credCregJoinCol2}"" AS text))) AS creg_join_key2,
+    MIN(CAST(creg.""{cregStudentCol}"" AS text)) AS first_student_number,
+    COUNT(DISTINCT CAST(creg.""{cregStudentCol}"" AS text)) AS registered_student_count
+FROM ""{schema}"".""{cregTable}"" creg
+WHERE creg.""{credCregJoinCol1}"" IS NOT NULL
+  AND creg.""{credCregJoinCol2}"" IS NOT NULL
+  AND TRIM(CAST(creg.""{credCregJoinCol1}"" AS text)) <> ''
+  AND TRIM(CAST(creg.""{credCregJoinCol2}"" AS text)) <> ''
 GROUP BY
-    UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(255), CREG.[{credCregJoinCol1}])))),
-    UPPER(LTRIM(RTRIM(CONVERT(NVARCHAR(255), CREG.[{credCregJoinCol2}]))));
+    UPPER(TRIM(CAST(creg.""{credCregJoinCol1}"" AS text))),
+    UPPER(TRIM(CAST(creg.""{credCregJoinCol2}"" AS text)));
 
-CREATE INDEX IX_Rule15_CREG ON #Rule15_CREG_Extracted_Population ([CREG__JOIN_KEY1], [CREG__JOIN_KEY2]);
+CREATE INDEX ON rule15_creg_population (creg_join_key1, creg_join_key2);
+ANALYZE rule15_creg_population;
 
 -- STEP 4: Validate CRED -> QUAL -> CREG
+CREATE TEMP TABLE rule15_validation AS
 SELECT
-    CP.[Extract_Number],
-    1 AS [Control_Sort],
-    'Control_1' AS [Control_Type],
-    'CONTROL 1: {ctrlLabel}' AS [Control_Label],
-    CP.[Qualification_Code],
-    CP.[Course_Code],
-    AQ.[Qualification_Name_Designator],
-    AQ.[Approval_Status],
-    CP.[Filler1],
-    CP.[Course_Level_Credit_Value],
-    CP.[Completed_Research_Course_Credit_Value],
-    CREG.[First_Student_Number],
-    CREG.[Registered_Student_Count],
-    CASE WHEN CREG.[CREG__JOIN_KEY1] IS NOT NULL THEN 'FOUND' ELSE 'NOT FOUND' END AS [CREG__MATCH],
+    cp.extract_number,
+    1 AS control_sort,
+    'Control_1' AS control_type,
+    'CONTROL 1: {ctrlLabel}' AS control_label,
+    cp.qualification_code,
+    cp.course_code,
+    aq.qualification_name_designator,
+    aq.approval_status,
+    cp.filler1,
+    cp.course_level_credit_value,
+    cp.completed_research_course_credit_value,
+    creg.first_student_number,
+    creg.registered_student_count,
+    CASE WHEN creg.creg_join_key1 IS NOT NULL THEN 'FOUND' ELSE 'NOT FOUND' END AS creg_match,
     CASE
-        WHEN AQ.[QUAL__JOIN_KEY] IS NULL     THEN 'FAIL'
-        WHEN CREG.[CREG__JOIN_KEY1] IS NULL  THEN 'FAIL'
+        WHEN aq.qual_join_key IS NULL    THEN 'FAIL'
+        WHEN creg.creg_join_key1 IS NULL THEN 'FAIL'
         ELSE 'PASS'
-    END AS [Validation_Result],
+    END AS validation_result,
     CASE
-        WHEN AQ.[QUAL__JOIN_KEY] IS NULL
+        WHEN aq.qual_join_key IS NULL
             THEN 'Qualification code in CRED is not approved or does not exist in QUAL.'
-        WHEN CREG.[CREG__JOIN_KEY1] IS NULL
+        WHEN creg.creg_join_key1 IS NULL
             THEN 'Credential qualification/course combination does not exist in CREG.'
         ELSE 'Approved qualification and matching CREG registration found.'
-    END AS [Validation_Reason]
-INTO #Rule15_Validation
-FROM #Rule15_CRED_Extracted_Population CP
-LEFT JOIN #Rule15_Approved_Qualifications AQ   ON AQ.[QUAL__JOIN_KEY]  = CP.[CRED__QUAL_KEY]
-LEFT JOIN #Rule15_CREG_Extracted_Population CREG
-    ON CREG.[CREG__JOIN_KEY1] = CP.[Qualification_Code]
-   AND CREG.[CREG__JOIN_KEY2] = CP.[Course_Code];";
+    END AS validation_reason
+FROM rule15_cred_population cp
+LEFT JOIN rule15_approved_qual aq ON aq.qual_join_key = cp.cred_qual_key
+LEFT JOIN rule15_creg_population creg
+    ON creg.creg_join_key1 = cp.qualification_code
+   AND creg.creg_join_key2 = cp.course_code;
+
+ANALYZE rule15_validation;";
         }
 
         private static string BuildRule15CountAfterPrepSql() => @"
 SELECT
-    (SELECT COUNT(1) FROM #Rule15_Approved_Qualifications)     AS ApprovedQualCount,
-    (SELECT COUNT(1) FROM #Rule15_CRED_Extracted_Population)   AS CredPopCount,
-    SUM(CASE WHEN [Validation_Result] = 'PASS' THEN 1 ELSE 0 END) AS PassCount,
-    SUM(CASE WHEN [Validation_Result] = 'FAIL' THEN 1 ELSE 0 END) AS FailCount
-FROM #Rule15_Validation;";
+    (SELECT COUNT(1) FROM rule15_approved_qual)   AS approved_qual_count,
+    (SELECT COUNT(1) FROM rule15_cred_population) AS cred_pop_count,
+    SUM(CASE WHEN validation_result = 'PASS' THEN 1 ELSE 0 END) AS pass_count,
+    SUM(CASE WHEN validation_result = 'FAIL' THEN 1 ELSE 0 END) AS fail_count
+FROM rule15_validation;";
 
-        private static async Task<(int approvedQualCount, int credPopCount, int passCount, int failCount)>
-            RunRule15PrepAndGetCountsAsync(
-                SqlConnection conn,
-                string credTable, string qualTable, string cregTable,
-                string qualApprovedCol, string qualApprovedVal,
-                string credQualJoinCol, string credCregJoinCol1, string credCregJoinCol2, string cregStudentCol,
-                bool hasCredFiller, bool hasCredCredit1, bool hasCredCredit2, bool hasQualName)
+        private static readonly Dictionary<string, string> DisplayNameMap = new(StringComparer.OrdinalIgnoreCase)
         {
-            await using var cmd = conn.CreateConfiguredCommand();
-            cmd.CommandText = "SET NOCOUNT ON;\n"
-                + BuildRule15PrepSql(credTable, qualTable, cregTable, qualApprovedCol, qualApprovedVal,
-                    credQualJoinCol, credCregJoinCol1, credCregJoinCol2, cregStudentCol,
-                    hasCredFiller, hasCredCredit1, hasCredCredit2, hasQualName)
-                + "\n" + BuildRule15CountAfterPrepSql();
-            cmd.CommandTimeout = 300;
-            await using var reader = await cmd.ExecuteReaderAsync();
-            do
-            {
-                if (reader.FieldCount >= 4 && await reader.ReadAsync())
-                    return (GetInt(reader, 0), GetInt(reader, 1), GetInt(reader, 2), GetInt(reader, 3));
-            }
-            while (await reader.NextResultAsync());
-            return (0, 0, 0, 0);
-        }
+            ["extract_number"] = "Extract_Number",
+            ["control_sort"] = "Control_Sort",
+            ["control_type"] = "Control_Type",
+            ["control_label"] = "Control_Label",
+            ["qualification_code"] = "Qualification_Code",
+            ["course_code"] = "Course_Code",
+            ["qualification_name_designator"] = "Qualification_Name_Designator",
+            ["approval_status"] = "Approval_Status",
+            ["filler1"] = "Filler1",
+            ["course_level_credit_value"] = "Course_Level_Credit_Value",
+            ["completed_research_course_credit_value"] = "Completed_Research_Course_Credit_Value",
+            ["first_student_number"] = "First_Student_Number",
+            ["registered_student_count"] = "Registered_Student_Count",
+            ["creg_match"] = "CREG__MATCH",
+            ["validation_result"] = "Validation_Result",
+            ["validation_reason"] = "Validation_Reason"
+        };
 
-        private static async Task<List<Rule15ValidationRowRecord>> LoadControlRowsFromPrepAsync(
-            SqlConnection conn, int? maxRows)
+        private static string ToPascalDisplayName(string columnName) =>
+            DisplayNameMap.TryGetValue(columnName, out var mapped) ? mapped : columnName;
+
+        private static async Task<List<Rule15ValidationRowRecord>> LoadControlRowsFromPrepAsync(NpgsqlConnection connection, int? maxRows, string? resultFilter = null)
         {
-            await using var cmd = conn.CreateConfiguredCommand();
-            var top = maxRows.HasValue && maxRows.Value > 0 ? $"TOP {maxRows.Value} " : "";
-            cmd.CommandText = $"SELECT {top}* FROM #Rule15_Validation ORDER BY [Extract_Number];";
+            var limitClause = maxRows.HasValue && maxRows.Value > 0 ? $"LIMIT {maxRows.Value}" : "";
+            var whereClause = resultFilter == "FAIL" ? "WHERE validation_result = 'FAIL'" : "";
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"SELECT * FROM rule15_validation {whereClause} ORDER BY extract_number {limitClause};";
 
-            await using var reader = await cmd.ExecuteReaderAsync();
+            await using var reader = await command.ExecuteReaderAsync();
             var rows = new List<Rule15ValidationRowRecord>();
             while (await reader.ReadAsync())
             {
                 var displayValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
                 for (var i = 0; i < reader.FieldCount; i++)
                 {
-                    displayValues[reader.GetName(i)] = reader.IsDBNull(i)
+                    var columnName = ToPascalDisplayName(reader.GetName(i));
+                    displayValues[columnName] = reader.IsDBNull(i)
                         ? null
                         : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture);
                 }
@@ -1002,22 +849,10 @@ FROM #Rule15_Validation;";
             return rows;
         }
 
-        private static async Task<List<string>> GetColumnsOnConnectionAsync(SqlConnection conn, string tableName)
-        {
-            await using var cmd = conn.CreateConfiguredCommand();
-            cmd.CommandText = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @T ORDER BY ORDINAL_POSITION;";
-            cmd.Parameters.AddWithValue("@T", tableName);
-            await using var reader = await cmd.ExecuteReaderAsync();
-            var cols = new List<string>();
-            while (await reader.ReadAsync())
-                if (!reader.IsDBNull(0)) cols.Add(reader.GetString(0));
-            return cols;
-        }
-
         private static List<Rule15ControlSummaryItemViewModel> BuildControlSummaries(
             int approvedCredentialCount, int registeredCredentialCount,
-            string qualApprovedCol = "_004", string qualApprovedVal = "A",
-            string credQualJoinCol = "_001", string credCregJoinCol1 = "_001", string credCregJoinCol2 = "_030")
+            string qualApprovedCol, string qualApprovedVal,
+            string credQualJoinCol, string credCregJoinCol1, string credCregJoinCol2)
         {
             return new List<Rule15ControlSummaryItemViewModel>
             {
@@ -1030,12 +865,7 @@ FROM #Rule15_Validation;";
             };
         }
 
-        private static Rule15ControlSummaryItemViewModel BuildControlSummary(
-            string controlType,
-            string controlLabel,
-            string criteriaText,
-            int totalCount,
-            int passCount)
+        private static Rule15ControlSummaryItemViewModel BuildControlSummary(string controlType, string controlLabel, string criteriaText, int totalCount, int passCount)
         {
             var failCount = Math.Max(totalCount - passCount, 0);
             return new Rule15ControlSummaryItemViewModel
@@ -1053,57 +883,40 @@ FROM #Rule15_Validation;";
             };
         }
 
-        private static List<Rule15ValidationRowRecord> NormalizeReviewRows(IEnumerable<Rule15ValidationRowRecord>? rows)
-        {
-            var normalized = (rows ?? Enumerable.Empty<Rule15ValidationRowRecord>())
-                .Select((row, index) =>
-                {
-                    row.ValidationNumber = index + 1;
-                    return row;
-                })
+        private static List<Rule15ValidationRowRecord> NormalizeReviewRows(IEnumerable<Rule15ValidationRowRecord>? rows) =>
+            (rows ?? Enumerable.Empty<Rule15ValidationRowRecord>())
+                .Select((row, index) => { row.ValidationNumber = index + 1; return row; })
                 .ToList();
 
-            return normalized;
-        }
-
-        private async Task<Rule15ValidationSummary> ExpandSavedSummaryIfNeededAsync(Rule15ValidationSummary summary, string? server)
+        private async Task<Rule15ValidationSummary> ExpandSavedSummaryIfNeededAsync(Rule15ValidationSummary summary, int clientId)
         {
             var looksLikeStoredPreviewSample =
                 summary.ReviewRows.Count > 0 &&
                 summary.ReviewRows.Count <= BrowserPreviewRowLimit &&
                 summary.TotalValidated > 0;
 
-            if (!summary.IsPreviewOnly &&
-                summary.ReviewRows.Count >= summary.TotalValidated &&
-                !looksLikeStoredPreviewSample)
-            {
+            if (!summary.IsPreviewOnly && summary.ReviewRows.Count >= summary.TotalValidated && !looksLikeStoredPreviewSample)
                 return summary;
-            }
 
-            if (string.IsNullOrWhiteSpace(server) ||
-                string.IsNullOrWhiteSpace(summary.Database) ||
-                string.IsNullOrWhiteSpace(summary.StudTable) ||
-                string.IsNullOrWhiteSpace(summary.BridgeTable) ||
-                string.IsNullOrWhiteSpace(summary.CrseTable))
-            {
+            if (string.IsNullOrWhiteSpace(summary.StudTable) || string.IsNullOrWhiteSpace(summary.BridgeTable) || string.IsNullOrWhiteSpace(summary.CrseTable))
                 return summary;
-            }
 
             try
             {
-                var expanded = await AnalyseAsync(
-                    new Rule15ValidationRequest
-                    {
-                        ClientId = summary.ClientId,
-                        RunId = summary.SavedRunId,
-                        Server = server,
-                        Database = summary.Database,
-                        Driver = "ODBC Driver 17 for SQL Server",
-                        StudTable = summary.StudTable,
-                        BridgeTable = summary.BridgeTable,
-                        CrseTable = summary.CrseTable
-                    },
-                    includeAllReviewRows: true);
+                var expanded = await AnalyseAsync(new Rule15ValidationRequest
+                {
+                    ClientId = clientId,
+                    RunId = summary.SavedRunId,
+                    StudTable = summary.StudTable,
+                    BridgeTable = summary.BridgeTable,
+                    CrseTable = summary.CrseTable,
+                    QualApprovedCol = summary.QualApprovedCol,
+                    QualApprovedVal = summary.QualApprovedVal,
+                    CredQualJoinCol = summary.CredQualJoinCol,
+                    CredCregJoinCol1 = summary.CredCregJoinCol1,
+                    CredCregJoinCol2 = summary.CredCregJoinCol2,
+                    CregStudentCol = summary.CregStudentCol
+                }, includeAllReviewRows: true);
 
                 expanded.Timestamp = string.IsNullOrWhiteSpace(summary.Timestamp) ? expanded.Timestamp : summary.Timestamp;
                 expanded.ClientId = summary.ClientId;
@@ -1120,69 +933,66 @@ FROM #Rule15_Validation;";
             }
         }
 
-        private static Rule15ValidationSummary CloneSummary(Rule15ValidationSummary summary)
+        private static Rule15ValidationSummary CloneSummary(Rule15ValidationSummary summary) => new()
         {
-            return new Rule15ValidationSummary
+            Success = summary.Success,
+            StudRecordCount = summary.StudRecordCount,
+            BridgeRecordCount = summary.BridgeRecordCount,
+            CrseRecordCount = summary.CrseRecordCount,
+            UnfulfilledPopulationCount = summary.UnfulfilledPopulationCount,
+            ApprovedCredentialCount = summary.ApprovedCredentialCount,
+            RegisteredCredentialCount = summary.RegisteredCredentialCount,
+            TotalRequested = summary.TotalRequested,
+            TotalValidated = summary.TotalValidated,
+            DisplayedCount = summary.DisplayedCount,
+            IsPreviewOnly = summary.IsPreviewOnly,
+            PreviewLimit = summary.PreviewLimit,
+            PassCount = summary.PassCount,
+            FailCount = summary.FailCount,
+            ExceptionRate = summary.ExceptionRate,
+            Status = summary.Status,
+            Timestamp = summary.Timestamp,
+            StudTable = summary.StudTable,
+            BridgeTable = summary.BridgeTable,
+            CrseTable = summary.CrseTable,
+            QualApprovedCol = summary.QualApprovedCol,
+            QualApprovedVal = summary.QualApprovedVal,
+            CredQualJoinCol = summary.CredQualJoinCol,
+            CredCregJoinCol1 = summary.CredCregJoinCol1,
+            CredCregJoinCol2 = summary.CredCregJoinCol2,
+            CregStudentCol = summary.CregStudentCol,
+            TableLinkageText = summary.TableLinkageText,
+            RuleModeText = summary.RuleModeText,
+            ProcedureSteps = summary.ProcedureSteps.ToList(),
+            ClientId = summary.ClientId,
+            SavedRunId = summary.SavedRunId,
+            ControlSummaries = summary.ControlSummaries.Select(item => new Rule15ControlSummaryItemViewModel
             {
-                Success = summary.Success,
-                StudRecordCount = summary.StudRecordCount,
-                BridgeRecordCount = summary.BridgeRecordCount,
-                CrseRecordCount = summary.CrseRecordCount,
-                UnfulfilledPopulationCount = summary.UnfulfilledPopulationCount,
-                TotalRequested = summary.TotalRequested,
-                TotalValidated = summary.TotalValidated,
-                DisplayedCount = summary.DisplayedCount,
-                IsPreviewOnly = summary.IsPreviewOnly,
-                PreviewLimit = summary.PreviewLimit,
-                PassCount = summary.PassCount,
-                FailCount = summary.FailCount,
-                ExceptionRate = summary.ExceptionRate,
-                Status = summary.Status,
-                Timestamp = summary.Timestamp,
-                Database = summary.Database,
-                StudTable = summary.StudTable,
-                BridgeTable = summary.BridgeTable,
-                CrseTable = summary.CrseTable,
-                TableLinkageText = summary.TableLinkageText,
-                RuleModeText = summary.RuleModeText,
-                ProcedureSteps = summary.ProcedureSteps.ToList(),
-                ClientId = summary.ClientId,
-                SavedRunId = summary.SavedRunId,
-                ControlSummaries = summary.ControlSummaries
-                    .Select(item => new Rule15ControlSummaryItemViewModel
-                    {
-                        ControlType = item.ControlType,
-                        ControlLabel = item.ControlLabel,
-                        CriteriaText = item.CriteriaText,
-                        RequestedCount = item.RequestedCount,
-                        AvailableCount = item.AvailableCount,
-                        AchievedCount = item.AchievedCount,
-                        TotalCount = item.TotalCount,
-                        PassCount = item.PassCount,
-                        FailCount = item.FailCount,
-                        Status = item.Status
-                    })
-                    .ToList(),
-                ReviewRows = summary.ReviewRows
-                    .Select(CloneReviewRow)
-                    .ToList(),
-                Warning = summary.Warning,
-                Error = summary.Error
-            };
-        }
+                ControlType = item.ControlType,
+                ControlLabel = item.ControlLabel,
+                CriteriaText = item.CriteriaText,
+                RequestedCount = item.RequestedCount,
+                AvailableCount = item.AvailableCount,
+                AchievedCount = item.AchievedCount,
+                TotalCount = item.TotalCount,
+                PassCount = item.PassCount,
+                FailCount = item.FailCount,
+                Status = item.Status
+            }).ToList(),
+            ReviewRows = summary.ReviewRows.Select(CloneReviewRow).ToList(),
+            Warning = summary.Warning,
+            Error = summary.Error
+        };
 
-        private static Rule15ValidationRowRecord CloneReviewRow(Rule15ValidationRowRecord row)
+        private static Rule15ValidationRowRecord CloneReviewRow(Rule15ValidationRowRecord row) => new()
         {
-            return new Rule15ValidationRowRecord
-            {
-                ValidationNumber = row.ValidationNumber,
-                ControlType = row.ControlType,
-                ControlLabel = row.ControlLabel,
-                ValidationResult = row.ValidationResult,
-                ValidationExplanation = row.ValidationExplanation,
-                DisplayValues = new Dictionary<string, string?>(row.DisplayValues, StringComparer.OrdinalIgnoreCase)
-            };
-        }
+            ValidationNumber = row.ValidationNumber,
+            ControlType = row.ControlType,
+            ControlLabel = row.ControlLabel,
+            ValidationResult = row.ValidationResult,
+            ValidationExplanation = row.ValidationExplanation,
+            DisplayValues = new Dictionary<string, string?>(row.DisplayValues, StringComparer.OrdinalIgnoreCase)
+        };
 
         private static Rule15ValidationSummary CreateBrowserPreview(Rule15ValidationSummary summary)
         {
@@ -1194,51 +1004,12 @@ FROM #Rule15_Validation;";
                 .Take(BrowserPreviewRowLimit)
                 .ToList();
 
-            return new Rule15ValidationSummary
-            {
-                Success = summary.Success,
-                StudRecordCount = summary.StudRecordCount,
-                BridgeRecordCount = summary.BridgeRecordCount,
-                CrseRecordCount = summary.CrseRecordCount,
-                UnfulfilledPopulationCount = summary.UnfulfilledPopulationCount,
-                TotalRequested = summary.TotalRequested,
-                TotalValidated = summary.TotalValidated,
-                DisplayedCount = previewRows.Count,
-                IsPreviewOnly = summary.TotalValidated > previewRows.Count,
-                PreviewLimit = summary.TotalValidated > previewRows.Count ? previewRows.Count : 0,
-                PassCount = summary.PassCount,
-                FailCount = summary.FailCount,
-                ExceptionRate = summary.ExceptionRate,
-                Status = summary.Status,
-                Timestamp = summary.Timestamp,
-                Database = summary.Database,
-                StudTable = summary.StudTable,
-                BridgeTable = summary.BridgeTable,
-                CrseTable = summary.CrseTable,
-                TableLinkageText = summary.TableLinkageText,
-                RuleModeText = summary.RuleModeText,
-                ProcedureSteps = summary.ProcedureSteps.ToList(),
-                ClientId = summary.ClientId,
-                SavedRunId = summary.SavedRunId,
-                ControlSummaries = summary.ControlSummaries
-                    .Select(item => new Rule15ControlSummaryItemViewModel
-                    {
-                        ControlType = item.ControlType,
-                        ControlLabel = item.ControlLabel,
-                        CriteriaText = item.CriteriaText,
-                        RequestedCount = item.RequestedCount,
-                        AvailableCount = item.AvailableCount,
-                        AchievedCount = item.AchievedCount,
-                        TotalCount = item.TotalCount,
-                        PassCount = item.PassCount,
-                        FailCount = item.FailCount,
-                        Status = item.Status
-                    })
-                    .ToList(),
-                ReviewRows = previewRows,
-                Warning = summary.Warning,
-                Error = summary.Error
-            };
+            var clone = CloneSummary(summary);
+            clone.DisplayedCount = previewRows.Count;
+            clone.IsPreviewOnly = summary.TotalValidated > previewRows.Count;
+            clone.PreviewLimit = summary.TotalValidated > previewRows.Count ? previewRows.Count : 0;
+            clone.ReviewRows = previewRows;
+            return clone;
         }
 
         private static void ApplyBrowserPreview(Rule15ValidationSummary summary)
@@ -1256,117 +1027,61 @@ FROM #Rule15_Validation;";
             _ => 99
         };
 
-        private static List<string> BuildProcedureSteps(string qualTable, string credTable, string cregTable) =>
-            new()
-            {
-                $"Filter {qualTable} to approved qualifications where _004 = 'A'.",
-                $"Join approved qualifications to {credTable} on _001 to retrieve every credential course row.",
-                $"For each approved credential row, test whether a matching {cregTable} row exists on _001 and _030.",
-                "Mark rows PASS when a matching registration exists and FAIL when no registration exists.",
-                "Return the full approved-credential population; no sampling is applied."
-            };
-
-        private async Task EnsureColumnsExistAsync(
-            string server, string database, string driver, string studTable, string bridgeTable, string crseTable,
-            string qualApprovedCol = "_004", string credQualJoinCol = "_001",
-            string credCregJoinCol1 = "_001", string credCregJoinCol2 = "_030", string cregStudentCol = "_007")
+        private static List<string> BuildProcedureSteps(string qualTable, string credTable, string cregTable) => new()
         {
-            // studTable=CRED, bridgeTable=QUAL, crseTable=CREG
-            var credColumns = await GetTableColumnsAsync(server, database, driver, studTable);
-            var qualColumns = await GetTableColumnsAsync(server, database, driver, bridgeTable);
-            var cregColumns = await GetTableColumnsAsync(server, database, driver, crseTable);
+            $"Filter {qualTable} to approved qualifications where the configured approval column matches the configured value.",
+            $"Join approved qualifications to {credTable} on the configured join column to retrieve every credential course row.",
+            $"For each approved credential row, test whether a matching {cregTable} row exists on the configured join columns.",
+            "Mark rows PASS when a matching registration exists and FAIL when no registration exists.",
+            "Return the full approved-credential population; no sampling is applied."
+        };
 
-            EnsureHasColumns(studTable, credColumns, credQualJoinCol, credCregJoinCol1, credCregJoinCol2);
-            EnsureHasColumns(bridgeTable, qualColumns, credQualJoinCol, qualApprovedCol);
-            EnsureHasColumns(crseTable, cregColumns, credCregJoinCol1, credCregJoinCol2, cregStudentCol);
-        }
-
-        public Task<List<string>> GetTableColumnsListAsync(string server, string database, string driver, string tableName)
-            => GetTableColumnsAsync(server, database, driver, tableName);
-
-        private async Task<List<string>> GetTableColumnsAsync(string server, string database, string driver, string tableName)
+        private async Task<(NpgsqlConnection Connection, string Schema)> OpenEngagementConnectionAsync(int clientId)
         {
-            ValidateObjectName(tableName);
+            var database = await _datasets.GetDatabaseAsync(clientId)
+                ?? throw new InvalidOperationException("Create a database for this engagement before running this rule.");
 
-            var connStr = BuildConnectionString(server, database, driver);
-            await using var conn = new SqlConnection(connStr);
-            await conn.OpenAsync();
+            // Unlimited command timeout: validation queries build temp tables and run multi-way
+            // joins over the engagement's full dataset, which can legitimately take longer than
+            // the app's normal 60s query timeout on large uploads.
+            var connectionString = HemisAudit.Data.PostgresConnectionStringHelper.WithResiliencyDefaults(
+                _configuration.GetConnectionString("Postgres")
+                    ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured."),
+                commandTimeoutSeconds: 0);
 
-            await using var cmd = conn.CreateConfiguredCommand();
-            cmd.CommandText = @"
-SELECT COLUMN_NAME
-FROM INFORMATION_SCHEMA.COLUMNS
-WHERE TABLE_NAME = @TableName
-ORDER BY ORDINAL_POSITION;";
-            cmd.Parameters.AddWithValue("@TableName", Sanitise(tableName));
-
-            await using var reader = await cmd.ExecuteReaderAsync();
-            var columns = new List<string>();
-            while (await reader.ReadAsync())
+            var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync();
+            await using (var setTimeout = connection.CreateCommand())
             {
-                if (!reader.IsDBNull(0))
-                    columns.Add(reader.GetString(0));
+                // Belt-and-braces: also clear any server/role-level statement_timeout default
+                // for this session, in case one is set independently of Npgsql's own timeout.
+                setTimeout.CommandText = "SET statement_timeout = 0;";
+                await setTimeout.ExecuteNonQueryAsync();
             }
-
-            return columns;
+            var schema = string.IsNullOrWhiteSpace(database.SchemaName) ? $"engagement_{clientId}" : database.SchemaName;
+            return (connection, schema);
         }
 
-        private static void EnsureHasColumns(string tableName, IReadOnlyCollection<string> availableColumns, params string[] requiredColumns)
+        private async Task ValidateColumnsExistAsync(int clientId, string tableName, params string[] columns)
         {
-            var missing = requiredColumns
-                .Where(required => !availableColumns.Contains(required, StringComparer.OrdinalIgnoreCase))
-                .ToList();
-
-            if (missing.Count > 0)
-                throw new InvalidOperationException($"Table {tableName} is missing required column(s): {string.Join(", ", missing)}.");
-        }
-
-        private static void ValidateRequest(Rule15ValidationRequest request)
-        {
-            if (string.IsNullOrWhiteSpace(request.Server))
-                throw new InvalidOperationException("Server name is required.");
-            if (string.IsNullOrWhiteSpace(request.Database))
-                throw new InvalidOperationException("Database is required.");
-            if (string.IsNullOrWhiteSpace(request.StudTable))
-                throw new InvalidOperationException("QUAL table is required.");
-            if (string.IsNullOrWhiteSpace(request.BridgeTable))
-                throw new InvalidOperationException("CRED table is required.");
-            if (string.IsNullOrWhiteSpace(request.CrseTable))
-                throw new InvalidOperationException("CREG table is required.");
-
-            ValidateObjectName(request.StudTable);
-            ValidateObjectName(request.BridgeTable);
-            ValidateObjectName(request.CrseTable);
-        }
-
-        private static void ValidateRequest(Rule15VerifyRequest request)
-        {
-            if (string.IsNullOrWhiteSpace(request.Server))
-                throw new InvalidOperationException("Server name is required.");
-            if (string.IsNullOrWhiteSpace(request.Database))
-                throw new InvalidOperationException("Database is required.");
-            if (string.IsNullOrWhiteSpace(request.StudTable))
-                throw new InvalidOperationException("QUAL table is required.");
-            if (string.IsNullOrWhiteSpace(request.BridgeTable))
-                throw new InvalidOperationException("CRED table is required.");
-            if (string.IsNullOrWhiteSpace(request.CrseTable))
-                throw new InvalidOperationException("CREG table is required.");
-
-            ValidateObjectName(request.StudTable);
-            ValidateObjectName(request.BridgeTable);
-            ValidateObjectName(request.CrseTable);
-        }
-
-        private static void ValidateObjectName(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-                throw new InvalidOperationException("Table or column name is required.");
-
-            foreach (var bad in new[] { ";", "'", "\"", "--", "/*", "*/" })
+            var validColumns = await _datasets.GetValidatedColumnsAsync(clientId, tableName);
+            foreach (var col in columns)
             {
-                if (value.Contains(bad, StringComparison.Ordinal))
-                    throw new InvalidOperationException("Unsafe table or column name was provided.");
+                if (string.IsNullOrWhiteSpace(col))
+                    throw new InvalidOperationException("Table or column name is required.");
+                if (!validColumns.Contains(col, StringComparer.Ordinal))
+                    throw new InvalidOperationException($"Column '{col}' was not found in table '{tableName}'.");
             }
+        }
+
+        private static void ValidateRequest(string studTable, string bridgeTable, string crseTable)
+        {
+            if (string.IsNullOrWhiteSpace(studTable))
+                throw new InvalidOperationException("CRED table is required.");
+            if (string.IsNullOrWhiteSpace(bridgeTable))
+                throw new InvalidOperationException("QUAL table is required.");
+            if (string.IsNullOrWhiteSpace(crseTable))
+                throw new InvalidOperationException("CREG table is required.");
         }
 
         private static string? FindFirst(IEnumerable<string> values, string[] exactMatches, string[] containsMatches)
@@ -1374,292 +1089,14 @@ ORDER BY ORDINAL_POSITION;";
             foreach (var exact in exactMatches)
             {
                 var match = values.FirstOrDefault(c => c.Equals(exact, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrWhiteSpace(match))
-                    return match;
+                if (!string.IsNullOrWhiteSpace(match)) return match;
             }
-
             foreach (var fragment in containsMatches)
             {
                 var match = values.FirstOrDefault(c => c.Contains(fragment, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrWhiteSpace(match))
-                    return match;
+                if (!string.IsNullOrWhiteSpace(match)) return match;
             }
-
             return values.FirstOrDefault();
-        }
-
-        private async Task<int> ClearSignoffsAndFlagForReviewAsync(SqlConnection connection, int runId)
-        {
-            await using var countCommand = connection.CreateConfiguredCommand();
-            countCommand.CommandText = "SELECT COUNT(1) FROM dbo.ReviewSignoffs WHERE RunID = @RunID;";
-            countCommand.Parameters.AddWithValue("@RunID", runId);
-            var existingCount = Convert.ToInt32(await countCommand.ExecuteScalarAsync());
-
-            await using var deleteCommand = connection.CreateConfiguredCommand();
-            deleteCommand.CommandText = "DELETE FROM dbo.ReviewSignoffs WHERE RunID = @RunID;";
-            deleteCommand.Parameters.AddWithValue("@RunID", runId);
-            await deleteCommand.ExecuteNonQueryAsync();
-
-            await using var updateCommand = connection.CreateConfiguredCommand();
-            updateCommand.CommandText = "UPDATE dbo.ValidationRuns SET Status = 'Needs Review' WHERE RunID = @RunID;";
-            updateCommand.Parameters.AddWithValue("@RunID", runId);
-            await updateCommand.ExecuteNonQueryAsync();
-
-            return existingCount;
-        }
-
-        private async Task UpdateRunStatusFromSignoffsAsync(SqlConnection connection, int runId)
-        {
-            var hasAllSignoffs = await HasAllRequiredSignoffsAsync(connection, runId);
-            await SetRunStatusAsync(connection, runId, hasAllSignoffs ? "Reviewed and Completed" : "Needs Review");
-        }
-
-        private async Task<bool> HasAllRequiredSignoffsAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT
-    CASE WHEN EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND SignoffRole = 'DataAnalyst') THEN 1 ELSE 0 END,
-    CASE WHEN EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND SignoffRole = 'Manager') THEN 1 ELSE 0 END,
-    CASE WHEN EXISTS (SELECT 1 FROM dbo.ReviewSignoffs WHERE RunID = @RunID AND SignoffRole = 'Director') THEN 1 ELSE 0 END;";
-            command.Parameters.AddWithValue("@RunID", runId);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-                return false;
-
-            return reader.GetInt32(0) == 1 && reader.GetInt32(1) == 1 && reader.GetInt32(2) == 1;
-        }
-
-        private async Task SetRunStatusAsync(SqlConnection connection, int runId, string status)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "UPDATE dbo.ValidationRuns SET Status = @Status WHERE RunID = @RunID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@Status", status);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private async Task MarkPreviousRunsHistoricalAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-UPDATE dbo.ValidationRuns
-SET IsCurrent = 0
-WHERE ClientID = @ClientID
-  AND RuleNumber = @RuleNumber
-  AND IsCurrent = 1;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private async Task<List<RunSignoffViewModel>> GetRunSignoffsAsync(SqlConnection connection, int runId, int? currentUserId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT rs.SignoffID,
-       ISNULL(rs.SignoffRole, '') AS SignoffRole,
-       LTRIM(RTRIM(ISNULL(u.FirstName, '') + ' ' + ISNULL(u.LastName, ''))) AS ReviewerName,
-       ISNULL(u.Email, '') AS ReviewerEmail,
-       ISNULL(rs.Comment, '') AS Comment,
-       rs.SignedOffAt,
-       CASE WHEN @CurrentUserID IS NOT NULL AND rs.ReviewerID = @CurrentUserID THEN CAST(1 AS BIT) ELSE CAST(0 AS BIT) END AS IsCurrentUser
-FROM dbo.ReviewSignoffs rs
-INNER JOIN dbo.Users u ON u.UserID = rs.ReviewerID
-WHERE rs.RunID = @RunID
-ORDER BY CASE ISNULL(rs.SignoffRole, '')
-            WHEN 'DataAnalyst' THEN 1
-            WHEN 'Manager' THEN 2
-            WHEN 'Director' THEN 3
-            ELSE 4
-         END,
-         rs.SignedOffAt DESC;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@CurrentUserID", currentUserId.HasValue ? currentUserId.Value : DBNull.Value);
-
-            await using var reader = await command.ExecuteReaderAsync();
-            var signoffs = new List<RunSignoffViewModel>();
-            while (await reader.ReadAsync())
-            {
-                signoffs.Add(new RunSignoffViewModel
-                {
-                    Id = reader.GetInt32(0),
-                    SignoffRole = reader.IsDBNull(1) ? "" : reader.GetString(1),
-                    ReviewerName = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                    ReviewerEmail = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                    Comment = reader.IsDBNull(4) ? "" : reader.GetString(4),
-                    SignedOffAt = reader.IsDBNull(5) ? DateTime.UtcNow : reader.GetDateTime(5),
-                    IsCurrentUser = !reader.IsDBNull(6) && reader.GetBoolean(6)
-                });
-            }
-
-            return signoffs;
-        }
-
-        private async Task<int?> GetSystemUserIdByEmailAsync(SqlConnection connection, string? email)
-        {
-            if (string.IsNullOrWhiteSpace(email))
-                return null;
-
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 UserID FROM dbo.Users WHERE Email = @Email;";
-            command.Parameters.AddWithValue("@Email", email);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToInt32(value);
-        }
-
-        private async Task<string?> GetEngagementRoleAsync(SqlConnection connection, int clientId, int userId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT TOP 1 EngagementRole
-FROM dbo.UserClientAssignments
-WHERE ClientID = @ClientID
-  AND UserID = @UserID;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@UserID", userId);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToString(value);
-        }
-        private static async Task<bool> IsWorkspaceSavedAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT CASE
-    WHEN EXISTS (
-        SELECT 1
-        FROM dbo.ValidationRuns
-        WHERE RunID = @RunID
-          AND (
-                WorkspaceSavedAt IS NOT NULL
-                OR EXISTS (
-                    SELECT 1
-                    FROM dbo.ReviewSignoffs rs
-                    WHERE rs.RunID = ValidationRuns.RunID
-                      AND rs.SignoffRole = 'DataAnalyst'
-                )
-          )
-    ) THEN 1
-    ELSE 0
-END;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            return Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
-        }
-        private async Task<bool> HasSignoffRoleAsync(SqlConnection connection, int runId, string signoffRole)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT CASE WHEN EXISTS (
-    SELECT 1
-    FROM dbo.ReviewSignoffs
-    WHERE RunID = @RunID
-      AND SignoffRole = @SignoffRole
-) THEN 1 ELSE 0 END;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            command.Parameters.AddWithValue("@SignoffRole", signoffRole);
-            return Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
-        }
-
-        private async Task<string?> GetValidationRecordHashAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 RecordHash FROM dbo.ValidationRuns WHERE RunID = @RunID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToString(value);
-        }
-
-        private async Task<string?> GetLatestValidationHashAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-SELECT TOP 1 RecordHash
-FROM dbo.ValidationRuns
-WHERE ClientID = @ClientID
-  AND RuleNumber = @RuleNumber
-  AND RecordHash IS NOT NULL
-ORDER BY RunTimestamp DESC, RunID DESC;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToString(value);
-        }
-
-        private async Task EnsureClientNotArchivedAsync(SqlConnection connection, int clientId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 Status FROM dbo.Clients WHERE ClientID = @ClientID;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            var status = Convert.ToString(await command.ExecuteScalarAsync());
-            if (string.Equals(status, "Archived", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Archived engagements are read-only.");
-        }
-
-        private async Task<SqlConnection> OpenSystemConnectionAsync()
-        {
-            var server = _configuration["SystemDatabase:Server"] ?? @"(localdb)\MSSQLLocalDB";
-            var database = _configuration["SystemDatabase:Name"] ?? "HEMISBaseSystem";
-            var trust = _configuration.GetValue("SystemDatabase:TrustServerCertificate", true);
-
-            var builder = new SqlConnectionStringBuilder
-            {
-                DataSource = server,
-                InitialCatalog = database,
-                IntegratedSecurity = true,
-                TrustServerCertificate = trust,
-                Encrypt = false,
-                ConnectTimeout = 180
-            };
-
-            var connection = new SqlConnection(builder.ConnectionString);
-            await connection.OpenAsync();
-            return connection;
-        }
-
-        private static string BuildConnectionString(string server, string database, string driver) =>
-            $"Server={server};Database={database};Trusted_Connection=True;TrustServerCertificate=True;Encrypt=False;Connection Timeout=180;";
-
-        private static string Sanitise(string name) =>
-            name.Replace("]", "").Replace("[", "").Replace("'", "").Replace(";", "").Trim();
-
-        private static async Task<int> CountAsync(SqlConnection connection, string sql)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = sql;
-            return Convert.ToInt32(await command.ExecuteScalarAsync());
-        }
-
-        private static string ComputeHash(string input)
-        {
-            using var sha = SHA256.Create();
-            var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(input));
-            return Convert.ToHexString(bytes);
-        }
-
-        private static Rule15ValidationSummary? DeserializeSummary(string? json)
-        {
-            if (string.IsNullOrWhiteSpace(json))
-                return null;
-
-            try
-            {
-                var decoded = ValidationPayloadCodec.Decode(json);
-                return JsonConvert.DeserializeObject<Rule15ValidationSummary>(decoded);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static async Task<int?> GetClientIdForRunAsync(SqlConnection connection, int runId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 ClientID FROM dbo.ValidationRuns WHERE RunID = @RunID;";
-            command.Parameters.AddWithValue("@RunID", runId);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToInt32(value);
         }
 
         private static bool CanSignOffAsRole(string? role) =>
@@ -1670,70 +1107,83 @@ ORDER BY RunTimestamp DESC, RunID DESC;";
         private static void EnrichRule15DisplayValues(Rule15ValidationRowRecord row)
         {
             var values = row.DisplayValues;
-            var isPass        = string.Equals(ReadValue(values, "Validation_Result"), "PASS", StringComparison.OrdinalIgnoreCase);
+            var isPass = string.Equals(ReadValue(values, "Validation_Result"), "PASS", StringComparison.OrdinalIgnoreCase);
             var approvalStatus = ReadValue(values, "Approval_Status");
-            var qualCode       = FormatRule15ColumnValue(ReadValue(values, "Qualification_Code"));
-            var courseCode     = FormatRule15ColumnValue(ReadValue(values, "Course_Code"));
-            var firstStudent   = FormatRule15ColumnValue(ReadValue(values, "First_Student_Number"));
-            var cregMatch      = ReadValue(values, "CREG__MATCH");
-            var controlLabel   = ReadValue(values, "Control_Label");
-            var isQualFound    = !string.IsNullOrWhiteSpace(approvalStatus);
+            var qualCode = FormatRule15ColumnValue(ReadValue(values, "Qualification_Code"));
+            var courseCode = FormatRule15ColumnValue(ReadValue(values, "Course_Code"));
+            var firstStudent = FormatRule15ColumnValue(ReadValue(values, "First_Student_Number"));
+            var isQualFound = !string.IsNullOrWhiteSpace(approvalStatus);
 
             string qualCriteriaMessage, registrationMessage, validationExplanation, finalResultMessage;
             if (isPass)
             {
-                qualCriteriaMessage   = $"'{approvalStatus}': FOUND";
-                registrationMessage   = $"FOUND — QualCode='{qualCode}', CourseCode='{courseCode}', Student='{firstStudent}'.";
+                qualCriteriaMessage = $"'{approvalStatus}': FOUND";
+                registrationMessage = $"FOUND — QualCode='{qualCode}', CourseCode='{courseCode}', Student='{firstStudent}'.";
                 validationExplanation = $"QUAL Approval_Status='{approvalStatus}': FOUND | CREG: FOUND ('{qualCode}','{courseCode}') | Student: '{firstStudent}'";
-                finalResultMessage    = "Passed: CRED credential found in approved QUAL and matched in CREG.";
+                finalResultMessage = "Passed: CRED credential found in approved QUAL and matched in CREG.";
             }
             else if (!isQualFound)
             {
-                qualCriteriaMessage   = "NOT FOUND in approved QUAL";
-                registrationMessage   = "No CREG check — qual not approved.";
+                qualCriteriaMessage = "NOT FOUND in approved QUAL";
+                registrationMessage = "No CREG check — qual not approved.";
                 validationExplanation = $"QUAL approval: NOT FOUND — CRED Qualification_Code '{qualCode}' not in approved QUAL.";
-                finalResultMessage    = "Failed: CRED qualification not found in approved QUAL.";
+                finalResultMessage = "Failed: CRED qualification not found in approved QUAL.";
             }
             else
             {
-                qualCriteriaMessage   = $"'{approvalStatus}': FOUND";
-                registrationMessage   = $"NOT FOUND — no CREG match for QualCode='{qualCode}', CourseCode='{courseCode}'.";
-                validationExplanation = $"QUAL Approval_Status='{approvalStatus}': FOUND | CREG registration: NOT FOUND (no match for '{qualCode}'+'{courseCode}')";
-                finalResultMessage    = "Failed: CRED found in approved QUAL but NOT matched in CREG.";
+                qualCriteriaMessage = $"'{approvalStatus}': FOUND";
+                registrationMessage = $"NOT FOUND — no CREG match for QualCode='{qualCode}', CourseCode='{courseCode}'.";
+                validationExplanation = $"QUAL Approval_Status='{approvalStatus}': FOUND | CREG: NOT FOUND for ('{qualCode}','{courseCode}')";
+                finalResultMessage = "Failed: approved qualification found but no matching CREG registration.";
             }
 
             values["QUAL_CRITERIA_MESSAGE"] = qualCriteriaMessage;
-            values["FINAL_RULE_TEXT"]        = controlLabel;
+            values["REGISTRATION_MESSAGE"] = registrationMessage;
             values["Validation_Explanation"] = validationExplanation;
-            values["CREG_LINK_MESSAGE"]      = registrationMessage;
-            values["FINAL_RESULT_MESSAGE"]   = finalResultMessage;
-            row.ValidationExplanation        = validationExplanation;
+            values["FINAL_RESULT_MESSAGE"] = finalResultMessage;
+            row.ValidationExplanation = validationExplanation;
         }
 
         private static string FormatRule15ColumnValue(string? value) =>
             string.IsNullOrWhiteSpace(value) ? "[blank]" : value.Trim();
 
-        private static bool RequestsMatchForPendingSave(Rule15ValidationRequest current, Rule15ValidationRequest pending)
+        private static bool RequestsMatchForPendingSave(Rule15ValidationRequest current, Rule15ValidationRequest pending) =>
+            current.ClientId == pending.ClientId &&
+            string.Equals(current.StudTable?.Trim(), pending.StudTable?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(current.BridgeTable?.Trim(), pending.BridgeTable?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(current.CrseTable?.Trim(), pending.CrseTable?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(current.QualApprovedCol?.Trim(), pending.QualApprovedCol?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(current.QualApprovedVal?.Trim(), pending.QualApprovedVal?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(current.CredQualJoinCol?.Trim(), pending.CredQualJoinCol?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(current.CredCregJoinCol1?.Trim(), pending.CredCregJoinCol1?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(current.CredCregJoinCol2?.Trim(), pending.CredCregJoinCol2?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(current.CregStudentCol?.Trim(), pending.CregStudentCol?.Trim(), StringComparison.OrdinalIgnoreCase);
+
+        private static async Task<int> CountAsync(NpgsqlConnection connection, string sql)
         {
-            return current.ClientId == pending.ClientId &&
-                   string.Equals(current.Server?.Trim(), pending.Server?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.Database?.Trim(), pending.Database?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.Driver?.Trim(), pending.Driver?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.StudTable?.Trim(), pending.StudTable?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.BridgeTable?.Trim(), pending.BridgeTable?.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(current.CrseTable?.Trim(), pending.CrseTable?.Trim(), StringComparison.OrdinalIgnoreCase);
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            return Convert.ToInt32(await command.ExecuteScalarAsync());
         }
 
-        private static int GetInt(SqlDataReader reader, int ordinal) =>
+        private static int GetInt(System.Data.Common.DbDataReader reader, int ordinal) =>
             reader.IsDBNull(ordinal) ? 0 : Convert.ToInt32(reader.GetValue(ordinal));
 
         private static string ReadValue(IReadOnlyDictionary<string, string?> values, string key) =>
             values.TryGetValue(key, out var value) ? value ?? "" : "";
+
+        private static string EscapeSqlString(string? value) => (value ?? "").Replace("'", "''");
+
+        private static Rule15ValidationSummary? DeserializeSummary(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return null;
+            try
+            {
+                var decoded = ValidationPayloadCodec.Decode(json);
+                if (string.IsNullOrWhiteSpace(decoded)) return null;
+                return JsonConvert.DeserializeObject<Rule15ValidationSummary>(decoded);
+            }
+            catch { return null; }
+        }
     }
 }
-
-
-
-
-
-

@@ -48,31 +48,14 @@
         <div class="accordion-stack">
             <div class="accordion-item">
                 <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
-                    <span class="acc-icon">DB</span><span>Database Connection</span><span class="acc-chevron">v</span>
+                    <span class="acc-icon">DB</span><span>Engagement Dataset</span><span class="acc-chevron">v</span>
                 </button>
                 <div class="accordion-body" id="body-connection">
-                    <div class="form-grid">
-                        <div class="field-group">
-                            <label for="server">Server Name</label>
-                            <input id="server" type="text" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                        </div>
-                        <div class="field-group">
-                            <label for="driver">Driver</label>
-                            <select id="driver">
-                                <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                                <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                                <option value="SQL Server">SQL Server</option>
-                            </select>
-                        </div>
-                        <div class="field-group">
-                            <label for="database">Database</label>
-                            <select id="database"></select>
-                        </div>
+                    <div id="connectionOutput" class="status-output"><div class="alert alert--info">Select an engagement above to load its uploaded tables.</div></div>
+                    <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
+                        <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                        <button type="button" class="btn btn-primary" id="refreshTablesBtn">Refresh Tables</button>
                     </div>
-                    <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                        <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
-                    </div>
-                    <div id="connectionOutput" class="status-output"></div>
                 </div>
             </div>
 
@@ -83,25 +66,26 @@
                 <div class="accordion-body" id="body-config" style="display:none">
                     <div class="info-box info-box--red">
                         <strong>Audit Logic:</strong><br />
-                        <span>Step 1: Read the cancellation list rows using <code>STD_NO</code>, <code>QUAL</code>, <code>SUBJ</code>, <code>CANCEL</code>, and <code>CENSUS</code>.</span><br />
-                        <span>Step 2: FAIL any row where <code>CANCEL</code> equals the row <code>CENSUS</code> date.</span><br />
-                        <span>Step 3: FAIL any row where <code>CANCEL</code> also matches a <code>CURRENT_CENSUS</code> date in <code>CENSUS_LIST_CLIENT</code>.</span><br />
-                        <span>Step 4: PASS when the cancel date matches neither check.</span>
+                        <span>Population: distinct Cancellation List rows with a non-blank CANCEL date.</span><br />
+                        <span>FAIL when CANCEL equals the row's own CENSUS date.</span><br />
+                        <span>FAIL when CANCEL matches any CURRENT_CENSUS date in CENSUS_LIST_CLIENT.</span><br />
+                        <span>PASS when CANCEL matches neither comparison.</span>
                     </div>
                     <div class="form-grid">
                         <div class="field-group">
-                            <label for="cancellationTable">Cancellation Table</label>
-                            <select id="cancellationTable"></select>
+                            <label for="cancellationTable">Cancellation List Table</label>
+                            <select id="cancellationTable" onchange="loadCols('cancellation',this.value)"></select>
                         </div>
-                        <div class="field-group" style="display:flex;align-items:center;gap:8px;padding-top:20px">
-                            <input type="checkbox" id="useClientCensusTable" checked style="width:16px;height:16px;cursor:pointer" />
-                            <label for="useClientCensusTable" style="margin:0;cursor:pointer;font-weight:600">Use Client Census Table</label>
-                        </div>
-                    </div>
-                    <div id="clientCensusTableRow" class="form-grid" style="margin-top:8px">
                         <div class="field-group">
-                            <label for="clientTable">Client Census Table</label>
-                            <select id="clientTable"></select>
+                            <label for="clientTable">CENSUS_LIST_CLIENT Table</label>
+                            <select id="clientTable" onchange="loadCols('client',this.value)"></select>
+                        </div>
+                        <div class="field-group">
+                            <label for="useClientCensusTable">Compare Against CENSUS_LIST_CLIENT</label>
+                            <select id="useClientCensusTable" onchange="state.useClientCensusTable=(this.value==='true');markWorkspaceDirty();">
+                                <option value="true">Yes - include CURRENT_CENSUS comparison</option>
+                                <option value="false">No - cancellation-list-only check</option>
+                            </select>
                         </div>
                     </div>
                     <div id="configOutput" class="status-output"></div>
@@ -114,39 +98,37 @@
                 </button>
                 <div class="accordion-body" id="body-colmap" style="display:none">
                     <div class="alert alert--info" style="margin-bottom:12px">
-                        Map the cancellation list and client census columns Rule 65 uses. Defaults match the layout you described.
+                        Map your uploaded table's column names to the fields Rule 65 uses. Defaults match the standard HEMIS layout. Select tables above to auto-populate column lists.
                     </div>
-                    <div style="font-weight:700;font-size:13px;text-transform:uppercase;color:#555;margin-bottom:8px">Cancellation Table</div>
+                    <div style="font-weight:700;font-size:13px;text-transform:uppercase;color:#555;margin-bottom:8px">Cancellation List Table</div>
                     <div class="form-grid">
                         <div class="field-group">
-                            <label>Student Number</label>
-                            <select id="cm_studentNoCol"></select>
+                            <label>Student Number <small>(default <code>STD_NO</code>)</small></label>
+                            <select id="cm_studentNoCol"><option value="STD_NO">STD_NO</option></select>
                         </div>
                         <div class="field-group">
-                            <label>Qualification</label>
-                            <select id="cm_qualificationCol"></select>
+                            <label>Qualification <small>(default <code>QUAL</code>)</small></label>
+                            <select id="cm_qualificationCol"><option value="QUAL">QUAL</option></select>
                         </div>
                         <div class="field-group">
-                            <label>Subject</label>
-                            <select id="cm_subjectCol"></select>
+                            <label>Subject <small>(default <code>SUBJ</code>)</small></label>
+                            <select id="cm_subjectCol"><option value="SUBJ">SUBJ</option></select>
                         </div>
                         <div class="field-group">
-                            <label>Cancel Date</label>
-                            <select id="cm_cancelDateCol"></select>
+                            <label>Cancel Date <small>(default <code>CANCEL</code>)</small></label>
+                            <select id="cm_cancelDateCol"><option value="CANCEL">CANCEL</option></select>
                         </div>
                         <div class="field-group">
-                            <label>Census Date</label>
-                            <select id="cm_censusDateCol"></select>
+                            <label>Census Date <small>(default <code>CENSUS</code>)</small></label>
+                            <select id="cm_censusDateCol"><option value="CENSUS">CENSUS</option></select>
                         </div>
                     </div>
 
-                    <div id="colmap-census-section">
-                        <div style="font-weight:700;font-size:13px;text-transform:uppercase;color:#555;margin:14px 0 8px">Client Census Table</div>
-                        <div class="form-grid">
-                            <div class="field-group">
-                                <label>Current Census</label>
-                                <select id="cm_currentCensusCol"></select>
-                            </div>
+                    <div style="font-weight:700;font-size:13px;text-transform:uppercase;color:#555;margin:14px 0 8px">CENSUS_LIST_CLIENT Table</div>
+                    <div class="form-grid">
+                        <div class="field-group">
+                            <label>Current Census <small>(default <code>CURRENT_CENSUS</code>)</small></label>
+                            <select id="cm_currentCensusCol"><option value="CURRENT_CENSUS">CURRENT_CENSUS</option></select>
                         </div>
                     </div>
                 </div>
@@ -202,6 +184,7 @@
             <button type="button" class="btn btn-info" id="verifyBtn">Verify Tables</button>
             <button type="button" class="btn btn-success" id="runBtn">Run Rule 65</button>
             <button type="button" class="btn btn-primary" id="sqlBtn">Generate SQL</button>
+            <button type="button" class="btn btn-warning" id="downloadAllBtn" disabled>Download All</button>
         </div>
     }
 
@@ -220,7 +203,7 @@
             <textarea id="sqlText" rows="20" readonly style="width:100%;font-family:monospace;font-size:12px"></textarea>
         </div>
         <div class="tab-pane" data-tab-panel="downloads">
-            <div class="alert alert--info" style="margin-bottom:12px">Download the full validated result set. Excel and CSV include all flagged and clear rows, even when the exception count is zero. SQL includes the audit query used for Rule 65.</div>
+            <div class="alert alert--info" style="margin-bottom:12px">Download the full validated result set. Excel and CSV include both FLAGGED and CLEAR rows, even when the exception count is zero. SQL includes a reference query.</div>
             <div class="action-bar" style="justify-content:flex-start;margin:0">
                 <button type="button" class="btn btn-info" id="downloadExcelBtn">Excel</button>
                 <button type="button" class="btn btn-info" id="downloadCsvBtn">CSV</button>
@@ -259,6 +242,7 @@ window.toggleAccordion = function (section) {
         summary: null,
         sql: '',
         currentStatus: '',
+        useClientCensusTable: true,
         currentUserEngagementRole: '',
         currentUserHasSignedOff: false,
         isWorkspaceSaved: false,
@@ -268,23 +252,17 @@ window.toggleAccordion = function (section) {
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'),
-        driver: document.getElementById('driver'),
-        database: document.getElementById('database'),
+        datasetsLink: document.getElementById('datasetsLink'),
         cancellationTable: document.getElementById('cancellationTable'),
         clientTable: document.getElementById('clientTable'),
         useClientCensusTable: document.getElementById('useClientCensusTable'),
-        clientCensusTableRow: document.getElementById('clientCensusTableRow'),
-        colmapCensusSection: document.getElementById('colmap-census-section'),
-        connectBtn: document.getElementById('connectBtn'),
-        studentNoCol: document.getElementById('cm_studentNoCol'),
-        qualificationCol: document.getElementById('cm_qualificationCol'),
-        subjectCol: document.getElementById('cm_subjectCol'),
-        cancelDateCol: document.getElementById('cm_cancelDateCol'),
-        censusDateCol: document.getElementById('cm_censusDateCol'),
-        currentCensusCol: document.getElementById('cm_currentCensusCol'),
         connectionOutput: document.getElementById('connectionOutput'),
         configOutput: document.getElementById('configOutput'),
+        analysisPane: document.querySelector('[data-tab-panel="analysis"]'),
+        flaggedPane: document.querySelector('[data-tab-panel="flagged"]'),
+        clearPane: document.querySelector('[data-tab-panel="clear"]'),
+        sqlText: document.getElementById('sqlText'),
+        downloadAllBtn: document.getElementById('downloadAllBtn'),
         workspaceInfo: document.getElementById('workspaceInfo'),
         workspaceRunState: document.getElementById('workspaceRunState'),
         workspaceRunLabel: document.getElementById('workspaceRunLabel'),
@@ -296,32 +274,172 @@ window.toggleAccordion = function (section) {
         saveWorkspaceBtn: document.getElementById('saveWorkspaceBtn'),
         signoffBtn: document.getElementById('signoffBtn'),
         removeSignoffBtn: document.getElementById('removeSignoffBtn'),
-        analysisPane: document.querySelector('[data-tab-panel="analysis"]'),
-        flaggedPane: document.querySelector('[data-tab-panel="flagged"]'),
-        clearPane: document.querySelector('[data-tab-panel="clear"]'),
-        sqlText: document.getElementById('sqlText'),
         statusBadge: document.getElementById('statusBadge'),
         spinner: document.getElementById('spinner'),
-        spinnerMsg: document.getElementById('spinnerMsg')
+        spinnerMsg: document.getElementById('spinnerMsg'),
+        cm_studentNoCol: document.getElementById('cm_studentNoCol'),
+        cm_qualificationCol: document.getElementById('cm_qualificationCol'),
+        cm_subjectCol: document.getElementById('cm_subjectCol'),
+        cm_cancelDateCol: document.getElementById('cm_cancelDateCol'),
+        cm_censusDateCol: document.getElementById('cm_censusDateCol'),
+        cm_currentCensusCol: document.getElementById('cm_currentCensusCol')
     };
 
-    const tabButtons = document.querySelectorAll('.tab-btn[data-tab]');
+    const tabButtons = Array.from(document.querySelectorAll('.tab-btn'));
+    tabButtons.forEach(btn => btn.addEventListener('click', () => setActiveTab(btn.dataset.tab)));
 
     function setActiveTab(tab) {
-        tabButtons.forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-        document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tabPanel === tab));
+        tabButtons.forEach(button => button.classList.toggle('active', button.dataset.tab === tab));
+        document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.toggle('active', pane.dataset.tabPanel === tab));
     }
 
-    tabButtons.forEach(b => b.addEventListener('click', () => setActiveTab(b.dataset.tab)));
-
-    function setBusy(isBusy, message = 'Processing...') {
-        if (!els.spinner) return;
-        els.spinner.style.display = isBusy ? 'flex' : 'none';
-        if (els.spinnerMsg) els.spinnerMsg.textContent = message;
+    function esc(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
-    function showSpinner(message) { setBusy(true, message); }
-    function hideSpinner() { setBusy(false); }
+    function fmt(value) {
+        return Number(value || 0).toLocaleString();
+    }
+
+    function markWorkspaceDirty() { /* no-op hook kept for parity with other rule pages */ }
+
+    function populateSelect(selectEl, items, selected) {
+        if (!selectEl) return;
+        selectEl.innerHTML = '<option value="">Select table</option>';
+        (items || []).forEach(item => {
+            const option = document.createElement('option');
+            option.value = item;
+            option.textContent = item;
+            if (selected && selected === item) option.selected = true;
+            selectEl.appendChild(option);
+        });
+        if (selected && !(items || []).includes(selected)) {
+            const option = document.createElement('option');
+            option.value = selected; option.textContent = selected; option.selected = true;
+            selectEl.appendChild(option);
+        }
+    }
+
+    // Never invent an option for a column that doesn't actually exist in the uploaded table - if
+    // neither the backend's fuzzy match nor the hardcoded default is a real column, leave the
+    // field visibly blank so the analyst notices and picks the correct one.
+    function populateColumnSelect(selectEl, columns, selected, defaultValue) {
+        if (!selectEl) return;
+        const cols = columns || [];
+        const val = (selected && cols.includes(selected)) ? selected
+            : ((defaultValue && cols.includes(defaultValue)) ? defaultValue : '');
+        selectEl.innerHTML = '<option value="">Select column</option>';
+        cols.forEach(c => {
+            const option = document.createElement('option');
+            option.value = c;
+            option.textContent = c;
+            if (c === val) option.selected = true;
+            selectEl.appendChild(option);
+        });
+        if (!val) selectEl.value = '';
+    }
+
+    function getColumnMapping() {
+        return {
+            studentNoCol: els.cm_studentNoCol?.value || '',
+            qualificationCol: els.cm_qualificationCol?.value || '',
+            subjectCol: els.cm_subjectCol?.value || '',
+            cancelDateCol: els.cm_cancelDateCol?.value || '',
+            censusDateCol: els.cm_censusDateCol?.value || '',
+            currentCensusCol: els.cm_currentCensusCol?.value || ''
+        };
+    }
+
+    function restoreColumnMapping(mapping) {
+        if (!mapping) return;
+        const set = (el, value) => { if (el) el.value = value || ''; };
+        set(els.cm_studentNoCol, mapping.studentNoCol);
+        set(els.cm_qualificationCol, mapping.qualificationCol);
+        set(els.cm_subjectCol, mapping.subjectCol);
+        set(els.cm_cancelDateCol, mapping.cancelDateCol);
+        set(els.cm_censusDateCol, mapping.censusDateCol);
+        set(els.cm_currentCensusCol, mapping.currentCensusCol);
+    }
+
+    async function postJson(url, payload) {
+        return await window.fetchJsonWithProgress(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': token },
+            body: JSON.stringify(payload)
+        });
+    }
+
+    const colRoleMap = {
+        cancellation: [
+            [els.cm_studentNoCol,    'student_no',     'STD_NO'],
+            [els.cm_qualificationCol,'qualification',  'QUAL'],
+            [els.cm_subjectCol,      'subject',        'SUBJ'],
+            [els.cm_cancelDateCol,   'cancel_date',    'CANCEL'],
+            [els.cm_censusDateCol,   'census_date',    'CENSUS']
+        ],
+        client: [
+            [els.cm_currentCensusCol, 'current_census', 'CURRENT_CENSUS']
+        ]
+    };
+
+    async function loadCols(role, tableName) {
+        if (!tableName || !state.clientId) return;
+        let loadedAny = false;
+        for (const [selEl, tableRole, fallback] of (colRoleMap[role] || [])) {
+            if (!selEl) continue;
+            try {
+                const data = await postJson(`${apiBase}/GetColumns`, { clientId: state.clientId, tableName, tableRole });
+                if (!data?.success || !data.columns) continue;
+                populateColumnSelect(selEl, data.columns, data.autoSelected, fallback);
+                loadedAny = true;
+            } catch (e) { /* leave this field's dropdown as-is */ }
+        }
+        if (loadedAny) els.configOutput.innerHTML = `<div class="alert alert--success">Columns loaded for ${esc(tableName)}.</div>`;
+    }
+    window.loadCols = function (role, tbl) { loadCols(role, tbl); };
+
+    function getRequest() {
+        return {
+            clientId: state.clientId,
+            runId: state.currentRunId,
+            cancellationTable: els.cancellationTable?.value || '',
+            clientTable: els.clientTable?.value || '',
+            useClientCensusTable: state.useClientCensusTable,
+            columnMapping: getColumnMapping()
+        };
+    }
+
+    function findMissingMappedColumns(request) {
+        const required = [
+            ['studentNoCol', 'Student Number'], ['qualificationCol', 'Qualification'], ['subjectCol', 'Subject'],
+            ['cancelDateCol', 'Cancel Date'], ['censusDateCol', 'Census Date']
+        ];
+        if (request.useClientCensusTable) required.push(['currentCensusCol', 'Current Census']);
+        const mapping = request.columnMapping || {};
+        return required.filter(([key]) => !mapping[key]).map(([, label]) => label);
+    }
+
+    function setStatusBadge(status) {
+        if (!els.statusBadge) return;
+        if (!status) {
+            els.statusBadge.style.display = 'none';
+            return;
+        }
+        els.statusBadge.style.display = '';
+        els.statusBadge.textContent = status;
+        els.statusBadge.className = `rule-header__badge ${String(status).toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail'}`;
+    }
+
+    function setWorkspaceState(message, type) {
+        els.workspaceInfo.className = `alert alert--${type}`;
+        els.workspaceInfo.textContent = message;
+        window.showWorkspaceActionToast?.(message, type);
+    }
 
     function normalizeRole(value) {
         return String(value || '').replace(/[^a-z0-9]+/gi, '').toLowerCase();
@@ -339,11 +457,11 @@ window.toggleAccordion = function (section) {
         window.ruleWorkspaceUi?.setReadonlyShell('app', !canEdit || signed);
         window.ruleWorkspaceUi?.setFormSectionReadonly('.accordion-stack', !canEdit || signed);
         window.ruleWorkspaceUi?.applyStates([
-            { target: 'connectBtn',    disabled: !canEdit || signed },
-            { target: 'verifyBtn',     disabled: !canEdit || signed },
-            { target: 'runBtn',        disabled: !canEdit || signed },
-            { target: 'sqlBtn',        disabled: !canEdit || signed },
-            { target: els.beginEditBtn,    disabled: signed || !canEdit || !state.currentRunId },
+            { target: 'refreshTablesBtn', disabled: !canEdit || signed },
+            { target: 'verifyBtn', disabled: !canEdit || signed },
+            { target: 'runBtn', disabled: !canEdit || signed },
+            { target: 'sqlBtn', disabled: !canEdit || signed },
+            { target: els.beginEditBtn, disabled: signed || !canEdit || !state.currentRunId },
             { target: els.saveWorkspaceBtn, disabled: signed || !canEdit || !state.currentRunId || !state.summary },
             {
                 target: els.signoffBtn,
@@ -351,7 +469,8 @@ window.toggleAccordion = function (section) {
                 text: signed ? `Signed Off as ${role || currentSystemRole}` : 'Save Signoff'
             },
             { target: els.removeSignoffBtn, show: signed, display: '', disabled: !signed },
-            { target: els.workspaceSignoffComment, disabled: signed || !canSign }
+            { target: els.workspaceSignoffComment, disabled: signed || !canSign },
+            { target: els.downloadAllBtn, disabled: !state.summary }
         ]);
         window.ruleWorkspaceUi?.setButtonGroupReadonly(['.workspace-signoff-actions', '.action-bar'], signed, {
             allow: ['#downloadExcelBtn', '#downloadCsvBtn', '#downloadSqlBtn', '#removeSignoffBtn']
@@ -360,7 +479,7 @@ window.toggleAccordion = function (section) {
     }
 
     function applyWorkspaceAccessMode(canEditWorkspace) {
-        ['body-connection', 'body-config'].forEach(function(id) {
+        ['body-connection', 'body-config', 'body-colmap'].forEach(function(id) {
             var body = document.getElementById(id);
             if (!body) return;
             body.style.opacity = canEditWorkspace ? '' : '0.45';
@@ -371,192 +490,54 @@ window.toggleAccordion = function (section) {
         });
     }
 
-    function escapeHtml(value) {
-        return (value ?? '').toString()
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    function populateSelect(select, options, selectedValue) {
-        if (!select) return;
-        const current = selectedValue ?? select.value;
-        const unique = [...new Set((options || []).filter(Boolean))];
-        select.innerHTML = unique.map(option => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join('');
-        if (current && unique.includes(current)) select.value = current;
-        else if (unique.length > 0) select.value = unique[0];
-    }
-
-    function renderStatus(text, type = 'info') {
-        if (!els.statusBadge) return;
-        els.statusBadge.style.display = text ? '' : 'none';
-        els.statusBadge.textContent = text || '';
-        els.statusBadge.className = `rule-header__badge badge badge--${type}`;
-    }
-
-    function setOutput(element, message, type = 'info') {
-        if (!element) return;
-        element.className = `status-output alert alert--${type}`;
-        element.textContent = message;
-    }
-
-    function fmt(value) {
-        return Number(value || 0).toLocaleString('en-ZA').replace(/\s/g, ',');
-    }
-
-    async function postJson(url, payload) {
-        return await window.fetchJsonWithProgress(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'RequestVerificationToken': token
-            },
-            body: JSON.stringify(payload)
-        });
-    }
-
-    async function downloadBlob(url, payload, filename) {
-        await window.downloadFileWithProgress({
-            url,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'RequestVerificationToken': token
-            },
-            body: JSON.stringify(payload),
-            defaultFileName: filename,
-            label: 'Downloading result'
-        });
-    }
-
-    function getRequestPayload() {
-        return {
-            clientId: Number(els.clientId?.value || 0),
-            runId: state.currentRunId,
-            server: els.server?.value?.trim() || '',
-            database: els.database?.value || '',
-            driver: els.driver?.value || 'ODBC Driver 17 for SQL Server',
-            cancellationTable: els.cancellationTable?.value || '',
-            clientTable: els.clientTable?.value || '',
-            useClientCensusTable: els.useClientCensusTable?.checked ?? true,
-            columnMapping: {
-                studentNoCol: els.studentNoCol?.value || 'STD_NO',
-                qualificationCol: els.qualificationCol?.value || 'QUAL',
-                subjectCol: els.subjectCol?.value || 'SUBJ',
-                cancelDateCol: els.cancelDateCol?.value || 'CANCEL',
-                censusDateCol: els.censusDateCol?.value || 'CENSUS',
-                currentCensusCol: els.currentCensusCol?.value || 'CURRENT_CENSUS'
-            }
-        };
-    }
-
-    function updateWorkspaceCard(workspace, resultsVisible) {
-        state.currentRunId = workspace?.runId ?? workspace?.RunId ?? null;
-        state.currentStatus = workspace?.currentStatus ?? workspace?.CurrentStatus ?? '';
-        state.currentUserEngagementRole = workspace?.currentUserEngagementRole ?? workspace?.CurrentUserEngagementRole ?? '';
-        state.currentUserHasSignedOff = workspace?.currentUserHasSignedOff ?? workspace?.CurrentUserHasSignedOff ?? false;
-        state.isWorkspaceSaved = !!(workspace?.runId ?? workspace?.RunId);
-        state.hasDataAnalystSignoff = workspace?.hasDataAnalystSignoff ?? workspace?.HasDataAnalystSignoff ?? false;
-        state.resultsVisible = resultsVisible;
-
-        els.workspaceRunState.textContent = state.currentRunId ? `Run #${state.currentRunId}` : 'No saved run loaded';
-        els.workspaceRunLabel.textContent = state.currentRunId ? `Run #${state.currentRunId}` : 'No saved run yet';
-        els.workspaceStatusLabel.textContent = state.currentStatus || '-';
-        els.workspaceEditedLabel.textContent = workspace?.lastEditedAt || workspace?.LastEditedAt || '-';
-        els.workspaceRoleLabel.textContent = state.currentUserEngagementRole || currentSystemRole || '-';
-        els.workspaceSignoffComment.value = workspace?.currentUserSignoffComment || workspace?.CurrentUserSignoffComment || '';
-
-        if (!workspace) {
-            els.workspaceInfo.textContent = 'No saved Rule 65 workspace exists for this engagement yet.';
-            els.workspaceInfo.className = 'alert alert--info';
-            return;
-        }
-
-        if (!resultsVisible) {
-            els.workspaceInfo.textContent = 'A saved workspace exists, but the results remain locked until the assigned data analyst signs off.';
-            els.workspaceInfo.className = 'alert alert--warning';
-            return;
-        }
-
-        els.workspaceInfo.textContent = 'Saved Rule 65 workspace loaded.';
-        els.workspaceInfo.className = 'alert alert--success';
-    }
-
     function renderReviewRow(row) {
-        const esc = escapeHtml;
-        const result = String(row.validationResult ?? row.ValidationResult ?? '').toUpperCase();
+        const result = String(row.validationResult || '').toUpperCase();
         const badgeClass = result === 'PASS' ? 'badge--pass' : 'badge--fail';
-        const code = row.errorCode ?? row.ErrorCode ?? '';
         return `<tr>
-            <td>${esc(row.rowNumber ?? row.RowNumber ?? '')}</td>
-            <td><strong>${esc(row.studentNo ?? row.StudentNo ?? '')}</strong></td>
-            <td><code>${esc(row.qualification ?? row.Qualification ?? '-')}</code></td>
-            <td><code>${esc(row.subject ?? row.Subject ?? '-')}</code></td>
-            <td><code>${esc(row.cancelDate ?? row.CancelDate ?? '-')}</code></td>
-            <td><code>${esc(row.censusDate ?? row.CensusDate ?? '-')}</code></td>
-            <td><code>${esc(row.currentCensus ?? row.CurrentCensus ?? '-')}</code></td>
-            <td>${code ? `<span class="badge ${badgeClass}">${esc(code)}</span>` : '-'}</td>
-            <td style="text-align:center"><span class="badge ${badgeClass}">${esc(result || '-')}</span></td>
-            <td style="font-size:11px">${esc(row.validationExplanation ?? row.ValidationExplanation ?? '')}</td>
+            <td>${esc(row.rowNumber)}</td>
+            <td>${esc(row.studentNo)}</td>
+            <td>${esc(row.qualification)}</td>
+            <td>${esc(row.subject)}</td>
+            <td>${esc(row.cancelDate)}</td>
+            <td>${esc(row.censusDate)}</td>
+            <td>${esc(row.currentCensus || '-')}</td>
+            <td>${esc(row.errorCode || '-')}</td>
+            <td style="text-align:center"><span class="badge ${badgeClass}">${esc(row.validationResult)}</span></td>
+            <td style="font-size:11px;color:#E65100">${esc((row.exceptionCategory||'').replace(/_/g,' '))}</td>
+            <td style="font-size:11px">${esc(row.validationExplanation)}</td>
         </tr>`;
     }
 
     function reviewTableHtml(rows, emptyMessage) {
         if (!rows || !rows.length) {
-            return `<div class="empty-card"><p>${escapeHtml(emptyMessage)}</p></div>`;
+            return `<div class="empty-card"><p>${esc(emptyMessage)}</p></div>`;
         }
         return `<div style="overflow-x:auto"><table class="data-table" style="font-size:12px">
             <thead><tr>
-                <th>#</th><th>STD_NO</th><th>QUAL</th><th>SUBJ</th>
-                <th>CANCEL</th><th>CENSUS</th><th>CURRENT_CENSUS</th>
-                <th>Code</th><th>Result</th><th>Explanation</th>
+                <th>#</th>
+                <th>Student No</th>
+                <th>Qualification</th>
+                <th>Subject</th>
+                <th>Cancel Date</th>
+                <th>Census Date</th>
+                <th>Current Census</th>
+                <th>Error Code</th>
+                <th>Result</th>
+                <th>Exception Category</th>
+                <th>Explanation</th>
             </tr></thead>
             <tbody>${rows.map(renderReviewRow).join('')}</tbody>
         </table></div>`;
     }
 
-    function renderAnalysis(summary) {
-        if (!summary) {
-            els.analysisPane.innerHTML = '<div class="empty-card"><p>Run Rule 65 or load a saved workspace to view results.</p></div>';
-            return;
+    function renderExceptionCategories(summary) {
+        const categories = summary?.exceptionCategories || [];
+        if (!categories.length) {
+            return '';
         }
-        const statusClass = (summary.status ?? summary.Status ?? '') === 'PASS' ? 'badge--pass' : 'badge--fail';
-        const categories = summary.exceptionCategories ?? summary.ExceptionCategories ?? [];
-        const getCat = key => (categories.find(c => (c.category ?? c.Category ?? '').toUpperCase() === key) || {});
-        const cancelEqualsCensus = getCat('CANCEL_EQUALS_CENSUS').count ?? getCat('CANCEL_EQUALS_CENSUS').Count ?? 0;
-        const currentCensusMatch = getCat('CURRENT_CENSUS_MATCH').count ?? getCat('CURRENT_CENSUS_MATCH').Count ?? 0;
-        const bothMatches        = getCat('CANCEL_EQUALS_CENSUS_AND_CURRENT_CENSUS').count ?? getCat('CANCEL_EQUALS_CENSUS_AND_CURRENT_CENSUS').Count ?? 0;
-        const invalidCancel      = getCat('INVALID_CANCEL_DATE').count ?? getCat('INVALID_CANCEL_DATE').Count ?? 0;
-        const categoryRows = categories.map(c => `<tr style="background:#FFF8E1">
-            <td style="font-family:Consolas,monospace;font-size:12px;font-weight:700;color:#BF360C">${escapeHtml(c.category ?? c.Category ?? '')}</td>
-            <td style="font-size:13px">${escapeHtml(c.description ?? c.Description ?? '')}</td>
-            <td style="text-align:right;font-weight:700;font-size:14px;color:#BF360C">${fmt(c.count ?? c.Count ?? 0)}</td>
-        </tr>`).join('');
 
-        els.analysisPane.innerHTML = `
-            <div class="stats-grid" style="margin-bottom:20px">
-                <div class="stat-card"><div class="stat-card__label">Total Tested</div><div class="stat-card__value">${fmt(summary.totalCount ?? summary.TotalCount)}</div></div>
-                <div class="stat-card stat-card--pass"><div class="stat-card__label">Clear Rows</div><div class="stat-card__value">${fmt(summary.passCount ?? summary.PassCount)}</div></div>
-                <div class="stat-card stat-card--fail"><div class="stat-card__label">Flagged Rows</div><div class="stat-card__value">${fmt(summary.failCount ?? summary.FailCount)}</div></div>
-                <div class="stat-card stat-card--fail"><div class="stat-card__label">Cancel = Census</div><div class="stat-card__value">${fmt(cancelEqualsCensus)}</div></div>
-                <div class="stat-card stat-card--fail"><div class="stat-card__label">Cancel on Current Census</div><div class="stat-card__value">${fmt(currentCensusMatch)}</div></div>
-                <div class="stat-card stat-card--fail"><div class="stat-card__label">Matched Both Checks</div><div class="stat-card__value">${fmt(bothMatches)}</div></div>
-                <div class="stat-card stat-card--fail"><div class="stat-card__label">Invalid Cancel Date</div><div class="stat-card__value">${fmt(invalidCancel)}</div></div>
-                <div class="stat-card"><div class="stat-card__label">Exception Rate</div><div class="stat-card__value">${escapeHtml(String(summary.exceptionRate ?? summary.ExceptionRate ?? 0))}%</div></div>
-                <div class="stat-card"><div class="stat-card__label">Status</div><div class="stat-card__value"><span class="badge ${statusClass}">${escapeHtml(summary.status ?? summary.Status ?? '')}</span></div></div>
-            </div>
-            <div class="card" style="padding:20px">
-                <div class="form-grid" style="margin-bottom:${(summary.isPreviewOnly ?? summary.IsPreviewOnly) ? '12px' : '0'}">
-                    <div><div class="stat-label">Cancellation Table</div><div>${escapeHtml(summary.cancellationTable ?? summary.CancellationTable ?? '')}</div></div>
-                    <div><div class="stat-label">Client Census Table</div><div>${escapeHtml(summary.clientTable ?? summary.ClientTable ?? '')}</div></div>
-                    <div><div class="stat-label">Timestamp</div><div>${escapeHtml(summary.timestamp ?? summary.Timestamp ?? '')}</div></div>
-                    <div><div class="stat-label">Status</div><div><span class="badge ${statusClass}">${escapeHtml(summary.status ?? summary.Status ?? '')}</span></div></div>
-                </div>
-                ${(summary.isPreviewOnly ?? summary.IsPreviewOnly) ? `<div class="alert alert--warning" style="margin:0">Browser preview is limited to the first ${fmt(summary.previewLimit ?? summary.PreviewLimit)} exception rows and ${fmt(summary.previewLimit ?? summary.PreviewLimit)} clear rows. Download the result files for the full tested population.</div>` : ''}
-            </div>
-            ${categories.length ? `<div class="card" style="padding:20px;margin-top:16px;border-left:4px solid #F57C00">
+        return `
+            <div class="card" style="padding:20px;margin-top:20px;border-left:4px solid #F57C00">
                 <h3 class="section-title" style="margin-top:0;color:#E65100">Exception Category Breakdown</h3>
                 <table class="data-table" style="min-width:520px">
                     <thead><tr>
@@ -564,9 +545,48 @@ window.toggleAccordion = function (section) {
                         <th style="background:#F57C00;color:#fff">Description</th>
                         <th style="background:#F57C00;color:#fff;text-align:right">Count</th>
                     </tr></thead>
-                    <tbody>${categoryRows}</tbody>
+                    <tbody>
+                        ${categories.map(category => `<tr style="background:#FFF8E1">
+                            <td style="font-family:Consolas,monospace;font-size:12px;font-weight:700;color:#BF360C">${esc(category.category || '')}</td>
+                            <td style="font-size:13px">${esc(category.description || '')}</td>
+                            <td style="text-align:right;font-weight:700;font-size:14px;color:#BF360C">${fmt(category.count || 0)}</td>
+                        </tr>`).join('')}
+                    </tbody>
                 </table>
-            </div>` : ''}`;
+            </div>`;
+    }
+
+    function renderAnalysis(summary) {
+        if (!summary) {
+            els.analysisPane.innerHTML = '<div class="empty-card"><p>No Rule 65 results loaded.</p></div>';
+            return;
+        }
+        const statusClass = String(summary.status).toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail';
+        const mapping = summary.columnMapping || {};
+        const cats = summary.exceptionCategories || [];
+        const getCat = key => (cats.find(c => (c.category||'').toUpperCase() === key)||{}).count||0;
+        els.analysisPane.innerHTML = `
+            <div class="stats-grid" style="margin-bottom:20px">
+                <div class="stat-card"><div class="stat-card__label">Total Tested</div><div class="stat-card__value">${fmt(summary.totalCount)}</div></div>
+                <div class="stat-card stat-card--pass"><div class="stat-card__label">PASS</div><div class="stat-card__value">${fmt(summary.passCount)}</div></div>
+                <div class="stat-card stat-card--fail"><div class="stat-card__label">FAIL</div><div class="stat-card__value">${fmt(summary.failCount)}</div></div>
+                <div class="stat-card stat-card--fail"><div class="stat-card__label">Invalid Cancel Date</div><div class="stat-card__value">${fmt(getCat('INVALID_CANCEL_DATE'))}</div></div>
+                <div class="stat-card stat-card--fail"><div class="stat-card__label">Cancel Equals Census</div><div class="stat-card__value">${fmt(getCat('CANCEL_EQUALS_CENSUS'))}</div></div>
+                <div class="stat-card stat-card--fail"><div class="stat-card__label">Matches Current Census</div><div class="stat-card__value">${fmt(getCat('CURRENT_CENSUS_MATCH'))}</div></div>
+                <div class="stat-card"><div class="stat-card__label">Exception Rate</div><div class="stat-card__value">${esc(String(summary.exceptionRate))}%</div></div>
+                <div class="stat-card"><div class="stat-card__label">Status</div><div class="stat-card__value"><span class="badge ${statusClass}">${esc(summary.status)}</span></div></div>
+            </div>
+            <div class="card" style="padding:20px">
+                <div class="form-grid" style="margin-bottom:16px">
+                    <div><div class="stat-label">Tables</div><div>Cancellation List: ${esc(summary.cancellationTable)} | CENSUS_LIST_CLIENT: ${summary.useClientCensusTable ? esc(summary.clientTable) : '(not used)'}</div></div>
+                    <div><div class="stat-label">Columns</div><div>Student No: ${esc(mapping.studentNoCol || 'STD_NO')} | Qual: ${esc(mapping.qualificationCol || 'QUAL')} | Subject: ${esc(mapping.subjectCol || 'SUBJ')} | Cancel: ${esc(mapping.cancelDateCol || 'CANCEL')} | Census: ${esc(mapping.censusDateCol || 'CENSUS')} | Current Census: ${esc(mapping.currentCensusCol || 'CURRENT_CENSUS')}</div></div>
+                    <div><div class="stat-label">Timestamp</div><div>${esc(summary.timestamp)}</div></div>
+                    <div><div class="stat-label">Status</div><div><span class="badge ${statusClass}">${esc(summary.status)}</span></div></div>
+                </div>
+                ${summary.warning ? `<div class="alert alert--warning">${esc(summary.warning)}</div>` : ''}
+                ${summary.isPreviewOnly ? `<div class="alert alert--warning">Browser preview is limited to the first ${fmt(summary.previewLimit)} exception rows and ${fmt(summary.previewLimit)} clear rows. Download the result files for the full tested population.</div>` : ''}
+            </div>
+            ${renderExceptionCategories(summary)}`;
     }
 
     function renderFlagged(summary) {
@@ -574,13 +594,11 @@ window.toggleAccordion = function (section) {
             els.flaggedPane.innerHTML = '<div class="empty-card"><p>No Rule 65 results loaded.</p></div>';
             return;
         }
-        const rows = summary.failRows ?? summary.FailRows ?? [];
-        const total = summary.failCount ?? summary.FailCount ?? 0;
-        const previewOnly = summary.isPreviewOnly ?? summary.IsPreviewOnly;
+        const rows = summary.failRows || [];
         els.flaggedPane.innerHTML = `
             <div class="card" style="padding:16px;margin-bottom:12px">
-                <strong>FLAGGED Rows</strong> — ${fmt(total)} row(s) where CANCEL equals the row CENSUS date.
-                ${previewOnly ? `<span class="badge badge--neutral" style="margin-left:8px">Preview: first ${fmt(summary.previewLimit ?? summary.PreviewLimit)} rows shown</span>` : ''}
+                <strong>FLAGGED Rows</strong> - ${fmt(summary.failCount)} row(s) with an invalid CANCEL date, or where CANCEL matches the row CENSUS date or CURRENT_CENSUS.
+                ${summary.isPreviewOnly ? `<span class="badge badge--neutral">Preview limited to ${fmt(summary.previewLimit)} rows</span>` : ''}
             </div>
             ${reviewTableHtml(rows, 'No flagged rows were returned for this run.')}`;
     }
@@ -590,287 +608,342 @@ window.toggleAccordion = function (section) {
             els.clearPane.innerHTML = '<div class="empty-card"><p>No Rule 65 results loaded.</p></div>';
             return;
         }
-        const rows = summary.passRows ?? summary.PassRows ?? [];
-        const total = summary.passCount ?? summary.PassCount ?? 0;
+        const rows = summary.passRows || [];
         els.clearPane.innerHTML = `
             <div class="card" style="padding:16px;margin-bottom:12px">
-                <strong>CLEAR Rows</strong> — ${fmt(total)} row(s) where the cancellation date is valid and does not equal the row CENSUS date.
-                ${rows.length < total ? `<span class="badge badge--neutral" style="margin-left:8px">Sample of ${fmt(rows.length)} shown</span>` : ''}
+                <strong>CLEAR Rows</strong> - ${fmt(summary.passCount)} row(s) where CANCEL does not equal the row CENSUS date and does not appear in CURRENT_CENSUS.
+                ${rows.length < summary.passCount ? `<span class="badge badge--neutral">Sample of ${fmt(rows.length)} shown</span>` : ''}
             </div>
             ${reviewTableHtml(rows, 'No clear rows were returned for this run.')}`;
     }
 
-    function applySummary(summary) {
+    function applySummary(summary, options = {}) {
         state.summary = summary;
+        if (!options.fromWorkspace) state.currentRunId = summary?.savedRunId || state.currentRunId;
+        state.currentStatus = summary?.status || state.currentStatus;
+        state.resultsVisible = !!summary || state.resultsVisible;
         if (summary) {
-            state.currentRunId = summary.savedRunId ?? summary.SavedRunId ?? state.currentRunId;
-            state.currentStatus = summary.status ?? summary.Status ?? '';
+            state.useClientCensusTable = !!summary.useClientCensusTable;
+            if (els.useClientCensusTable) els.useClientCensusTable.value = state.useClientCensusTable ? 'true' : 'false';
             els.workspaceRunState.textContent = state.currentRunId ? `Run #${state.currentRunId} | ${state.currentStatus}` : 'No saved run loaded';
             els.workspaceRunLabel.textContent = state.currentRunId ? `Run #${state.currentRunId}` : 'No saved run yet';
             els.workspaceStatusLabel.textContent = state.currentStatus || '-';
         }
-        renderStatus(state.currentStatus, state.currentStatus === 'PASS' ? 'pass' : state.currentStatus ? 'fail' : 'info');
+        setStatusBadge(summary?.status || '');
         renderAnalysis(summary);
         renderFlagged(summary);
         renderClear(summary);
         updateWorkspaceButtons();
     }
 
-    async function loadColumnsForTable(tableName, type) {
-        if (!tableName || !els.server.value || !els.database.value) return;
+    function applyWorkspace(workspace, resultsVisible, preserveExisting = false) {
+        if (els.datasetsLink) els.datasetsLink.href = state.clientId ? '/EngagementDatasets?clientId=' + state.clientId : '#';
 
-        const result = await postJson(`${apiBase}/GetColumns`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
-            tableName
+        if (!workspace) {
+            state.currentRunId = null;
+            state.currentStatus = '';
+            state.currentUserEngagementRole = '';
+            state.currentUserHasSignedOff = false;
+            state.isWorkspaceSaved = false;
+            state.hasDataAnalystSignoff = false;
+            state.resultsVisible = false;
+            setWorkspaceState('No saved Rule 65 workspace exists for this engagement yet.', 'info');
+            els.workspaceRunState.textContent = 'No saved run loaded';
+            els.workspaceRunLabel.textContent = 'No saved run yet';
+            els.workspaceStatusLabel.textContent = '-';
+            els.workspaceEditedLabel.textContent = '-';
+            applySummary(null);
+            updateWorkspaceButtons();
+            if (state.clientId) loadTables().catch(() => {});
+            return;
+        }
+
+        state.clientId = workspace.clientId || state.clientId;
+        state.currentRunId = workspace.runId || null;
+        state.currentStatus = workspace.currentStatus || '';
+        state.useClientCensusTable = workspace.useClientCensusTable !== false;
+        state.currentUserEngagementRole = workspace.currentUserEngagementRole || currentSystemRole || '';
+        state.currentUserHasSignedOff = !!workspace.currentUserHasSignedOff;
+        state.isWorkspaceSaved = !!workspace.isWorkspaceSaved;
+        state.hasDataAnalystSignoff = !!workspace.hasDataAnalystSignoff;
+        state.resultsVisible = !!resultsVisible;
+
+        if (els.useClientCensusTable) els.useClientCensusTable.value = state.useClientCensusTable ? 'true' : 'false';
+        if (workspace.columnMapping) restoreColumnMapping(workspace.columnMapping);
+
+        els.workspaceRunState.textContent = workspace.runId ? `Run #${workspace.runId}` : 'No saved run loaded';
+        els.workspaceRunLabel.textContent = workspace.runId ? `Rule 65 Run #${workspace.runId}` : 'No saved run yet';
+        els.workspaceStatusLabel.textContent = workspace.currentStatus || '-';
+        els.workspaceEditedLabel.textContent = workspace.lastEditedAt ? new Date(workspace.lastEditedAt).toLocaleString() : '-';
+        els.workspaceRoleLabel.textContent = workspace.currentUserEngagementRole || currentSystemRole || '-';
+        els.workspaceSignoffComment.value = workspace.currentUserSignoffComment || '';
+
+        loadTables({
+            preferredCancellationTable: workspace.cancellationTable || '',
+            preferredClientTable: workspace.clientTable || ''
+        }).catch(() => {});
+
+        if (!resultsVisible) {
+            setWorkspaceState('Saved Rule 65 results are not available for your engagement role.', 'info');
+            if (!preserveExisting) applySummary(null);
+            else updateWorkspaceButtons();
+            return;
+        }
+
+        setWorkspaceState(workspace.summary ? 'Saved Rule 65 workspace loaded.' : 'Rule 65 workspace loaded. Run validation to generate results.', 'success');
+        if (workspace.summary) applySummary(workspace.summary, { fromWorkspace: true });
+        else if (!preserveExisting) applySummary(null);
+        else updateWorkspaceButtons();
+    }
+
+    async function downloadBlob(url, payload, fileName) {
+        await window.downloadFileWithProgress({
+            url,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': token },
+            body: JSON.stringify(payload),
+            defaultFileName: fileName,
+            label: 'Downloading result'
         });
-
-        const columns = result.columns ?? result.Columns ?? [];
-        if (type === 'cancellation') {
-            populateSelect(els.studentNoCol, columns, result.autoStudentNoCol ?? result.AutoStudentNoCol ?? 'STD_NO');
-            populateSelect(els.qualificationCol, columns, result.autoQualificationCol ?? result.AutoQualificationCol ?? 'QUAL');
-            populateSelect(els.subjectCol, columns, result.autoSubjectCol ?? result.AutoSubjectCol ?? 'SUBJ');
-            populateSelect(els.cancelDateCol, columns, result.autoCancelDateCol ?? result.AutoCancelDateCol ?? 'CANCEL');
-            populateSelect(els.censusDateCol, columns, result.autoCensusDateCol ?? result.AutoCensusDateCol ?? 'CENSUS');
-        } else {
-            populateSelect(els.currentCensusCol, columns, result.autoCurrentCensusCol ?? result.AutoCurrentCensusCol ?? 'CURRENT_CENSUS');
-        }
     }
 
-    async function connect() {
-        if (!els.server.value.trim()) {
-            setOutput(els.connectionOutput, 'Enter a server name first.', 'warning');
-            return;
+    function getSummaryDownloadPayload() {
+        if (state.currentRunId) {
+            return { savedRunId: state.currentRunId };
         }
 
-        setBusy(true, 'Loading databases...');
-        try {
-            const dbs = await postJson(`${apiBase}/GetDatabases`, { server: els.server.value.trim(), driver: els.driver.value });
-            populateSelect(els.database, dbs.databases ?? dbs.Databases ?? [], els.database.value);
-            setOutput(els.connectionOutput, 'Connected. Choose a database, then configure the tables.', 'success');
-
-            if (els.database.value) {
-                const tables = await postJson(`${apiBase}/GetTables`, { server: els.server.value.trim(), database: els.database.value, driver: els.driver.value });
-                const items = tables.tables ?? tables.Tables ?? [];
-                populateSelect(els.cancellationTable, items, tables.autoCancellationTable ?? tables.AutoCancellationTable);
-                populateSelect(els.clientTable, items, tables.autoClientTable ?? tables.AutoClientTable);
-                await loadColumnsForTable(els.cancellationTable.value, 'cancellation');
-                await loadColumnsForTable(els.clientTable.value, 'client');
-            }
-        } catch (error) {
-            setOutput(els.connectionOutput, error.message || 'Connection failed.', 'error');
-        } finally {
-            setBusy(false);
+        if (state.summary) {
+            return {
+                ...state.summary,
+                savedRunId: state.summary.savedRunId || state.currentRunId || null
+            };
         }
+
+        return null;
     }
 
-    async function loadWorkspaceState() {
+    function showSpinner(message) {
+        if (els.spinnerMsg) els.spinnerMsg.textContent = message;
+        if (els.spinner) els.spinner.style.display = 'flex';
+    }
+
+    function hideSpinner() {
+        if (els.spinner) els.spinner.style.display = 'none';
+    }
+
+    async function loadWorkspace() {
+        state.clientId = Number(els.clientId?.value || 0);
         if (!state.clientId) {
-            updateWorkspaceCard(null, false);
-            applySummary(null);
+            applyWorkspace(null, false);
             return;
         }
+        const data = await window.fetchJsonWithProgress(`${apiBase}/GetWorkspaceState?clientId=${state.clientId}`, { method: 'GET' });
+        if (!data.success) throw new Error(data.error || 'Failed to load workspace.');
+        applyWorkspace(data.workspace, data.resultsVisible);
+    }
 
+    async function loadTables(opts = {}) {
+        if (!state.clientId) return;
+        showSpinner('Loading tables...');
         try {
-            const data = await window.fetchJsonWithProgress(`${apiBase}/GetWorkspaceState?clientId=${state.clientId}`, { method: 'GET' });
-            if (!data.success || !data.hasWorkspace) {
-                updateWorkspaceCard(null, false);
-                applySummary(null);
-                return;
-            }
-
-            const workspace = data.workspace;
-            updateWorkspaceCard(workspace, data.resultsVisible);
-
-            if (workspace) {
-                els.server.value = workspace.server ?? workspace.Server ?? '';
-                els.database.innerHTML = (workspace.database ?? workspace.Database ?? '') ? `<option value="${escapeHtml(workspace.database ?? workspace.Database ?? '')}">${escapeHtml(workspace.database ?? workspace.Database ?? '')}</option>` : '';
-                els.driver.value = workspace.driver ?? workspace.Driver ?? 'ODBC Driver 17 for SQL Server';
-                els.cancellationTable.innerHTML = (workspace.cancellationTable ?? workspace.CancellationTable ?? '') ? `<option value="${escapeHtml(workspace.cancellationTable ?? workspace.CancellationTable ?? '')}">${escapeHtml(workspace.cancellationTable ?? workspace.CancellationTable ?? '')}</option>` : '';
-                els.clientTable.innerHTML = (workspace.clientTable ?? workspace.ClientTable ?? '') ? `<option value="${escapeHtml(workspace.clientTable ?? workspace.ClientTable ?? '')}">${escapeHtml(workspace.clientTable ?? workspace.ClientTable ?? '')}</option>` : '';
-                if (els.useClientCensusTable) {
-                    els.useClientCensusTable.checked = workspace.useClientCensusTable ?? workspace.UseClientCensusTable ?? true;
-                    updateCensusTableVisibility();
-                }
-
-                const mapping = workspace.columnMapping ?? workspace.ColumnMapping ?? {};
-                populateSelect(els.studentNoCol, [mapping.studentNoCol ?? mapping.StudentNoCol ?? 'STD_NO'], mapping.studentNoCol ?? mapping.StudentNoCol ?? 'STD_NO');
-                populateSelect(els.qualificationCol, [mapping.qualificationCol ?? mapping.QualificationCol ?? 'QUAL'], mapping.qualificationCol ?? mapping.QualificationCol ?? 'QUAL');
-                populateSelect(els.subjectCol, [mapping.subjectCol ?? mapping.SubjectCol ?? 'SUBJ'], mapping.subjectCol ?? mapping.SubjectCol ?? 'SUBJ');
-                populateSelect(els.cancelDateCol, [mapping.cancelDateCol ?? mapping.CancelDateCol ?? 'CANCEL'], mapping.cancelDateCol ?? mapping.CancelDateCol ?? 'CANCEL');
-                populateSelect(els.censusDateCol, [mapping.censusDateCol ?? mapping.CensusDateCol ?? 'CENSUS'], mapping.censusDateCol ?? mapping.CensusDateCol ?? 'CENSUS');
-                populateSelect(els.currentCensusCol, [mapping.currentCensusCol ?? mapping.CurrentCensusCol ?? 'CURRENT_CENSUS'], mapping.currentCensusCol ?? mapping.CurrentCensusCol ?? 'CURRENT_CENSUS');
-            }
-
-            applySummary(data.resultsVisible ? (workspace.summary ?? workspace.Summary ?? null) : null);
-        } catch (error) {
-            updateWorkspaceCard(null, false);
-            applySummary(null);
-            els.workspaceInfo.textContent = error.message || 'Failed to load workspace.';
-            els.workspaceInfo.className = 'alert alert--error';
-        }
+            const data = await postJson(`${apiBase}/GetTables`, { clientId: state.clientId });
+            if (!data.success) throw new Error(data.error || 'Could not load tables.');
+            populateSelect(els.cancellationTable, data.tables || [], opts.preferredCancellationTable || data.autoCancellationTable);
+            populateSelect(els.clientTable, data.tables || [], opts.preferredClientTable || data.autoClientTable);
+            els.connectionOutput.innerHTML = `<div class="alert alert--success">Loaded ${(data.tables || []).length} table(s) from this engagement's dataset.</div>`;
+            await Promise.all([
+                loadCols('cancellation', els.cancellationTable?.value),
+                loadCols('client', els.clientTable?.value)
+            ]);
+        } finally { hideSpinner(); }
     }
 
     async function verifyTables() {
-        setBusy(true, 'Verifying tables...');
+        showSpinner('Verifying tables...');
         try {
-            const payload = getRequestPayload();
-            const result = await postJson(`${apiBase}/VerifyTables`, payload);
-            const cancellationCount = result.cancellationCount ?? result.CancellationCount ?? 0;
-            const clientCount = result.clientCount ?? result.ClientCount ?? 0;
-            const censusLabel = payload.useClientCensusTable ? `Client census rows: ${clientCount}.` : 'Client census table: not used.';
-            setOutput(els.configOutput, `Verified. Cancellation rows: ${cancellationCount}. ${censusLabel}`, 'success');
-        } catch (error) {
-            setOutput(els.configOutput, error.message || 'Verification failed.', 'error');
+            const data = await postJson(`${apiBase}/VerifyTables`, getRequest());
+            if (!data.success) throw new Error(data.error || 'Verification failed.');
+            els.configOutput.innerHTML = `<div class="alert alert--success">
+                Cancellation List rows: <strong>${fmt(data.cancellationCount)}</strong> |
+                CENSUS_LIST_CLIENT rows: <strong>${fmt(data.clientCount)}</strong>
+            </div>`;
         } finally {
-            setBusy(false);
+            hideSpinner();
         }
     }
 
     async function runValidation() {
-        setBusy(true, 'Running Rule 65...');
+        const request = getRequest();
+        if (!request.clientId) {
+            setWorkspaceState('Select the approved engagement assigned to you before running.', 'warning');
+            return;
+        }
+        const missing = findMissingMappedColumns(request);
+        if (missing.length) {
+            setWorkspaceState(`Select a real column for: ${missing.join(', ')}. Auto-detect could not confidently match these to your uploaded data.`, 'warning');
+            return;
+        }
+        showSpinner('Running Rule 65...');
         try {
-            const result = await postJson(`${apiBase}/RunValidation`, getRequestPayload());
-            applySummary(result);
-            const flagged = result.failCount ?? result.FailCount ?? 0;
-            const status  = result.status ?? result.Status ?? '';
-            setOutput(els.configOutput, `Rule 65 completed. ${fmt(flagged)} flagged rows. Status: ${status}.`, flagged === 0 ? 'success' : 'warning');
-            await loadWorkspaceState();
-        } catch (error) {
-            setOutput(els.configOutput, error.message || 'Validation failed.', 'error');
+            const data = await postJson(`${apiBase}/RunValidation`, request);
+            if (!data.success) throw new Error(data.error || 'Rule 65 failed.');
+            state.currentUserHasSignedOff = false;
+            state.isWorkspaceSaved = false;
+            state.hasDataAnalystSignoff = false;
+            state.resultsVisible = true;
+            state.currentUserEngagementRole = state.currentUserEngagementRole || currentSystemRole || 'DataAnalyst';
+            applySummary(data);
+            setWorkspaceState(`Rule 65 completed. PASS: ${fmt(data.passCount)} | FAIL: ${fmt(data.failCount)}. Overall ${data.status}.`, 'success');
         } finally {
-            setBusy(false);
+            hideSpinner();
         }
     }
 
     async function generateSql() {
+        showSpinner('Generating SQL...');
         try {
-            const result = await postJson(`${apiBase}/GenerateSql`, getRequestPayload());
-            els.sqlText.value = result.sql ?? result.Sql ?? '';
+            const data = await postJson(`${apiBase}/GenerateSql`, getRequest());
+            if (!data.success) throw new Error(data.error || 'SQL generation failed.');
+            state.sql = data.sql || '';
+            els.sqlText.value = state.sql;
             setActiveTab('sql');
-        } catch (error) {
-            els.sqlText.value = error.message || 'SQL generation failed.';
+        } finally {
+            hideSpinner();
         }
     }
 
     async function saveWorkspace() {
-        setBusy(true, 'Saving workspace...');
+        showSpinner('Saving workspace...');
         try {
-            const result = await postJson(`${apiBase}/SaveWorkspace`, getRequestPayload());
-            state.currentRunId = result.workspace?.runId ?? result.workspace?.RunId ?? state.currentRunId;
-            await loadWorkspaceState();
-        } catch (error) {
-            els.workspaceInfo.textContent = error.message || 'Save workspace failed.';
-            els.workspaceInfo.className = 'alert alert--error';
+            const data = await postJson(`${apiBase}/SaveWorkspace`, getRequest());
+            if (!data.success) throw new Error(data.error || 'Workspace save failed.');
+            applyWorkspace(data.workspace, data.workspace?.resultsVisible ?? false, true);
+            setWorkspaceState(data.message || 'Workspace saved.', data.signoffsCleared ? 'warning' : 'success');
         } finally {
-            setBusy(false);
+            hideSpinner();
         }
     }
 
     async function beginEdit() {
-        if (!state.currentRunId) {
-            els.workspaceInfo.textContent = 'Select a saved run before editing.';
-            els.workspaceInfo.className = 'alert alert--warning';
-            return;
-        }
-
-        setBusy(true, 'Unlocking workspace...');
+        showSpinner('Preparing workspace edit...');
         try {
-            await postJson(`${apiBase}/BeginWorkspaceEdit`, getRequestPayload());
-            await loadWorkspaceState();
-        } catch (error) {
-            els.workspaceInfo.textContent = error.message || 'Begin edit failed.';
-            els.workspaceInfo.className = 'alert alert--error';
+            const data = await postJson(`${apiBase}/BeginWorkspaceEdit`, getRequest());
+            if (!data.success) throw new Error(data.error || 'Could not begin edit.');
+            applyWorkspace(data.workspace, data.workspace?.resultsVisible ?? false, true);
+            setWorkspaceState(data.message || 'Workspace ready for editing.', 'warning');
         } finally {
-            setBusy(false);
+            hideSpinner();
         }
     }
 
-    async function saveSignoff() {
-        if (!state.currentRunId || !state.clientId) return;
-
+    async function signoffWorkspace() {
+        showSpinner('Saving signoff...');
         try {
-            await postJson(`${apiBase}/SignOffWorkspace`, {
+            const data = await postJson(`${apiBase}/SignOffWorkspace`, {
                 clientId: state.clientId,
                 runId: state.currentRunId,
                 comment: els.workspaceSignoffComment.value || ''
             });
-            await loadWorkspaceState();
-        } catch (error) {
-            els.workspaceInfo.textContent = error.message || 'Signoff failed.';
-            els.workspaceInfo.className = 'alert alert--error';
+            if (!data.success) throw new Error(data.error || 'Signoff failed.');
+            state.currentUserHasSignedOff = true;
+            applyWorkspace(data.workspace, data.resultsVisible ?? false, true);
+            setWorkspaceState(data.message || 'Signoff saved.', 'success');
+        } finally {
+            hideSpinner();
         }
     }
 
     async function removeSignoff() {
-        if (!state.currentRunId || !state.clientId) return;
-
+        showSpinner('Removing signoff...');
         try {
-            await postJson(`${apiBase}/RemoveWorkspaceSignoff`, {
+            const data = await postJson(`${apiBase}/RemoveWorkspaceSignoff`, {
                 clientId: state.clientId,
                 runId: state.currentRunId,
                 comment: ''
             });
-            await loadWorkspaceState();
-        } catch (error) {
-            els.workspaceInfo.textContent = error.message || 'Remove signoff failed.';
-            els.workspaceInfo.className = 'alert alert--error';
+            if (!data.success) throw new Error(data.error || 'Signoff removal failed.');
+            state.currentUserHasSignedOff = false;
+            state.isWorkspaceSaved = false;
+            applyWorkspace(data.workspace, data.resultsVisible ?? false, false);
+            setWorkspaceState(data.message || 'Signoff removed.', 'warning');
+        } finally {
+            hideSpinner();
         }
     }
 
-    function updateCensusTableVisibility() {
-        const use = els.useClientCensusTable?.checked ?? true;
-        if (els.clientCensusTableRow) els.clientCensusTableRow.style.display = use ? '' : 'none';
-        if (els.colmapCensusSection) els.colmapCensusSection.style.display = use ? '' : 'none';
-    }
+    document.getElementById('refreshTablesBtn')?.addEventListener('click', () => loadTables().catch(error => {
+        hideSpinner();
+        els.connectionOutput.innerHTML = `<div class="alert alert--error">${esc(error.message)}</div>`;
+    }));
+    document.getElementById('verifyBtn')?.addEventListener('click', () => verifyTables().catch(error => {
+        hideSpinner();
+        els.configOutput.innerHTML = `<div class="alert alert--error">${esc(error.message)}</div>`;
+    }));
+    document.getElementById('runBtn')?.addEventListener('click', () => runValidation().catch(error => {
+        hideSpinner();
+        setWorkspaceState(error.message, 'error');
+    }));
+    document.getElementById('sqlBtn')?.addEventListener('click', () => generateSql().catch(error => {
+        hideSpinner();
+        els.sqlText.value = error.message;
+    }));
+    document.getElementById('saveWorkspaceBtn')?.addEventListener('click', () => saveWorkspace().catch(error => {
+        hideSpinner();
+        setWorkspaceState(error.message, 'error');
+    }));
+    document.getElementById('beginEditBtn')?.addEventListener('click', () => beginEdit().catch(error => {
+        hideSpinner();
+        setWorkspaceState(error.message, 'error');
+    }));
+    document.getElementById('signoffBtn')?.addEventListener('click', () => signoffWorkspace().catch(error => {
+        hideSpinner();
+        setWorkspaceState(error.message, 'error');
+    }));
+    document.getElementById('removeSignoffBtn')?.addEventListener('click', () => removeSignoff().catch(error => {
+        hideSpinner();
+        setWorkspaceState(error.message, 'error');
+    }));
 
-    els.useClientCensusTable?.addEventListener('change', updateCensusTableVisibility);
-    updateCensusTableVisibility();
-
-    els.clientId?.addEventListener('change', async () => {
-        state.clientId = Number(els.clientId.value || 0);
-        await loadWorkspaceState();
-    });
-    els.connectBtn?.addEventListener('click', connect);
-    els.database?.addEventListener('change', async () => {
-        if (!els.server.value.trim() || !els.database.value) return;
-        try {
-            const tables = await postJson(`${apiBase}/GetTables`, { server: els.server.value.trim(), database: els.database.value, driver: els.driver.value });
-            const items = tables.tables ?? tables.Tables ?? [];
-            populateSelect(els.cancellationTable, items, tables.autoCancellationTable ?? tables.AutoCancellationTable);
-            populateSelect(els.clientTable, items, tables.autoClientTable ?? tables.AutoClientTable);
-            await loadColumnsForTable(els.cancellationTable.value, 'cancellation');
-            await loadColumnsForTable(els.clientTable.value, 'client');
-        } catch (e) {
-            setOutput(els.connectionOutput, e.message || 'Failed to load tables.', 'error');
+    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => {
+        const payload = getSummaryDownloadPayload();
+        if (!payload) {
+            setWorkspaceState('Run Rule 65 first before downloading Excel results.', 'warning');
+            return;
         }
+
+        downloadBlob(`${apiBase}/DownloadExcel`, payload, 'Rule65_Cancellation_Census_Date_Validation.xlsx')
+            .catch(error => setWorkspaceState(error.message, 'error'));
     });
-    els.cancellationTable?.addEventListener('change', () => loadColumnsForTable(els.cancellationTable.value, 'cancellation'));
-    els.clientTable?.addEventListener('change', () => loadColumnsForTable(els.clientTable.value, 'client'));
-    document.getElementById('verifyBtn')?.addEventListener('click', verifyTables);
-    document.getElementById('runBtn')?.addEventListener('click', runValidation);
-    document.getElementById('sqlBtn')?.addEventListener('click', generateSql);
-    document.getElementById('saveWorkspaceBtn')?.addEventListener('click', saveWorkspace);
-    document.getElementById('beginEditBtn')?.addEventListener('click', beginEdit);
-    document.getElementById('signoffBtn')?.addEventListener('click', saveSignoff);
-    document.getElementById('removeSignoffBtn')?.addEventListener('click', removeSignoff);
-    document.getElementById('downloadExcelBtn')?.addEventListener('click', async () => {
-        if (!state.summary) return;
-        try { await downloadBlob(`${apiBase}/DownloadExcel`, state.summary, 'Rule65_Cancellation_Census_Date_Validation.xlsx'); }
-        catch (e) { alert(e.message || 'Excel download failed.'); }
+    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => {
+        const payload = getSummaryDownloadPayload();
+        if (!payload) {
+            setWorkspaceState('Run Rule 65 first before downloading CSV results.', 'warning');
+            return;
+        }
+
+        downloadBlob(`${apiBase}/DownloadCsv`, payload, 'Rule65_Cancellation_Census_Date_Validation.csv')
+            .catch(error => setWorkspaceState(error.message, 'error'));
     });
-    document.getElementById('downloadCsvBtn')?.addEventListener('click', async () => {
-        if (!state.summary) return;
-        try { await downloadBlob(`${apiBase}/DownloadCsv`, state.summary, 'Rule65_Cancellation_Census_Date_Validation.csv'); }
-        catch (e) { alert(e.message || 'CSV download failed.'); }
-    });
-    document.getElementById('downloadSqlBtn')?.addEventListener('click', async () => {
-        try { await downloadBlob(`${apiBase}/DownloadSql`, getRequestPayload(), 'Rule65_Cancellation_Census_Date_Validation.sql'); }
-        catch (e) { alert(e.message || 'SQL download failed.'); }
+    document.getElementById('downloadSqlBtn')?.addEventListener('click', () =>
+        downloadBlob(`${apiBase}/DownloadSql`, getRequest(), 'Rule65_Cancellation_Census_Date_Validation.sql').catch(error => setWorkspaceState(error.message, 'error')));
+    document.getElementById('downloadAllBtn')?.addEventListener('click', async () => {
+        if (!state.currentRunId) { setWorkspaceState('Save the workspace before downloading.', 'warning'); return; }
+        const id = state.currentRunId;
+        const dl = (url, filename) => window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
+        await dl(`${apiBase}/DownloadSavedExcel?runId=${id}`, `Rule65_Run_${id}.xlsx`);
+        await dl(`${apiBase}/DownloadSavedCsv?runId=${id}`, `Rule65_Run_${id}.csv`);
+        await dl(`${apiBase}/DownloadSavedSql?runId=${id}`, `Rule65_Run_${id}.sql`);
     });
 
-    applySummary(null);
-    if (state.clientId > 0) loadWorkspaceState();
+    els.clientId?.addEventListener('change', () => loadWorkspace().catch(error => setWorkspaceState(error.message, 'error')));
+    els.useClientCensusTable?.addEventListener('change', () => { state.useClientCensusTable = els.useClientCensusTable.value === 'true'; });
+
+    renderAnalysis(null);
+    renderFlagged(null);
+    renderClear(null);
+    updateWorkspaceButtons();
+
+    if (state.clientId) loadWorkspace().catch(error => setWorkspaceState(error.message, 'error'));
+    else if (isResultsOnlyRole) setWorkspaceState('Select an engagement to load the saved Rule 65 results.', 'info');
 })();
 </script>

@@ -4,8 +4,9 @@ namespace HemisAudit.ViewModels
 {
     // ═══════════════════════════════════════════════════════════════════════════
     // RULE 55 – GRADUATE W-CODE VALIDATION
-    // Tables: dbo_STUD (_007, _001, _025) + dbo_QUAL (_001, _003, _005, _004)
+    // Tables: dbo_STUD (_007, _001, _025) + dbo_QUAL (_001, _003, _005, _004) + optional PQM
     // Checks: STUD._025 = configurable filter value → QUAL row found AND QUAL._004 = configurable approval value
+    //         (optionally) QUAL name+type must also match a PQM row
     // DHET §1.5: Element 025='W' graduates treated identically to 'F'
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -13,22 +14,20 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
         // STUD table
-        public string StudTable { get; set; } = "";
-        public string StudIdCol { get; set; } = "";
-        public string StudQualCodeCol { get; set; } = "";
-        public string StudFulfilledCol { get; set; } = "";
+        public string StudTable { get; set; } = "dbo_STUD";
+        public string StudIdCol { get; set; } = "_007";
+        public string StudQualCodeCol { get; set; } = "_001";
+        public string StudFulfilledCol { get; set; } = "_025";
         public string StudFulfilledFilterValue { get; set; } = "W";
         // QUAL table
-        public string QualTable { get; set; } = "";
-        public string QualCodeCol { get; set; } = "";
-        public string QualNameCol { get; set; } = "";
-        public string QualTypeCol { get; set; } = "";
-        public string QualApprovalCol { get; set; } = "";
+        public string QualTable { get; set; } = "dbo_QUAL";
+        public string QualCodeCol { get; set; } = "_001";
+        public string QualNameCol { get; set; } = "_003";
+        public string QualTypeCol { get; set; } = "_005";
+        public string QualApprovalCol { get; set; } = "_004";
         public string QualApprovalFilterValue { get; set; } = "A";
+        // PQM table (optional)
         public string PqmTable { get; set; } = "";
         public string PqmQualNameColumn { get; set; } = "";
         public string PqmQualTypeColumn { get; set; } = "";
@@ -77,17 +76,16 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string StudTable { get; set; } = "";
-        public string QualTable { get; set; } = "";
-        public string StudIdCol { get; set; } = "";
-        public string StudQualCodeCol { get; set; } = "";
-        public string StudFulfilledCol { get; set; } = "";
+        public string StudTable { get; set; } = "dbo_STUD";
+        public string QualTable { get; set; } = "dbo_QUAL";
+        public string StudIdCol { get; set; } = "_007";
+        public string StudQualCodeCol { get; set; } = "_001";
+        public string StudFulfilledCol { get; set; } = "_025";
         public string StudFulfilledFilterValue { get; set; } = "W";
-        public string QualCodeCol { get; set; } = "";
-        public string QualNameCol { get; set; } = "";
-        public string QualTypeCol { get; set; } = "";
-        public string QualApprovalCol { get; set; } = "";
+        public string QualCodeCol { get; set; } = "_001";
+        public string QualNameCol { get; set; } = "_003";
+        public string QualTypeCol { get; set; } = "_005";
+        public string QualApprovalCol { get; set; } = "_004";
         public string QualApprovalFilterValue { get; set; } = "A";
         public string PqmTable { get; set; } = "";
         public string PqmQualNameColumn { get; set; } = "";
@@ -96,24 +94,8 @@ namespace HemisAudit.ViewModels
         public int? SavedRunId { get; set; }
         public List<Rule55ValidationRow> ValidationRows { get; set; } = new();
         public List<Rule55ExceptionRecord> Exceptions { get; set; } = new();
+        public string? Warning { get; set; }
         public string? Error { get; set; }
-    }
-
-    public class Rule55VerifyRequest
-    {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
-        public string StudTable { get; set; } = "";
-        public string QualTable { get; set; } = "";
-        public string StudQualCodeCol { get; set; } = "";
-        public string QualCodeCol { get; set; } = "";
-        public string StudFulfilledCol { get; set; } = "";
-        public string StudFulfilledFilterValue { get; set; } = "W";
-        public string QualApprovalFilterValue { get; set; } = "A";
-        public string PqmTable { get; set; } = "";
-        public string PqmQualNameColumn { get; set; } = "";
-        public string PqmQualTypeColumn { get; set; } = "";
     }
 
     public class Rule55VerifyResult
@@ -139,11 +121,17 @@ namespace HemisAudit.ViewModels
 
     public class Rule55GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public string TableRole { get; set; } = "";
+    }
+
+    public class Rule55ColumnDiscoveryResult
+    {
+        public bool Success { get; set; }
+        public List<string> Columns { get; set; } = new();
+        public string? AutoSelected { get; set; }
+        public string? Error { get; set; }
     }
 
     public class Rule55WorkspaceStateViewModel
@@ -151,19 +139,16 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string StudTable { get; set; } = "";
-        public string QualTable { get; set; } = "";
-        public string StudIdCol { get; set; } = "";
-        public string StudQualCodeCol { get; set; } = "";
-        public string StudFulfilledCol { get; set; } = "";
+        public string StudTable { get; set; } = "dbo_STUD";
+        public string QualTable { get; set; } = "dbo_QUAL";
+        public string StudIdCol { get; set; } = "_007";
+        public string StudQualCodeCol { get; set; } = "_001";
+        public string StudFulfilledCol { get; set; } = "_025";
         public string StudFulfilledFilterValue { get; set; } = "W";
-        public string QualCodeCol { get; set; } = "";
-        public string QualNameCol { get; set; } = "";
-        public string QualTypeCol { get; set; } = "";
-        public string QualApprovalCol { get; set; } = "";
+        public string QualCodeCol { get; set; } = "_001";
+        public string QualNameCol { get; set; } = "_003";
+        public string QualTypeCol { get; set; } = "_005";
+        public string QualApprovalCol { get; set; } = "_004";
         public string QualApprovalFilterValue { get; set; } = "A";
         public string PqmTable { get; set; } = "";
         public string PqmQualNameColumn { get; set; } = "";
@@ -196,7 +181,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule55ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -224,5 +208,3 @@ namespace HemisAudit.ViewModels
         public string Comment { get; set; } = "";
     }
 }
-
-

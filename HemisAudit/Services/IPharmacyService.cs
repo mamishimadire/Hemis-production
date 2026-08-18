@@ -4,20 +4,18 @@ namespace HemisAudit.Services
 {
     public interface IPharmacyService
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<PharmacyTableDiscoveryResult> GetTablesAsync(string server, string database, string driver);
-        Task<ColumnListResult> GetColumnsAsync(string server, string database, string driver, string tableName);
+        Task<PharmacyTableDiscoveryResult> GetTablesAsync(int clientId);
+        Task<PharmacyColumnDiscoveryResult> GetColumnsAsync(int clientId, string tableName, string tableRole);
         Task<PharmacyVerifyResult> VerifyTablesAsync(PharmacyVerifyRequest request);
         Task<PharmacyValidationSummary> RunValidationAsync(PharmacyValidationRequest request, string? userEmail = null, string? userName = null);
-        Task<string> GenerateSqlAsync(PharmacyValidationRequest request);
-        Task<PharmacyWorkspaceState?> GetCurrentWorkspaceStateAsync(int clientId, string? userEmail = null);
-        Task<bool> SaveWorkspaceStateAsync(int clientId, PharmacyValidationRequest config, string? userEmail = null);
-
-        // Signoff
-        Task AddOrUpdateSignoffAsync(int runId, string email, string comment);
-        Task RemoveSignoffAsync(int runId, string email);
-
-        // Full export
-        Task<PharmacyValidationSummary?> GetFullSummaryByRunIdAsync(int runId);
+        string GenerateSql(PharmacyValidationRequest request);
+        Task<int?> GetClientIdForRunAsync(int runId);
+        Task<PharmacyValidationSummary?> GetStoredSummaryAsync(int runId);
+        Task<PharmacyWorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null);
+        Task<PharmacyRunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null);
+        Task<PharmacyWorkspaceSaveResult> SaveWorkspaceAsync(PharmacyValidationRequest request, string reviewerEmail, string? reviewerName = null);
+        Task<PharmacyWorkspaceSaveResult> BeginWorkspaceEditAsync(int runId, string reviewerEmail, string? reviewerName = null);
+        Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment);
+        Task RemoveSignoffAsync(int runId, string reviewerEmail);
     }
 }

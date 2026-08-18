@@ -13,9 +13,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string StudTable { get; set; } = "dbo_STUD";
         public string CregTable { get; set; } = "dbo_CREG";
         public string ProdTable { get; set; } = "dbo_STUD_PRODUCTION";
@@ -52,7 +49,6 @@ namespace HemisAudit.ViewModels
         public int? SavedRunId { get; set; }
         public int ClientId { get; set; }
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string StudTable { get; set; } = "dbo_STUD";
         public string CregTable { get; set; } = "dbo_CREG";
         public string ProdTable { get; set; } = "dbo_STUD_PRODUCTION";
@@ -68,17 +64,6 @@ namespace HemisAudit.ViewModels
         public List<Rule64ReviewRow> PassRows { get; set; } = new();
         public List<Rule64ReviewRow> FailRows { get; set; } = new();
         public List<Rule64ExceptionCategoryViewModel> ExceptionCategories { get; set; } = new();
-    }
-
-    public class Rule64VerifyRequest
-    {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string StudTable { get; set; } = "dbo_STUD";
-        public string CregTable { get; set; } = "dbo_CREG";
-        public string ProdTable { get; set; } = "dbo_STUD_PRODUCTION";
-        public Rule64ColumnMapping ColumnMapping { get; set; } = new();
     }
 
     public class Rule64VerifyResult
@@ -104,7 +89,15 @@ namespace HemisAudit.ViewModels
     {
         public bool Success { get; set; }
         public List<string> Columns { get; set; } = new();
+        public string? AutoSelected { get; set; }
         public string? Error { get; set; }
+    }
+
+    public class Rule64GetColumnsRequest
+    {
+        public int ClientId { get; set; }
+        public string TableName { get; set; } = "";
+        public string TableRole { get; set; } = "";
     }
 
     public class Rule64WorkspaceSaveResult
@@ -122,9 +115,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string StudTable { get; set; } = "dbo_STUD";
         public string CregTable { get; set; } = "dbo_CREG";
         public string ProdTable { get; set; } = "dbo_STUD_PRODUCTION";
@@ -147,7 +137,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string? GeneratedSql { get; set; }
         public Rule64ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -172,13 +161,5 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public string Comment { get; set; } = "";
-    }
-
-    public class Rule64GetColumnsRequest
-    {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string TableName { get; set; } = "";
     }
 }

@@ -4,10 +4,9 @@ namespace HemisAudit.Services
 {
     public interface IRule11Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<Rule11TableListResult> GetTablesAsync(string server, string database, string driver);
-        Task<ColumnListResult> GetColumnsAsync(string server, string database, string driver, string tableName, string tableRole);
-        Task<Rule11FilterValueResult> GetFilterValuesAsync(string server, string database, string driver, string qualTable, string approvalColumn);
+        Task<Rule11TableListResult> GetTablesAsync(int clientId);
+        Task<ColumnListResult> GetColumnsAsync(int clientId, string tableName, string tableRole);
+        Task<Rule11FilterValueResult> GetFilterValuesAsync(int clientId, string qualTable, string approvalColumn);
         Task<Rule11VerifyResult> VerifyDataAsync(Rule11VerifyRequest request);
         Task<Rule11ValidationSummary> RunValidationAsync(Rule11ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<int?> GetClientIdForRunAsync(int runId);

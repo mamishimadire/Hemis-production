@@ -47,30 +47,16 @@
             <div class="accordion-item">
                 <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
                     <span class="acc-icon">DB</span>
-                    <span>Database Connection</span>
+                    <span>Engagement Dataset</span>
                     <span class="acc-chevron">v</span>
                 </button>
                 <div class="accordion-body" id="body-connection">
-                    <div class="form-grid">
-                        <div class="field-group">
-                            <label for="server">Server Name</label>
-                            <input id="server" type="text" placeholder="e.g. MYSERVER or MYSERVER\INSTANCE" />
-                        </div>
-                        <div class="field-group">
-                            <label for="driver">Driver</label>
-                            <select id="driver">
-                                <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                                <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                                <option value="SQL Server">SQL Server</option>
-                            </select>
-                        </div>
-                        <div class="field-group">
-                            <label for="database">Database</label>
-                            <select id="database"></select>
-                        </div>
+                    <div class="alert alert--info" id="datasetStatusAlert">
+                        Select an engagement above to load its uploaded tables.
                     </div>
                     <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                        <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
+                        <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                        <button type="button" class="btn btn-primary" id="connectBtn">Refresh Tables</button>
                     </div>
                     <div id="connectionOutput" class="status-output"></div>
                 </div>
@@ -356,9 +342,8 @@ window.toggleAccordion = function (section) {
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'),
-        driver: document.getElementById('driver'),
-        database: document.getElementById('database'),
+        datasetStatusAlert: document.getElementById('datasetStatusAlert'),
+        datasetsLink: document.getElementById('datasetsLink'),
         studTable: document.getElementById('studTable'),
         qualTable: document.getElementById('qualTable'),
         cregTable: document.getElementById('cregTable'),
@@ -721,12 +706,10 @@ window.toggleAccordion = function (section) {
     }
 
     async function loadColumnsForTable(tableName, selectGroups) {
-        if (!tableName || !els.server?.value?.trim() || !els.database?.value) return;
+        if (!tableName || !state.clientId) return;
         try {
             const data = await postJson(`${apiBasePath}/GetColumns`, {
-                server: els.server.value.trim(),
-                database: els.database.value,
-                driver: els.driver?.value || 'ODBC Driver 17 for SQL Server',
+                clientId: state.clientId,
                 tableName
             });
             if (!data || !data.success || !Array.isArray(data.columns)) return;
@@ -775,9 +758,6 @@ window.toggleAccordion = function (section) {
         return {
             clientId: Number(els.clientId?.value || state.clientId || 0),
             runId: state.currentRunId,
-            server: els.server?.value?.trim() || '',
-            database: els.database?.value || '',
-            driver: els.driver?.value || 'ODBC Driver 17 for SQL Server',
             studTable: els.studTable?.value || '',
             qualTable: els.qualTable?.value || defaultQualTable,
             cregTable: els.cregTable?.value || '',
@@ -841,7 +821,6 @@ window.toggleAccordion = function (section) {
             </div>
             <div class="card" style="padding:20px">
                 <div class="form-grid" style="margin-bottom:16px">
-                    <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Database</div><div>${escapeHtml(summary.database)}</div></div>
                     <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Tables</div><div>STUD: ${escapeHtml(summary.studTable)} | CRED: ${escapeHtml(summary.cregTable)} | CRSE: ${escapeHtml(summary.crseTable)}</div></div>
                     <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Status</div><div><span class="badge ${String(summary.status).toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail'}">${escapeHtml(summary.status)}</span></div></div>
                     <div><div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Rule Scope</div><div>${escapeHtml(summary.governingPartCodesText || 'All Students')}</div></div>
@@ -1100,15 +1079,18 @@ window.toggleAccordion = function (section) {
         state.isWorkspaceSaved = !!workspace.isWorkspaceSaved;
         state.hasDataAnalystSignoff = !!workspace.hasDataAnalystSignoff;
         state.resultsVisible = !!resultsVisible;
-        if (els.server) els.server.value = workspace.server || '';
-        if (els.driver) els.driver.value = workspace.driver || 'ODBC Driver 17 for SQL Server';
-        if (els.database) populateSelect(els.database, workspace.database ? [workspace.database] : [], workspace.database);
+        if (els.datasetsLink) els.datasetsLink.href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
         if (els.studTable) populateSelect(els.studTable, workspace.studTable ? [workspace.studTable] : [], workspace.studTable);
         if (els.qualTable) els.qualTable.value = workspace.qualTable || defaultQualTable;
         if (els.cregTable) populateSelect(els.cregTable, workspace.cregTable ? [workspace.cregTable] : [], workspace.cregTable);
         if (els.crseTable) populateSelect(els.crseTable, workspace.crseTable ? [workspace.crseTable] : [], workspace.crseTable);
         if (els.pgTypesText) els.pgTypesText.value = workspace.pgTypesText || defaultPgTypesText;
         if (workspace.columnMapping) restoreColumnMapping(workspace.columnMapping);
+        loadTables({ silent: true }).then(() => {
+            if (els.studTable) populateSelect(els.studTable, workspace.studTable ? [workspace.studTable] : [], workspace.studTable);
+            if (els.cregTable) populateSelect(els.cregTable, workspace.cregTable ? [workspace.cregTable] : [], workspace.cregTable);
+            if (els.crseTable) populateSelect(els.crseTable, workspace.crseTable ? [workspace.crseTable] : [], workspace.crseTable);
+        }).catch(() => { /* best-effort background refresh */ });
         els.workspaceRunState.textContent = workspace.runId ? `Run #${workspace.runId}` : 'No saved run loaded';
         els.workspaceRunLabel.textContent = workspace.runId ? `Rule 20 Run #${workspace.runId}` : 'No saved run yet';
         els.workspaceStatusLabel.textContent = workspace.currentStatus || '-';
@@ -1151,36 +1133,29 @@ window.toggleAccordion = function (section) {
         applyWorkspace(data.workspace, data.resultsVisible);
     }
 
-    async function connect() {
-        const server = els.server?.value?.trim();
-        if (!server) throw new Error('Enter the SQL Server name first.');
-
-        showSpinner('Loading databases...');
-        try {
-            const data = await postJson(`${apiBasePath}/GetDatabases`, { server, driver: els.driver.value });
-            if (!data.success) throw new Error(data.error || 'Failed to load databases.');
-            populateSelect(els.database, data.databases || []);
-            els.connectionOutput.innerHTML = `<div class="alert alert--success">Loaded ${(data.databases || []).length} database(s).</div>`;
-            if ((data.databases || []).length) await loadTables();
-        } finally {
-            hideSpinner();
+    async function loadTables(options = {}) {
+        if (!state.clientId) return;
+        const data = await postJson(`${apiBasePath}/GetTables`, { clientId: state.clientId });
+        if (!data.success) {
+            if (!options.silent && els.datasetStatusAlert) {
+                els.datasetStatusAlert.className = 'alert alert--error';
+                els.datasetStatusAlert.textContent = data.error || 'Failed to load tables.';
+            }
+            throw new Error(data.error || 'Failed to load tables.');
         }
-    }
-
-    async function loadTables() {
-        if (!els.database?.value) return;
-        const data = await postJson(`${apiBasePath}/GetTables`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value
-        });
-        if (!data.success) throw new Error(data.error || 'Failed to load tables.');
 
         populateSelect(els.studTable, data.tables || [], data.autoStudTable);
         if (els.qualTable) els.qualTable.value = data.autoQualTable || defaultQualTable;
         populateSelect(els.cregTable, data.tables || [], data.autoCregTable);
         populateSelect(els.crseTable, data.tables || [], data.autoCrseTable);
-        els.configOutput.innerHTML = `<div class="alert alert--success">Loaded ${(data.tables || []).length} table(s).</div>`;
+
+        if (!options.silent) {
+            if (els.datasetStatusAlert) {
+                els.datasetStatusAlert.className = 'alert alert--success';
+                els.datasetStatusAlert.textContent = `Loaded ${(data.tables || []).length} table(s) from this engagement's dataset.`;
+            }
+            els.configOutput.innerHTML = `<div class="alert alert--success">Loaded ${(data.tables || []).length} table(s).</div>`;
+        }
 
         await Promise.all([
             loadColumnsForTable(els.studTable?.value, getStudColumnGroups()),
@@ -1314,12 +1289,9 @@ window.toggleAccordion = function (section) {
         }
     }
 
-    document.getElementById('connectBtn')?.addEventListener('click', () => connect().catch(err => {
+    document.getElementById('connectBtn')?.addEventListener('click', () => loadTables().catch(err => {
         hideSpinner();
         els.connectionOutput.innerHTML = `<div class="alert alert--error">${escapeHtml(err.message)}</div>`;
-    }));
-    els.database?.addEventListener('change', () => loadTables().catch(err => {
-        els.configOutput.innerHTML = `<div class="alert alert--error">${escapeHtml(err.message)}</div>`;
     }));
     els.studTable?.addEventListener('change', () => loadColumnsForTable(els.studTable?.value, getStudColumnGroups()).catch(() => {}));
     els.qualTable?.addEventListener('change', () => loadColumnsForTable(els.qualTable?.value, getQualColumnGroups()).catch(() => {}));
@@ -1334,10 +1306,10 @@ window.toggleAccordion = function (section) {
         setWorkspaceState(err.message, 'error');
     }));
     document.getElementById('sqlBtn')?.addEventListener('click', () => generateSql().catch(err => {
-    document.getElementById('rScriptBtn')?.addEventListener('click', () => generateRScript().catch(err => setWorkspaceState(err.message, 'error')));
         hideSpinner();
         els.sqlText.value = err.message;
     }));
+    document.getElementById('rScriptBtn')?.addEventListener('click', () => generateRScript().catch(err => setWorkspaceState(err.message, 'error')));
     document.getElementById('saveWorkspaceBtn')?.addEventListener('click', () => saveWorkspace().catch(err => {
         hideSpinner();
         setWorkspaceState(err.message, 'error');

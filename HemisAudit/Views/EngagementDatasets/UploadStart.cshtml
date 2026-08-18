@@ -1,0 +1,58 @@
+@{
+    ViewData["Title"] = "Upload a file";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+    int clientId = ViewBag.ClientId;
+    var database = ViewBag.Database as HemisAudit.Services.EngagementDatabaseInfo;
+}
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">❌ @TempData["Error"]</div>
+}
+
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+    <div>
+        <h1>Import flat file</h1>
+        <p>Upload data into <strong>@database?.DatabaseName</strong> — step 1 of 3.</p>
+    </div>
+    <a asp-action="Index" asp-route-clientId="@clientId" class="btn btn-secondary">← Back</a>
+</div>
+
+<div style="display:grid;grid-template-columns:260px 1fr;gap:24px;align-items:start">
+    <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:20px;">
+        <div style="font-weight:700;margin-bottom:16px;color:var(--brand)">Import steps</div>
+        <ol style="padding-left:18px;margin:0;list-style:decimal;">
+            <li style="margin-bottom:12px;font-weight:700;color:var(--text)">Specify input file</li>
+            <li style="margin-bottom:12px;color:var(--text-muted)">Preview data</li>
+            <li style="margin-bottom:0;color:var(--text-muted)">Modify columns</li>
+        </ol>
+    </div>
+
+    <div class="card" style="padding:24px;">
+        <h2 style="margin-top:0;margin-bottom:14px">Specify Input File</h2>
+        <p style="color:var(--text-muted);margin-bottom:24px">Choose the data file to import and provide the target table name. The system will create a new table in this engagement's schema.</p>
+
+        <form asp-action="UploadStage" asp-route-clientId="@clientId" method="post" enctype="multipart/form-data">
+            @Html.AntiForgeryToken()
+            <div class="field-group" style="margin-bottom:18px">
+                <label>Input file</label>
+                <input type="file" name="file" accept=".csv,.xlsx" required />
+            </div>
+
+            <div class="field-group" style="margin-bottom:18px">
+                <label>New table name</label>
+                <input type="text" name="tableName" placeholder="Biokinetic" />
+            </div>
+
+            <div class="field-group" style="margin-bottom:24px">
+                <label>Table schema</label>
+                <input type="text" value="dbo" readonly style="background:#f6f7fb;cursor:not-allowed;" />
+            </div>
+
+            <div style="display:flex;justify-content:flex-end;gap:12px;flex-wrap:wrap;">
+                <a asp-action="Index" asp-route-clientId="@clientId" class="btn btn-secondary">Previous</a>
+                <button type="submit" class="btn btn-success">Next: Preview data →</button>
+            </div>
+        </form>
+    </div>
+</div>

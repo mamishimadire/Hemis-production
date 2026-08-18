@@ -53,8 +53,8 @@
         <div>
             <h1 class="rule-header__title">HEMIS RULE 41: Student ASCII Agreement</h1>
             <p class="rule-header__sub">
-                Full outer reconciliation — <code>dbo_STUD</code> vs <code>MT-Audit-prod-std</code> (Audit system).
-                Join key: <code>_007</code> (STUD) &harr; <code>IAGSTNO</code> (Audit).
+                Full outer reconciliation - <code>dbo_STUD</code> vs <code>ASCII</code>.
+                Join key: <code>_007</code> (STUD) &harr; <code>_007</code> (ASCII).
             </p>
         </div>
         <div class="rule-header__badge" id="r41StatusBadge" style="display:none"></div>
@@ -65,29 +65,15 @@
     <div class="accordion-stack">
         <div class="accordion-item">
             <button class="accordion-toggle" type="button" onclick="toggleAccordion('r41-conn')">
-                <span class="acc-icon">DB</span><span>Database Connection</span><span class="acc-chevron">v</span>
+                <span class="acc-icon">DB</span><span>Engagement Dataset</span><span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-r41-conn">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label for="r41Server">Server Name</label>
-                        <input id="r41Server" type="text" placeholder="SERVER\INSTANCE or (localdb)\MSSQLLocalDB" />
-                    </div>
-                    <div class="field-group">
-                        <label for="r41Driver">Driver</label>
-                        <select id="r41Driver">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group">
-                        <label for="r41Db">Database</label>
-                        <select id="r41Db" onchange="r41LoadTables()"></select>
-                    </div>
+                <div class="alert alert--info" id="r41DatasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
-                <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
-                    <button type="button" class="btn btn-primary" onclick="r41Connect()">Connect</button>
+                <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
+                    <a class="btn btn-secondary" id="r41DatasetsLink" href="#">Manage Datasets</a>
+                    <button type="button" class="btn btn-primary" onclick="r41LoadTables()">Refresh Tables</button>
                 </div>
                 <div id="r41ConnOut" class="status-output"></div>
             </div>
@@ -99,15 +85,15 @@
             </button>
             <div class="accordion-body" id="body-r41-tables" style="display:none">
                 <div class="info-box info-box--red" style="margin-bottom:12px">
-                    Tables auto-detected on connect. STUD uses <code>_007</code> and Audit uses <code>IAGSTNO</code> as the student number join key.
+                    Tables auto-detected on connect. STUD uses <code>_007</code> and ASCII (H16) uses <code>_007</code> as the student number join key.
                 </div>
                 <div class="form-grid">
                     <div class="field-group">
-                        <label>STUD Table (HEMIS ASCII)</label>
+                        <label>STUD Table (STUD)</label>
                         <select id="r41StudTable" onchange="r41LoadCols('stud',this.value)"></select>
                     </div>
                     <div class="field-group">
-                        <label>Audit Table (MT-Audit-prod-std)</label>
+                        <label>ASCII (H16)</label>
                         <select id="r41AuditTable" onchange="r41LoadCols('audit',this.value)"></select>
                     </div>
                     <div class="field-group">
@@ -115,8 +101,16 @@
                         <select id="r41StudKey"></select>
                     </div>
                     <div class="field-group">
-                        <label>Audit join key</label>
+                        <label>ASCII join key</label>
                         <select id="r41AuditKey"></select>
+                    </div>
+                    <div class="field-group">
+                        <label>STUD secondary join key <small>(optional &mdash; set this when a student number repeats, e.g. one row per qualification)</small></label>
+                        <select id="r41StudKey2"><option value="">None</option></select>
+                    </div>
+                    <div class="field-group">
+                        <label>ASCII secondary join key <small>(optional)</small></label>
+                        <select id="r41AuditKey2"><option value="">None</option></select>
                     </div>
                 </div>
                 <div id="r41TableOut" class="status-output"></div>
@@ -249,9 +243,9 @@ window.r41Tab = function(tab) {
     var TOKEN = (document.querySelector('#r41AntiForgery input[name="__RequestVerificationToken"]') || {}).value || '';
 
     var DEF_PAIRS = [
-        { studCol: '_007', auditCol: 'IAGSTNO', label: 'Student No' },
-        { studCol: '_008', auditCol: 'IADIDNO', label: 'Birth Date' },
-        { studCol: '_001', auditCol: 'IAGQUAL', label: 'Qualification' }
+        { studCol: '_007', h16Col: 'IAGSTNO', label: 'Student No' },
+        { studCol: '_008', h16Col: 'IADIDNO', label: 'Birth Date' },
+        { studCol: '_001', h16Col: 'IAGQUAL', label: 'Qualification' }
     ];
 
     var st = {
@@ -310,7 +304,7 @@ window.r41Tab = function(tab) {
             row.innerHTML = '<span style="color:#888;font-size:.8rem">#' + (i + 1) + '</span>' +
                 '<input type="text" placeholder="STUD col" value="' + esc(p.studCol) + '" oninput="r41PairSet(' + i + ',\'studCol\',this.value)">' +
                 '<span style="color:#999">&harr;</span>' +
-                '<input type="text" placeholder="Audit col" value="' + esc(p.auditCol) + '" oninput="r41PairSet(' + i + ',\'auditCol\',this.value)">' +
+                '<input type="text" placeholder="Audit col" value="' + esc(p.h16Col) + '" oninput="r41PairSet(' + i + ',\'h16Col\',this.value)">' +
                 '<input type="text" placeholder="Label" value="' + esc(p.label) + '" oninput="r41PairSet(' + i + ',\'label\',this.value)" style="max-width:130px">' +
                 '<button class="r41-pair-del" onclick="r41RemovePair(' + i + ')">&#x2715;</button>';
             box.appendChild(row);
@@ -319,52 +313,57 @@ window.r41Tab = function(tab) {
 
     window.r41PairSet = function(i, key, val) { if (st.pairs[i]) st.pairs[i][key] = val; };
     window.r41RemovePair = function(i) { st.pairs.splice(i, 1); renderPairs(); };
-    window.r41AddPair = function() { st.pairs.push({ studCol: '', auditCol: '', label: '' }); renderPairs(); };
+    window.r41AddPair = function() { st.pairs.push({ studCol: '', h16Col: '', label: '' }); renderPairs(); };
 
-    /* ── Connection ── */
-    window.r41Connect = function() {
-        var server = gv('r41Server').trim();
-        if (!server) { setWs('Enter a server name first.', 'warning'); return; }
-        spin('Connecting to server...');
-        post(API + '/GetDatabases', { server: server, driver: gv('r41Driver') })
-        .then(function(d) {
-            unspin();
-            if (!d.success) { setStatus('r41ConnOut', d.error || 'Connection failed.', 'error'); return; }
-            fillSel('r41Db', d.databases || []);
-            setStatus('r41ConnOut', 'Connected — ' + (d.databases || []).length + ' database(s) found.', 'success');
-            if ((d.databases || []).length) r41LoadTables();
-        }).catch(function(e) { unspin(); setStatus('r41ConnOut', e.message, 'error'); });
-    };
-
-    window.r41LoadTables = function() {
-        var db = gv('r41Db'); if (!db) return;
+    /* -- Table Loading (this engagement's uploaded datasets) -- */
+    window.r41LoadTables = function(options) {
+        options = options || {};
+        if (!st.clientId) return Promise.resolve(null);
         spin('Loading tables...');
-        post(API + '/GetTables', { server: gv('r41Server').trim(), database: db, driver: gv('r41Driver') })
+        return post(API + '/GetTables', { clientId: st.clientId })
         .then(function(d) {
             unspin();
-            if (!d.success) { setStatus('r41TableOut', d.error || 'Failed to load tables.', 'error'); return; }
+            if (!d.success) {
+                setStatus('r41TableOut', d.error || 'Failed to load tables.', 'error');
+                var alertEl = g('r41DatasetStatusAlert');
+                if (alertEl) { alertEl.className = 'alert alert--error'; alertEl.textContent = d.error || 'Failed to load tables.'; }
+                return null;
+            }
             var tables = d.tables || [];
-            fillSel('r41StudTable',  tables, d.autoStudTable  || 'dbo_STUD');
-            fillSel('r41AuditTable', tables, d.autoAuditTable || 'MT-Audit-prod-std');
+            fillSel('r41StudTable',  tables, options.preferredStudTable  || d.autoStudTable  || 'dbo_STUD');
+            fillSel('r41AuditTable', tables, options.preferredAuditTable || d.autoH16Table || 'MT-Audit-prod-std');
             show('body-r41-tables', true); show('body-r41-colmap', true);
-            setStatus('r41TableOut', 'Loaded ' + tables.length + ' tables — STUD and Audit auto-detected.', 'success');
-            st.pairs = DEF_PAIRS.slice();
+            if (!options.silent) setStatus('r41TableOut', 'Loaded ' + tables.length + ' tables. STUD and Audit auto-detected.', 'success');
+            var alertEl2 = g('r41DatasetStatusAlert');
+            if (alertEl2) { alertEl2.className = 'alert alert--success'; alertEl2.textContent = 'Loaded ' + tables.length + " table(s) from this engagement's dataset."; }
+            if (!options.preservePairs) st.pairs = DEF_PAIRS.slice();
             return Promise.all([
-                r41LoadColsInner('stud',  gv('r41StudTable')),
-                r41LoadColsInner('audit', gv('r41AuditTable'))
+                r41LoadColsInner('stud',  gv('r41StudTable'), options.preferredStudKey, options.preferredStudKey2),
+                r41LoadColsInner('audit', gv('r41AuditTable'), options.preferredAuditKey, options.preferredAuditKey2)
             ]);
-        }).then(function() { renderPairs(); })
-        .catch(function(e) { unspin(); setStatus('r41TableOut', e.message, 'error'); });
+        }).then(function() { renderPairs(); return true; })
+        .catch(function(e) { unspin(); setStatus('r41TableOut', e.message, 'error'); return null; });
     };
 
-    function r41LoadColsInner(role, tableName) {
-        if (!tableName || !gv('r41Server') || !gv('r41Db')) return Promise.resolve();
-        return post(API + '/GetColumns', { server: gv('r41Server').trim(), database: gv('r41Db'), driver: gv('r41Driver'), tableName: tableName })
+    function fillSecondaryKeySel(id, cols, preferred) {
+        var sel = g(id); if (!sel) return;
+        sel.innerHTML = '<option value="">None</option>';
+        (cols || []).forEach(function(c) {
+            var o = document.createElement('option');
+            o.value = o.textContent = c;
+            if (preferred && preferred === c) o.selected = true;
+            sel.appendChild(o);
+        });
+    }
+
+    function r41LoadColsInner(role, tableName, preferredKey, preferredKey2) {
+        if (!tableName || !st.clientId) return Promise.resolve();
+        return post(API + '/GetColumns', { clientId: st.clientId, tableName: tableName })
         .then(function(d) {
             if (!d.success) return;
             var cols = d.columns || [];
-            if (role === 'stud')  { st.studCols  = cols; fillSel('r41StudKey',  cols, d.autoKey || '_007'); }
-            if (role === 'audit') { st.auditCols = cols; fillSel('r41AuditKey', cols, d.autoKey || 'IAGSTNO'); }
+            if (role === 'stud')  { st.studCols  = cols; fillSel('r41StudKey',  cols, preferredKey || d.autoKey || '_007'); fillSecondaryKeySel('r41StudKey2', cols, preferredKey2); }
+            if (role === 'audit') { st.auditCols = cols; fillSel('r41AuditKey', cols, preferredKey || d.autoKey || 'IAGSTNO'); fillSecondaryKeySel('r41AuditKey2', cols, preferredKey2); }
         });
     }
 
@@ -373,25 +372,26 @@ window.r41Tab = function(tab) {
     window.r41Verify = function() {
         spin('Verifying tables...');
         post(API + '/VerifyTables', {
-            server: gv('r41Server').trim(), database: gv('r41Db'), driver: gv('r41Driver'),
-            studTable: gv('r41StudTable'), auditTable: gv('r41AuditTable'),
-            studKey: gv('r41StudKey') || '_007', auditKey: gv('r41AuditKey') || 'IAGSTNO'
+            clientId: st.clientId,
+            studTable: gv('r41StudTable'), h16Table: gv('r41AuditTable'),
+            studKey: gv('r41StudKey') || '_007', h16Key: gv('r41AuditKey') || 'IAGSTNO'
         }).then(function(d) {
             unspin();
             if (!d.success) { setStatus('r41TableOut', d.error || 'Verification failed.', 'error'); return; }
-            setStatus('r41TableOut', 'dbo_STUD: ' + fmt(d.studCount) + ' rows | MT-Audit: ' + fmt(d.auditCount) + ' rows', 'success');
+            setStatus('r41TableOut', 'dbo_STUD: ' + fmt(d.studCount) + ' rows | MT-Audit: ' + fmt(d.h16Count) + ' rows', 'success');
         }).catch(function(e) { unspin(); setStatus('r41TableOut', e.message, 'error'); });
     };
 
     function buildReq() {
         return {
             clientId: st.clientId, runId: st.runId,
-            server: gv('r41Server').trim(), database: gv('r41Db'), driver: gv('r41Driver') || 'ODBC Driver 17 for SQL Server',
             studTable:  gv('r41StudTable')  || 'dbo_STUD',
-            auditTable: gv('r41AuditTable') || 'MT-Audit-prod-std',
+            h16Table: gv('r41AuditTable') || 'MT-Audit-prod-std',
             studKey:    gv('r41StudKey')    || '_007',
-            auditKey:   gv('r41AuditKey')   || 'IAGSTNO',
-            pairs: st.pairs.filter(function(p) { return p.studCol && p.auditCol; })
+            h16Key:   gv('r41AuditKey')   || 'IAGSTNO',
+            studSecondaryKey: gv('r41StudKey2')  || null,
+            h16SecondaryKey:  gv('r41AuditKey2') || null,
+            pairs: st.pairs.filter(function(p) { return p.studCol && p.h16Col; })
         };
     }
 
@@ -420,7 +420,10 @@ window.r41Tab = function(tab) {
         }).catch(function(e) { unspin(); alert(e.message); });
     };
 
-    window.r41DlAll = function() { if (st.runId) window.open(API + '/DownloadExcel?runId=' + st.runId, '_blank'); };
+    function r41DownloadSaved(url, filename) {
+        return window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
+    }
+    window.r41DlAll = function() { if (st.runId) r41DownloadSaved(API + '/DownloadExcel?runId=' + st.runId, 'Rule41_Run_' + st.runId + '.xlsx'); };
 
     /* ── Workspace ── */
     window.r41SaveWorkspace = function() {
@@ -504,6 +507,9 @@ window.r41Tab = function(tab) {
     }
 
     function applyWorkspace(ws, resultsVisible) {
+        var datasetsLink = g('r41DatasetsLink');
+        if (datasetsLink) datasetsLink.href = st.clientId ? '/EngagementDatasets?clientId=' + st.clientId : '#';
+
         if (!ws) {
             st.runId = null; st.summary = null; st.isWorkspaceSaved = false;
             st.currentUserHasSignedOff = false; st.resultsVisible = false; st.currentUserEngagementRole = '';
@@ -513,7 +519,9 @@ window.r41Tab = function(tab) {
             var sl  = g('r41StatusLabel'); if (sl)  sl.textContent  = '-';
             var el  = g('r41EditedLabel'); if (el)  el.textContent  = '-';
             st.pairs = DEF_PAIRS.slice(); renderPairs();
-            applySummary(null, false); updateButtons(); return;
+            applySummary(null, false); updateButtons();
+            if (!IS_RESULTS_ONLY) r41LoadTables().catch(function() {});
+            return;
         }
         st.runId = ws.runId || null;
         st.isWorkspaceSaved = !!ws.isWorkspaceSaved;
@@ -521,21 +529,23 @@ window.r41Tab = function(tab) {
         st.resultsVisible = !!resultsVisible;
         st.currentUserEngagementRole = ws.currentUserEngagementRole || '';
 
-        if (!IS_RESULTS_ONLY) {
-            var sv = g('r41Server'); if (sv && ws.server) sv.value = ws.server;
-            var dv = g('r41Driver'); if (dv && ws.driver) dv.value = ws.driver;
-            if (ws.database)   fillSel('r41Db',         [ws.database],    ws.database);
-            if (ws.studTable)  fillSel('r41StudTable',  [ws.studTable],   ws.studTable);
-            if (ws.auditTable) fillSel('r41AuditTable', [ws.auditTable],  ws.auditTable);
-            if (ws.studKey)    fillSel('r41StudKey',    [ws.studKey],     ws.studKey);
-            if (ws.auditKey)   fillSel('r41AuditKey',   [ws.auditKey],    ws.auditKey);
-        }
-
         applyWsMeta(ws);
         var sc = g('r41SignoffComment'); if (sc && ws.currentUserSignoffComment) sc.value = ws.currentUserSignoffComment;
 
         st.pairs = (ws.summary && ws.summary.reconc && ws.summary.reconc.pairs && ws.summary.reconc.pairs.length) ? ws.summary.reconc.pairs.slice() : DEF_PAIRS.slice();
-        if (!IS_RESULTS_ONLY) renderPairs();
+
+        if (!IS_RESULTS_ONLY) {
+            r41LoadTables({
+                preferredStudTable: ws.studTable || '',
+                preferredAuditTable: ws.h16Table || '',
+                preferredStudKey: ws.studKey || '',
+                preferredAuditKey: ws.h16Key || '',
+                preferredStudKey2: ws.studSecondaryKey || '',
+                preferredAuditKey2: ws.h16SecondaryKey || '',
+                preservePairs: true,
+                silent: true
+            }).catch(function() {});
+        }
 
         if (!resultsVisible) { setWs('Saved Rule 41 results are not available for your role.', 'info'); applySummary(null, false); updateButtons(); return; }
         setWs(ws.summary ? 'Saved Rule 41 workspace loaded.' : 'Rule 41 workspace loaded. Run validation to generate results.', 'success');
@@ -552,10 +562,10 @@ window.r41Tab = function(tab) {
         renderAnalysis(summary);
         renderReconc(summary ? summary.reconc : null);
         if (summary && st.runId) {
-            var dlE = g('r41DlExcel');  if (dlE) dlE.onclick = function() { window.open(API + '/DownloadExcel?runId=' + st.runId, '_blank'); };
-            var dlC = g('r41DlCsv');    if (dlC) dlC.onclick = function() { window.open(API + '/DownloadCsv?runId=' + st.runId, '_blank'); };
-            var dlX = g('r41DlExcCsv');if (dlX) dlX.onclick = function() { window.open(API + '/DownloadExceptionsCsv?runId=' + st.runId, '_blank'); };
-            var dlS = g('r41DlSql');    if (dlS) dlS.onclick = function() { window.open(API + '/DownloadSql?runId=' + st.runId, '_blank'); };
+            var dlE = g('r41DlExcel');  if (dlE) dlE.onclick = function() { r41DownloadSaved(API + '/DownloadExcel?runId=' + st.runId, 'Rule41_Run_' + st.runId + '.xlsx'); };
+            var dlC = g('r41DlCsv');    if (dlC) dlC.onclick = function() { r41DownloadSaved(API + '/DownloadCsv?runId=' + st.runId, 'Rule41_Run_' + st.runId + '.csv'); };
+            var dlX = g('r41DlExcCsv');if (dlX) dlX.onclick = function() { r41DownloadSaved(API + '/DownloadExceptionsCsv?runId=' + st.runId, 'Rule41_Run_' + st.runId + '_Exceptions.csv'); };
+            var dlS = g('r41DlSql');    if (dlS) dlS.onclick = function() { r41DownloadSaved(API + '/DownloadSql?runId=' + st.runId, 'Rule41_Run_' + st.runId + '.sql'); };
         }
         updateButtons();
     }
@@ -574,9 +584,8 @@ window.r41Tab = function(tab) {
             statCard('Overall', '<span class="badge ' + sc + '">' + esc(s.status) + '</span>', '') +
             '</div>' +
             '<div class="card" style="padding:16px"><div class="form-grid">' +
-            '<div><div class="stat-label">Database</div><div>' + esc(s.database || '') + '</div></div>' +
             '<div><div class="stat-label">STUD Table</div><div>' + esc(s.studTable || '') + '</div></div>' +
-            '<div><div class="stat-label">Audit Table</div><div>' + esc(s.auditTable || '') + '</div></div>' +
+            '<div><div class="stat-label">Audit Table</div><div>' + esc(s.h16Table || '') + '</div></div>' +
             '<div><div class="stat-label">Timestamp</div><div>' + esc(s.timestamp || '') + '</div></div>' +
             '</div></div>';
     }
@@ -612,7 +621,7 @@ window.r41Tab = function(tab) {
         if (!rows || !rows.length) return '<div class="empty-state"><p>' + emptyMsg + '</p></div>';
         var hdrs = pairs.map(function(p) {
             return '<th style="background:#1565A6">STUD ' + esc(p.studCol || p.StudCol || '') + '</th>' +
-                   '<th style="background:#0D6E2E">AUDIT ' + esc(p.auditCol || p.AuditCol || '') + '</th>' +
+                   '<th style="background:#0D6E2E">ASCII ' + esc(p.h16Col || p.H16Col || '') + '</th>' +
                    '<th>Match</th>';
         }).join('');
         var body = rows.map(function(r) {
@@ -632,7 +641,7 @@ window.r41Tab = function(tab) {
                 }
                 f = f || {};
                 var sv = f.studValue != null ? f.studValue : (f.StudValue != null ? f.StudValue : '—');
-                var av = f.auditValue != null ? f.auditValue : (f.AuditValue != null ? f.AuditValue : '—');
+                var av = f.h16Value != null ? f.h16Value : (f.H16Value != null ? f.H16Value : '—');
                 var matchVal = f.match || f.Match || 'MISSING';
                 var mi = matchVal === 'AGREE' ? '<span style="color:#1E8449">&#10003;</span>' : matchVal === 'DISAGREE' ? '<span style="color:#C0392B">&#x2717;</span>' : '<span style="color:#E67E22">?</span>';
                 return '<td>' + esc(sv) + '</td><td class="oc">' + esc(av) + '</td><td>' + mi + '</td>';

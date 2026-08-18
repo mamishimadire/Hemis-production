@@ -1,0 +1,133 @@
+@model List<HemisAudit.ViewModels.FirmRecycleBinItemViewModel>
+@{ ViewData["Title"] = "Recycle Bin"; Layout = "~/Views/Shared/_Layout.cshtml"; string q = ViewBag.SearchQuery; }
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert--success" style="margin-bottom:16px">✅ @TempData["Success"]</div>
+}
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert--error" style="margin-bottom:16px">❌ @TempData["Error"]</div>
+}
+
+<div class="page-header">
+    <div>
+        <h1>🗑️ Recycle Bin</h1>
+        <p>@Model.Count firm(s) removed but not yet permanently deleted</p>
+    </div>
+    <a asp-action="Index" class="btn btn-secondary">← Back to Firms</a>
+</div>
+
+<form method="get" asp-action="RecycleBin" style="display:flex;gap:10px;margin-bottom:16px;max-width:440px">
+    <input type="text" name="q" value="@q" placeholder="Search by firm name or client code…" style="flex:1" />
+    <button type="submit" class="btn btn-secondary">Search</button>
+    @if (!string.IsNullOrWhiteSpace(q))
+    {
+        <a asp-action="RecycleBin" class="btn btn-secondary">Clear</a>
+    }
+</form>
+
+<div class="card">
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Firm</th><th>Client Code</th><th>Seats</th><th>Engagement Limit</th><th>Deleted</th><th>Deleted By</th><th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (Model.Count == 0)
+                {
+                    <tr>
+                        <td colspan="7" class="empty-state">
+                            @(string.IsNullOrWhiteSpace(q) ? "The recycle bin is empty." : $"No firms match \"{q}\".")
+                        </td>
+                    </tr>
+                }
+                @foreach (var f in Model)
+                {
+                    <tr>
+                        <td><strong>@f.Name</strong></td>
+                        <td><code>@f.FirmCode</code></td>
+                        <td>@f.SeatCount</td>
+                        <td>@f.EngagementLimit</td>
+                        <td>@(f.DeletedAt?.ToString("dd MMM yyyy HH:mm") ?? "")</td>
+                        <td>@f.DeletedByName</td>
+                        <td>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap">
+                                <form asp-action="Restore" asp-route-id="@f.Id" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <button type="submit" class="btn btn-sm btn-success">Restore</button>
+                                </form>
+                                <button type="button" class="btn btn-sm btn-danger js-open-permanent-delete"
+                                        data-firm-id="@f.Id" data-firm-name="@f.Name">
+                                    Delete Permanently
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<form id="permanentDeleteForm" asp-action="Delete" asp-route-returnTo="bin" method="post">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="id" id="permanentDeleteFirmId" />
+</form>
+
+<div id="permanentDeleteModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+        <h3 style="color:var(--red-bright)">Permanently delete <span id="permanentDeleteFirmName"></span>?</h3>
+        <p style="color:var(--text-muted);margin:8px 0 16px">
+            This immediately removes the firm, its license and all of its users. There is no
+            further recovery after this — it cannot be undone.
+        </p>
+        <label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px">Type the firm name to confirm</label>
+        <input type="text" id="permanentDeleteConfirmInput" autocomplete="off" style="margin-bottom:18px" />
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+            <button type="button" class="btn btn-secondary" onclick="closePermanentDeleteModal()">Cancel</button>
+            <button type="button" class="btn btn-danger" id="permanentDeleteConfirmBtn" disabled onclick="submitPermanentDelete()">Delete Permanently</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    var pendingDelete = { id: null, name: null };
+
+    function openPermanentDeleteModal(id, name) {
+        pendingDelete = { id: id, name: name };
+        document.getElementById('permanentDeleteFirmName').textContent = name;
+        var input = document.getElementById('permanentDeleteConfirmInput');
+        input.value = '';
+        document.getElementById('permanentDeleteConfirmBtn').disabled = true;
+        document.getElementById('permanentDeleteModal').style.display = 'flex';
+    }
+    function closePermanentDeleteModal() {
+        document.getElementById('permanentDeleteModal').style.display = 'none';
+    }
+    function submitPermanentDelete() {
+        document.getElementById('permanentDeleteFirmId').value = pendingDelete.id;
+        document.getElementById('permanentDeleteForm').submit();
+    }
+
+    document.getElementById('permanentDeleteConfirmInput').addEventListener('input', function () {
+        document.getElementById('permanentDeleteConfirmBtn').disabled = this.value !== pendingDelete.name;
+    });
+    document.querySelectorAll('.js-open-permanent-delete').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            openPermanentDeleteModal(parseInt(btn.dataset.firmId, 10), btn.dataset.firmName);
+        });
+    });
+    document.querySelectorAll('.modal-overlay').forEach(function (overlay) {
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) overlay.style.display = 'none';
+        });
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal-overlay').forEach(function (o) { o.style.display = 'none'; });
+        }
+    });
+</script>

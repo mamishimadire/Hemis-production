@@ -6,26 +6,23 @@ namespace HemisAudit.ViewModels
         public List<string> Tables { get; set; } = new();
         public string? AutoCregTable { get; set; }
         public string? AutoStudTable { get; set; }
+        public string? AutoDetailTable { get; set; }
         public string? Error { get; set; }
     }
 
-    public class Rule67VerifyRequest
+    public class Rule67ColumnDiscoveryResult
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string CregTable { get; set; } = "";
-        public string StudTable { get; set; } = "dbo_STUD_VALPAC";
-        public string CregStudentNoCol { get; set; } = "_007";
-        public string CregQualCol { get; set; } = "_001";
-        public string CregE051Col { get; set; } = "_051";
-        public string StudStudentNoCol { get; set; } = "_007";
-        public string StudQualCol { get; set; } = "_001";
-        public string E051FilterValues { get; set; } = "E";
-        public string DetailTable { get; set; } = "dbo_CREG_VALIDATION_DETAIL";
-        public string DetailErrorCode { get; set; } = "00708";
-        public string DetailErrorCol { get; set; } = "Error";
-        public string DetailElementInfoCol { get; set; } = "Element_Information";
+        public bool Success { get; set; }
+        public List<string> Columns { get; set; } = new();
+        public string? AutoSelected { get; set; }
+        public string? Error { get; set; }
+    }
+
+    public class Rule67GetColumnsRequest
+    {
+        public int ClientId { get; set; }
+        public string TableName { get; set; } = "";
+        public string TableRole { get; set; } = "";
     }
 
     public class Rule67VerifyResult
@@ -40,9 +37,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string CregTable { get; set; } = "";
         public string StudTable { get; set; } = "dbo_STUD_VALPAC";
         public string CregStudentNoCol { get; set; } = "_007";
@@ -51,7 +45,7 @@ namespace HemisAudit.ViewModels
         public string StudStudentNoCol { get; set; } = "_007";
         public string StudQualCol { get; set; } = "_001";
         public string E051FilterValues { get; set; } = "E";
-        public string DetailTable { get; set; } = "dbo_CREG_VALIDATION_DETAIL";
+        public string DetailTable { get; set; } = "";
         public string DetailErrorCode { get; set; } = "00708";
         public string DetailErrorCol { get; set; } = "Error";
         public string DetailElementInfoCol { get; set; } = "Element_Information";
@@ -98,7 +92,6 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string CregTable { get; set; } = "";
         public string StudTable { get; set; } = "dbo_STUD_VALPAC";
         public string CregStudentNoCol { get; set; } = "_007";
@@ -118,7 +111,6 @@ namespace HemisAudit.ViewModels
         public int? SavedRunId { get; set; }
         public List<Rule67ControlSummaryItemViewModel> ControlSummaries { get; set; } = new();
         public List<Rule67ValidationRowRecord> ReviewRows { get; set; } = new();
-        // Reconciliation fields (populated when DetailTable is configured)
         public int DetailRecordCount { get; set; }
         public int ConfirmedByRule29Count { get; set; }
         public int NotInRule29Count { get; set; }
@@ -136,9 +128,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string CregTable { get; set; } = "";
         public string StudTable { get; set; } = "dbo_STUD_VALPAC";
         public string CregStudentNoCol { get; set; } = "_007";
@@ -147,7 +136,7 @@ namespace HemisAudit.ViewModels
         public string StudStudentNoCol { get; set; } = "_007";
         public string StudQualCol { get; set; } = "_001";
         public string E051FilterValues { get; set; } = "E";
-        public string DetailTable { get; set; } = "dbo_CREG_VALIDATION_DETAIL";
+        public string DetailTable { get; set; } = "";
         public string DetailErrorCode { get; set; } = "00708";
         public string CurrentUserEngagementRole { get; set; } = "";
         public bool HasDataAnalystSignoff { get; set; }
@@ -167,7 +156,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule67ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();

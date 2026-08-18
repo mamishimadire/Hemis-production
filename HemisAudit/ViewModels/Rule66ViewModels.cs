@@ -9,15 +9,45 @@ namespace HemisAudit.ViewModels
         public string? Error { get; set; }
     }
 
-    public class Rule66VerifyRequest
+    public class Rule66ColumnDiscoveryResult
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
+        public bool Success { get; set; }
+        public List<string> Columns { get; set; } = new();
+        public string? AutoSelected { get; set; }
+        public string? Error { get; set; }
+    }
+
+    public class Rule66GetColumnsRequest
+    {
+        public int ClientId { get; set; }
+        public string TableName { get; set; } = "";
+        public string TableRole { get; set; } = "";
+    }
+
+    public class Rule66DistinctValuesResult
+    {
+        public bool Success { get; set; }
+        public List<string> Values { get; set; } = new();
+        public string? Error { get; set; }
+    }
+
+    public class Rule66GetDistinctValuesRequest
+    {
+        public int ClientId { get; set; }
+        public string TableName { get; set; } = "";
+        public string ColumnName { get; set; } = "";
+    }
+
+    public class Rule66ValidationRequest
+    {
+        public int ClientId { get; set; }
+        public int? RunId { get; set; }
         public string StudTable { get; set; } = "dbo_STUD_VALPAC";
-        public string CregTable { get; set; } = "";
+        public string CregTable { get; set; } = "dbo_CREG";
         public string StudStudentNoCol { get; set; } = "_007";
         public string CregStudentNoCol { get; set; } = "_007";
+        public string StudQualCol { get; set; } = "_001";
+        public string CregQualCol { get; set; } = "_001";
         public string FundingSourceCol { get; set; } = "_019";
         public string FundingSourceValues { get; set; } = "NS";
     }
@@ -29,21 +59,6 @@ namespace HemisAudit.ViewModels
         public int StudNsfasCount { get; set; }
         public int CregRecordCount { get; set; }
         public string? Error { get; set; }
-    }
-
-    public class Rule66ValidationRequest
-    {
-        public int ClientId { get; set; }
-        public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
-        public string StudTable { get; set; } = "dbo_STUD_VALPAC";
-        public string CregTable { get; set; } = "";
-        public string StudStudentNoCol { get; set; } = "_007";
-        public string CregStudentNoCol { get; set; } = "_007";
-        public string FundingSourceCol { get; set; } = "_019";
-        public string FundingSourceValues { get; set; } = "NS";
     }
 
     public class Rule66ControlSummaryItemViewModel
@@ -82,11 +97,12 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string StudTable { get; set; } = "dbo_STUD_VALPAC";
-        public string CregTable { get; set; } = "";
+        public string CregTable { get; set; } = "dbo_CREG";
         public string StudStudentNoCol { get; set; } = "_007";
         public string CregStudentNoCol { get; set; } = "_007";
+        public string StudQualCol { get; set; } = "_001";
+        public string CregQualCol { get; set; } = "_001";
         public string FundingSourceCol { get; set; } = "_019";
         public string FundingSourceValues { get; set; } = "NS";
         public string TableLinkageText { get; set; } = "";
@@ -105,13 +121,12 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string StudTable { get; set; } = "dbo_STUD_VALPAC";
-        public string CregTable { get; set; } = "";
+        public string CregTable { get; set; } = "dbo_CREG";
         public string StudStudentNoCol { get; set; } = "_007";
         public string CregStudentNoCol { get; set; } = "_007";
+        public string StudQualCol { get; set; } = "_001";
+        public string CregQualCol { get; set; } = "_001";
         public string FundingSourceCol { get; set; } = "_019";
         public string FundingSourceValues { get; set; } = "NS";
         public string CurrentUserEngagementRole { get; set; } = "";
@@ -132,7 +147,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule66ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();

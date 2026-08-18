@@ -4,9 +4,8 @@ namespace HemisAudit.Services
 {
     public interface IRule25Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<Rule25TableDiscoveryResult> GetTablesAsync(string server, string database, string driver);
-        Task<Rule25AuditColumnResult> GetAuditColumnsAsync(string server, string database, string driver, string auditTable);
+        Task<Rule25TableDiscoveryResult> GetTablesAsync(int clientId);
+        Task<Rule25AuditColumnResult> GetAuditColumnsAsync(int clientId, string auditTable);
         Task<Rule25VerifyResult> VerifyTablesAsync(Rule25VerifyRequest request);
         Task<Rule25ValidationSummary> RunValidationAsync(Rule25ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<int?> GetClientIdForRunAsync(int runId);

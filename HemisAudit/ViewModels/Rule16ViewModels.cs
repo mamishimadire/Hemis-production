@@ -19,9 +19,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule16VerifyRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
+        public int ClientId { get; set; }
         public string StudTable { get; set; } = "dbo_STUD";
         public string BridgeTable { get; set; } = "dbo_CREG";
         public string CregTable
@@ -45,6 +43,15 @@ namespace HemisAudit.ViewModels
         public string? Error { get; set; }
     }
 
+    public class Rule16ColumnsRequest
+    {
+        public int ClientId { get; set; }
+        public string TableName { get; set; } = "";
+    }
+
+    // Kept only because Rule14Controller/Rule15Controller (not yet migrated) reuse this shape
+    // as a generic "get columns from a live SQL Server table" request — unrelated to Rule16's
+    // own (now Engagement-Dataset-based) GetColumns endpoint above.
     public class Rule16ColumnValuesRequest
     {
         public string Server { get; set; } = "";
@@ -58,9 +65,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string StudTable { get; set; } = "dbo_STUD";
         public string BridgeTable { get; set; } = "dbo_CREG";
         public string CregTable
@@ -121,7 +125,6 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string StudTable { get; set; } = "dbo_STUD";
         public string BridgeTable { get; set; } = "dbo_CREG";
         public string CregTable
@@ -154,7 +157,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule16ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -172,9 +174,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string StudTable { get; set; } = "dbo_STUD";
         public string BridgeTable { get; set; } = "dbo_CREG";
         public string CregTable

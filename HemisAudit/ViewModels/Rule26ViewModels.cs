@@ -4,9 +4,7 @@ namespace HemisAudit.ViewModels
 {
     public class Rule26GetColumnsRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string TableName { get; set; } = "";
         public bool IsProfTable { get; set; }
     }
@@ -25,9 +23,7 @@ namespace HemisAudit.ViewModels
 
     public class Rule26VerifyRequest
     {
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "";
+        public int ClientId { get; set; }
         public string ProfTable { get; set; } = "";
         public string PayrollTable { get; set; } = "";
         public string ProfPersonnelColumn { get; set; } = "";
@@ -49,9 +45,6 @@ namespace HemisAudit.ViewModels
     {
         public int ClientId { get; set; }
         public int? RunId { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string ProfTable { get; set; } = "";
         public string PayrollTable { get; set; } = "";
         public string ProfPersonnelColumn { get; set; } = "";
@@ -126,7 +119,6 @@ namespace HemisAudit.ViewModels
         public decimal ExceptionRate { get; set; }
         public string Status { get; set; } = "";
         public string Timestamp { get; set; } = "";
-        public string Database { get; set; } = "";
         public string ProfTable { get; set; } = "";
         public string PayrollTable { get; set; } = "";
         public string ProfPersonnelColumn { get; set; } = "";
@@ -145,6 +137,7 @@ namespace HemisAudit.ViewModels
         public int LinkedRecordCount { get; set; }
         public int ClientId { get; set; }
         public int? SavedRunId { get; set; }
+        public bool ExceptionsTruncated { get; set; }
         public List<Rule26DirectionResultViewModel> Directions { get; set; } = new();
         public List<Rule26ExceptionRowViewModel> Exceptions { get; set; } = new();
         public List<Rule26PassRowViewModel> PassRows { get; set; } = new();
@@ -159,7 +152,6 @@ namespace HemisAudit.ViewModels
         public bool IsCurrentRun { get; set; }
         public string EngagementName { get; set; } = "";
         public string MaconomyNumber { get; set; } = "";
-        public string SourceServer { get; set; } = "";
         public string GeneratedSql { get; set; } = "";
         public Rule26ValidationSummary Summary { get; set; } = new();
         public List<RunSignoffViewModel> Signoffs { get; set; } = new();
@@ -177,9 +169,6 @@ namespace HemisAudit.ViewModels
         public int ClientId { get; set; }
         public int? RunId { get; set; }
         public bool ResultsVisible { get; set; }
-        public string Server { get; set; } = "";
-        public string Database { get; set; } = "";
-        public string Driver { get; set; } = "ODBC Driver 17 for SQL Server";
         public string ProfTable { get; set; } = "";
         public string PayrollTable { get; set; } = "";
         public string ProfPersonnelColumn { get; set; } = "";

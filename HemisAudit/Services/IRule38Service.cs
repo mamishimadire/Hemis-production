@@ -4,9 +4,8 @@ namespace HemisAudit.Services
 {
     public interface IRule38Service
     {
-        Task<DatabaseListResult> GetDatabasesAsync(string server, string driver);
-        Task<Rule38TableListResult> GetTablesAsync(string server, string database, string driver);
-        Task<ColumnListResult> GetColumnsAsync(string server, string database, string driver, string tableName, string tableRole);
+        Task<Rule38TableListResult> GetTablesAsync(int clientId);
+        Task<ColumnListResult> GetColumnsAsync(int clientId, string tableName, string tableRole);
         Task<Rule38VerifyResult> VerifyDataAsync(Rule38VerifyRequest request);
         Task<Rule38ValidationSummary> RunValidationAsync(Rule38ValidationRequest request, string? userEmail = null, string? userName = null);
         Task<int?> GetClientIdForRunAsync(int runId);

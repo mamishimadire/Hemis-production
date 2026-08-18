@@ -141,7 +141,6 @@ namespace HemisAudit.Controllers
             review.GeneratedSql = _rule55.GenerateSql(new Rule55ValidationRequest
             {
                 ClientId         = review.ClientId,
-                Database         = review.Summary.Database,
                 StudTable        = review.Summary.StudTable,
                 StudIdCol        = review.Summary.StudIdCol,
                 StudQualCodeCol  = review.Summary.StudQualCodeCol,
@@ -152,26 +151,25 @@ namespace HemisAudit.Controllers
                 QualNameCol      = review.Summary.QualNameCol,
                 QualTypeCol      = review.Summary.QualTypeCol,
                 QualApprovalCol  = review.Summary.QualApprovalCol,
-                QualApprovalFilterValue = review.Summary.QualApprovalFilterValue
+                QualApprovalFilterValue = review.Summary.QualApprovalFilterValue,
+                PqmTable          = review.Summary.PqmTable,
+                PqmQualNameColumn = review.Summary.PqmQualNameColumn,
+                PqmQualTypeColumn = review.Summary.PqmQualTypeColumn
             });
             return View(review);
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule55.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule55.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule55.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule55GetColumnsRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule55.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName, model.TableRole)));
+                await _rule55.GetColumnsAsync(model.ClientId, model.TableName, model.TableRole)));
 
         [HttpPost]
-        public async Task<IActionResult> VerifyTables([FromBody] Rule55VerifyRequest request) =>
+        public async Task<IActionResult> VerifyTables([FromBody] Rule55ValidationRequest request) =>
             Json(await RequireDataAnalystAsync(async () => await _rule55.VerifyDataAsync(request)));
 
         [HttpPost]
@@ -363,7 +361,7 @@ namespace HemisAudit.Controllers
             if (request.ClientId > 0 && !await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
                 return Json(new SqlResult { Success = false, Error = "You cannot access this engagement." });
 
-            return Json(RequireDataAnalystResult(() => new SqlResult { Success = true, Sql = _rule55.GenerateSql(request) }));
+            return Json(await RequireDataAnalystAsync(async () => new SqlResult { Success = true, Sql = _rule55.GenerateSql(request) }));
         }
         [HttpPost]
         public async Task<IActionResult> GenerateRScript([FromBody] Rule55ValidationRequest request)
@@ -374,7 +372,7 @@ namespace HemisAudit.Controllers
             if (request.ClientId > 0 && !await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
                 return Json(new SqlResult { Success = false, Error = "You cannot access this engagement." });
 
-            return Json(RequireDataAnalystResult(() => new SqlResult
+            return Json(await RequireDataAnalystAsync(async () => new SqlResult
             {
                 Success = true,
                 Sql = Rule55RScriptGenerator.Generate(request) + RScriptScaffold.BuildAutoExportFooter("Rule55")
@@ -520,7 +518,6 @@ namespace HemisAudit.Controllers
             var request = new Rule55ValidationRequest
             {
                 ClientId         = review.ClientId,
-                Database         = review.Summary.Database,
                 StudTable        = review.Summary.StudTable,
                 StudIdCol        = review.Summary.StudIdCol,
                 StudQualCodeCol  = review.Summary.StudQualCodeCol,
@@ -531,7 +528,10 @@ namespace HemisAudit.Controllers
                 QualNameCol      = review.Summary.QualNameCol,
                 QualTypeCol      = review.Summary.QualTypeCol,
                 QualApprovalCol  = review.Summary.QualApprovalCol,
-                QualApprovalFilterValue = review.Summary.QualApprovalFilterValue
+                QualApprovalFilterValue = review.Summary.QualApprovalFilterValue,
+                PqmTable          = review.Summary.PqmTable,
+                PqmQualNameColumn = review.Summary.PqmQualNameColumn,
+                PqmQualTypeColumn = review.Summary.PqmQualTypeColumn
             };
             var bytes = _export.ExportSql(_rule55.GenerateSql(request));
             return File(bytes, "application/sql", $"Rule55_WCode_Validation_Run_{runId}.sql");
@@ -573,7 +573,7 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule55_WCode_Validation_{Ts()}.sql");
         }
 
-        // Ã¢â€â‚¬Ã¢â€â‚¬ Private helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        // ─── Private helpers ─────────────────────────────────────────────────
 
         private async Task<Rule55RunReviewViewModel?> LoadAuthorizedSavedRunAsync(int runId, bool requireDownloadAccess)
         {
@@ -660,15 +660,6 @@ namespace HemisAudit.Controllers
             if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
                 return new { success = false, error = "Only the assigned data analyst can configure or run Rule 55." };
             return await action();
-        }
-
-        private object RequireDataAnalystResult(Func<SqlResult> factory)
-        {
-            var user = _users.GetUserAsync(User).GetAwaiter().GetResult();
-            var role = GetCurrentSystemRoleAsync(user).GetAwaiter().GetResult();
-            if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
-                return new { success = false, error = "Only the assigned data analyst can generate the SQL script." };
-            return factory();
         }
 
         private static string Ts() => DateTime.Now.ToString("yyyyMMdd_HHmmss");

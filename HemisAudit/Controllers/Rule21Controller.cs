@@ -152,10 +152,9 @@ namespace HemisAudit.Controllers
                 (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
 
-            review.GeneratedSql = _rule21.GenerateSql(new Rule21ValidationRequest
+            review.GeneratedSql = await _rule21.GenerateSqlAsync(new Rule21ValidationRequest
             {
                 ClientId            = review.ClientId,
-                Database            = review.Summary.Database,
                 StudTable           = review.Summary.StudTable,
                 QualTable           = review.Summary.QualTable,
                 NalTable            = review.Summary.NalTable,
@@ -183,22 +182,18 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule21.GetDatabasesAsync(model.Server, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule21.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule21.GetTablesAsync(model.Server, model.Database, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetColumns([FromBody] Rule21GetColumnsRequest model) =>
+        public async Task<IActionResult> GetColumns([FromBody] Rule16ColumnsRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule21.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName, model.TableRole)));
+                await _rule21.GetColumnsAsync(model.ClientId, model.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> GetDistinctValues([FromBody] Rule21GetDistinctValuesRequest model) =>
             Json(await RequireDataAnalystAsync(async () =>
-                await _rule21.GetDistinctValuesAsync(model.Server, model.Database, model.Driver, model.TableName, model.ColumnName, model.PreferredValue)));
+                await _rule21.GetDistinctValuesAsync(model.ClientId, model.TableName, model.ColumnName, model.PreferredValue)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule21VerifyRequest request) =>
@@ -388,7 +383,7 @@ namespace HemisAudit.Controllers
             if (request.ClientId > 0 && !await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
                 return Json(new Rule21SqlResult { Success = false, Error = "You cannot access this engagement." });
 
-            return Json(RequireDataAnalystResult(() => new Rule21SqlResult { Success = true, Sql = _rule21.GenerateSql(request) }));
+            return Json(await RequireDataAnalystResultAsync(async () => new Rule21SqlResult { Success = true, Sql = await _rule21.GenerateSqlAsync(request) }));
         }
         [HttpPost]
         public async Task<IActionResult> GenerateRScript([FromBody] Rule21ValidationRequest request)
@@ -542,7 +537,6 @@ namespace HemisAudit.Controllers
             var request = new Rule21ValidationRequest
             {
                 ClientId            = review.ClientId,
-                Database            = review.Summary.Database,
                 StudTable           = review.Summary.StudTable,
                 QualTable           = review.Summary.QualTable,
                 NalTable            = review.Summary.NalTable,
@@ -566,7 +560,7 @@ namespace HemisAudit.Controllers
                 NalCreditsColumn    = review.Summary.NalCreditsColumn,
                 NalOutcomeColumn    = review.Summary.NalOutcomeColumn
             };
-            var bytes = _export.ExportSql(_rule21.GenerateSql(request));
+            var bytes = _export.ExportSql(await _rule21.GenerateSqlAsync(request));
             return File(bytes, "application/sql", $"Rule21_FirstTime_NAL_Validation_Run_{runId}.sql");
         }
 
@@ -602,7 +596,7 @@ namespace HemisAudit.Controllers
             var role = await GetCurrentSystemRoleAsync(user);
             if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
                 return Json(new { success = false, error = "Only the assigned data analyst can download the SQL script." });
-            var bytes = _export.ExportSql(_rule21.GenerateSql(request));
+            var bytes = _export.ExportSql(await _rule21.GenerateSqlAsync(request));
             return File(bytes, "application/sql", $"Rule21_FirstTime_NAL_Validation_{Ts()}.sql");
         }
 
@@ -684,6 +678,15 @@ namespace HemisAudit.Controllers
             if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
                 return new { success = false, error = "Only the assigned data analyst can generate the SQL script." };
             return factory();
+        }
+
+        private async Task<object> RequireDataAnalystResultAsync(Func<Task<Rule21SqlResult>> factory)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase))
+                return new { success = false, error = "Only the assigned data analyst can generate the SQL script." };
+            return await factory();
         }
 
         private static string Ts() => DateTime.Now.ToString("yyyyMMdd_HHmmss");

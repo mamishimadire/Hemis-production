@@ -1,53 +1,55 @@
-using System.Security.Cryptography;
-using HemisAudit.Helpers;
-using HemisAudit.ViewModels;
-using Microsoft.Data.SqlClient;
-using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
+using HemisAudit.Helpers;
+using HemisAudit.Models;
+using HemisAudit.ViewModels;
+using Microsoft.AspNetCore.Identity;
+using Npgsql;
 
 namespace HemisAudit.Services
 {
+    // Rule 72: Pharmacy — Qualification & Surname Validation — validates against the engagement's
+    // own uploaded Supabase data instead of a live SQL Server connection. Population is every row in
+    // the Pharmacy source table with a non-blank qualification code. PASS when that qualification
+    // code exists in the Clinical Production table; FAIL when missing. The matching Production surname
+    // is carried through for informational display alongside the result.
     public class PharmacyService : IPharmacyService
     {
-        private const int BrowserPreviewRowLimit = 10;
-        private readonly IPendingValidationCacheService _pendingValidationCache;
+        private const int RowLimit = 200000;
+        private const int UiSampleLimit = 10;
+
         private readonly IConfiguration _configuration;
+        private readonly IEngagementDatasetService _datasets;
+        private readonly ISystemDatabaseService _systemDb;
+        private readonly UserManager<ApplicationUser> _userManager;
 
-        public PharmacyService(IPendingValidationCacheService pendingValidationCache, IConfiguration configuration)
+        public PharmacyService(
+            IConfiguration configuration,
+            IEngagementDatasetService datasets,
+            ISystemDatabaseService systemDb,
+            UserManager<ApplicationUser> userManager)
         {
-            _pendingValidationCache = pendingValidationCache;
             _configuration = configuration;
+            _datasets = datasets;
+            _systemDb = systemDb;
+            _userManager = userManager;
         }
 
-        public async Task<DatabaseListResult> GetDatabasesAsync(string server, string driver)
+        // ── Discovery ─────────────────────────────────────────────────────────
+
+        public async Task<PharmacyTableDiscoveryResult> GetTablesAsync(int clientId)
         {
             try
             {
-                var connStr = BuildConnectionString(server, "master", driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT name FROM sys.databases WHERE name NOT IN ('master','tempdb','model','msdb') ORDER BY name;";
-                await using var reader = await cmd.ExecuteReaderAsync();
-                var items = new List<string>();
-                while (await reader.ReadAsync()) items.Add(reader.GetString(0));
-                return new DatabaseListResult { Success = true, Databases = items };
-            }
-            catch (Exception ex) { return new DatabaseListResult { Success = false, Error = ex.Message }; }
-        }
+                var tables = await _datasets.ListTableNamesAsync(clientId);
+                if (tables.Count == 0)
+                {
+                    return new PharmacyTableDiscoveryResult
+                    {
+                        Success = false,
+                        Error = "No tables have been uploaded for this engagement yet. Upload data under Datasets first."
+                    };
+                }
 
-        public async Task<PharmacyTableDiscoveryResult> GetTablesAsync(string server, string database, string driver)
-        {
-            try
-            {
-                var connStr = BuildConnectionString(server, database, driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME;";
-                await using var reader = await cmd.ExecuteReaderAsync();
-                var tables = new List<string>();
-                while (await reader.ReadAsync()) tables.Add(reader.GetString(0));
                 return new PharmacyTableDiscoveryResult
                 {
                     Success = true,
@@ -59,530 +61,571 @@ namespace HemisAudit.Services
             catch (Exception ex) { return new PharmacyTableDiscoveryResult { Success = false, Error = ex.Message }; }
         }
 
-        public async Task<ColumnListResult> GetColumnsAsync(string server, string database, string driver, string tableName)
+        public async Task<PharmacyColumnDiscoveryResult> GetColumnsAsync(int clientId, string tableName, string tableRole)
         {
             try
             {
-                ValidateObjectName(tableName);
-                var tbl = Sanitise(tableName);
-                var connStr = BuildConnectionString(server, database, driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @T ORDER BY ORDINAL_POSITION;";
-                cmd.Parameters.AddWithValue("@T", tbl);
-                await using var reader = await cmd.ExecuteReaderAsync();
-                var cols = new List<string>();
-                while (await reader.ReadAsync()) if (!reader.IsDBNull(0)) cols.Add(reader.GetString(0));
-                return new ColumnListResult { Success = true, Columns = cols, AutoSelected = cols.FirstOrDefault() };
+                var cols = await _datasets.GetValidatedColumnsAsync(clientId, tableName);
+                string? auto = tableRole?.ToLowerInvariant() switch
+                {
+                    "qualification" => FindFirst(cols, ["QUALIFICATION"], ["qual"]),
+                    "surname"       => FindFirst(cols, ["Surname"], ["surname"]),
+                    _ => null
+                };
+                return new PharmacyColumnDiscoveryResult { Success = true, Columns = cols, AutoSelected = auto };
             }
-            catch (Exception ex) { return new ColumnListResult { Success = false, Error = ex.Message }; }
+            catch (Exception ex) { return new PharmacyColumnDiscoveryResult { Success = false, Error = ex.Message }; }
         }
 
         public async Task<PharmacyVerifyResult> VerifyTablesAsync(PharmacyVerifyRequest request)
         {
             try
             {
-                ValidateRequest(request);
-                var connStr = BuildConnectionString(request.Server, request.Database, request.Driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
+                await ValidateColumnsExistAsync(request.ClientId, request.PharmacyTable, [request.QualificationColumn, request.SurnameColumn]);
+                await ValidateColumnsExistAsync(request.ClientId, request.ProductionTable, [request.QualificationColumn]);
 
-                var pharmTable = Sanitise(request.PharmacyTable);
+                var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+                await using var connection = conn;
+
+                var srcTable = Sanitise(request.PharmacyTable);
                 var prodTable = Sanitise(request.ProductionTable);
                 var qualCol = Sanitise(request.QualificationColumn);
 
-                var pharmCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{pharmTable}];");
-                var prodCount = await CountAsync(conn, $"SELECT COUNT(*) FROM [{prodTable}];");
+                var srcCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{srcTable}\";");
+                var prodCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{prodTable}\";");
 
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandText = BuildPopulationCountSql(pharmTable, prodTable, qualCol);
+                var ctes = BuildValidationCtes(schema, srcTable, prodTable, qualCol, Sanitise(request.SurnameColumn));
+                var countSql = $@"
+WITH {ctes}
+SELECT
+    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE validation_result = 'PASS') AS pass_count,
+    COUNT(*) FILTER (WHERE validation_result = 'FAIL') AS fail_count
+FROM results;";
+
+                await using var cmd = connection.CreateCommand();
+                cmd.CommandText = countSql;
                 await using var reader = await cmd.ExecuteReaderAsync();
 
-                var result = new PharmacyVerifyResult { Success = true, PharmacyRecordCount = pharmCount, ProductionRecordCount = prodCount };
+                var result = new PharmacyVerifyResult { Success = true, PharmacyRecordCount = srcCount, ProductionRecordCount = prodCount };
                 if (await reader.ReadAsync())
                 {
-                    result.TotalTested = GetInt(reader, 0);
-                    result.MatchedCount = GetInt(reader, 1);
-                    result.MissingCount = GetInt(reader, 2);
+                    result.TotalTested  = Convert.ToInt32(reader.GetValue(0));
+                    result.MatchedCount = Convert.ToInt32(reader.GetValue(1));
+                    result.MissingCount = Convert.ToInt32(reader.GetValue(2));
                 }
                 return result;
             }
             catch (Exception ex) { return new PharmacyVerifyResult { Success = false, Error = ex.Message }; }
         }
 
+        // ── Validation ────────────────────────────────────────────────────────
+
         public async Task<PharmacyValidationSummary> RunValidationAsync(PharmacyValidationRequest request, string? userEmail = null, string? userName = null)
         {
             try
             {
-                ValidateRequest(request);
-                var browserSummary = await AnalyseAsync(request, includeAllReviewRows: false);
-                if (browserSummary.Success && request.ClientId > 0)
+                var summary = await AnalyseAsync(request);
+
+                if (summary.Success && request.ClientId > 0)
                 {
-                    try
-                    {
-                        var full = CloneSummary(browserSummary);
-                        if (full.IsPreviewOnly || full.ReviewRows.Count < full.TotalValidated)
-                            full = await AnalyseAsync(request, includeAllReviewRows: true);
-                        full.SavedRunId = null;
-                        browserSummary.SavedRunId = await SaveValidationRunAsync(CloneRequest(request), full, userEmail, userName);
-                        if (!string.IsNullOrWhiteSpace(userEmail))
-                            _pendingValidationCache.ClearPending(72, request.ClientId, userEmail!);
-                    }
+                    try { summary.SavedRunId = await SaveValidationRunAsync(request, summary, userEmail, userName); }
                     catch (Exception ex)
                     {
-                        browserSummary.Warning = $"Analysis completed, but the workspace could not be saved automatically: {ex.Message}";
+                        summary.Success = false;
+                        summary.Error = $"Analysis completed, but the run could not be saved: {ex.Message}";
+                        return summary;
                     }
                 }
 
-                if (!browserSummary.SavedRunId.HasValue)
-                {
-                    if (browserSummary.Success && request.ClientId > 0 && !string.IsNullOrWhiteSpace(userEmail))
-                        _pendingValidationCache.StorePending(72, request.ClientId, userEmail!, request, CloneSummary(browserSummary), userName);
-                    browserSummary.Warning ??= "Browser review rows are limited for performance. The full population is counted.";
-                }
-                else
-                {
-                    browserSummary.Warning = "Pharmacy run written to the system database. Click Save Workspace to finalize it for signoff.";
-                }
-                return browserSummary;
+                return ApplyUiSample(summary);
             }
             catch (Exception ex) { return new PharmacyValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<PharmacyValidationSummary> AnalyseAsync(PharmacyValidationRequest request, bool includeAllReviewRows)
+        private async Task<PharmacyValidationSummary> AnalyseAsync(PharmacyValidationRequest request)
         {
-            try
-            {
-                ValidateRequest(request);
-                var connStr = BuildConnectionString(request.Server, request.Database, request.Driver);
-                await using var conn = new SqlConnection(connStr);
-                await conn.OpenAsync();
+            await ValidateColumnsExistAsync(request.ClientId, request.PharmacyTable, [request.QualificationColumn, request.SurnameColumn]);
+            await ValidateColumnsExistAsync(request.ClientId, request.ProductionTable, [request.QualificationColumn]);
 
-                await using var cmd = conn.CreateConfiguredCommand();
-                cmd.CommandTimeout = 300;
-                cmd.CommandText = await GenerateSqlAsync(request);
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
 
-                await using var reader = await cmd.ExecuteReaderAsync();
-                var results = new List<PharmacyReviewRow>();
-                int passCount = 0, failCount = 0, totalCount = 0;
-
-                while (await reader.ReadAsync())
-                {
-                    totalCount++;
-                    var status = reader.GetString(2);
-                    var row = new PharmacyReviewRow
-                    {
-                        PharmacyQualification = reader.IsDBNull(0) ? "" : reader.GetString(0),
-                        PharmacySurname = reader.IsDBNull(1) ? "" : reader.GetString(1),
-                        Status = status,
-                        ProductionQualification = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                        ProductionSurname = reader.IsDBNull(4) ? "" : reader.GetString(4)
-                    };
-
-                    if (status == "PASS") passCount++;
-                    else if (status == "FAIL") failCount++;
-
-                    if (results.Count < (includeAllReviewRows ? int.MaxValue : BrowserPreviewRowLimit))
-                        results.Add(row);
-                }
-
-                var exceptionRate = totalCount > 0 ? Math.Round((decimal)failCount * 100 / totalCount, 2) : 0;
-                return new PharmacyValidationSummary
-                {
-                    Success = true,
-                    Status = exceptionRate == 0 ? "PASS" : "FAIL",
-                    TotalValidated = totalCount,
-                    PassCount = passCount,
-                    FailCount = failCount,
-                    ExceptionRate = exceptionRate,
-                    ReviewRows = results,
-                    IsPreviewOnly = !includeAllReviewRows && results.Count < totalCount
-                };
-            }
-            catch (Exception ex) { return new PharmacyValidationSummary { Success = false, Error = ex.Message }; }
-        }
-
-        public async Task<string> GenerateSqlAsync(PharmacyValidationRequest request)
-        {
-            ValidateRequest(request);
-            var pharmTable = Sanitise(request.PharmacyTable);
-            var prodTable = Sanitise(request.ProductionTable);
             var qualCol = Sanitise(request.QualificationColumn);
             var surnameCol = Sanitise(request.SurnameColumn);
 
-            return await Task.FromResult($@"-- PHARMACY MODULE (Rule 72): Qualification Code and Surname Validation
--- Checks if QUALIFICATION values from Pharmacy table exist in Clinical Production
--- and confirms matching Surname records
+            var srcCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{Sanitise(request.PharmacyTable)}\";");
+            var prodCount = await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{Sanitise(request.ProductionTable)}\";");
 
--- Build reference qualification codes from Production table
-SELECT
-    UPPER(LTRIM(RTRIM(CAST([{qualCol}] AS nvarchar(255))))) AS ProdQualification,
-    UPPER(LTRIM(RTRIM(CAST([{surnameCol}] AS nvarchar(500))))) AS ProdSurname
-INTO #ProdQualifications
-FROM [{prodTable}]
-WHERE [{qualCol}] IS NOT NULL AND [{qualCol}] <> '';
+            var ctes = BuildValidationCtes(schema, request.PharmacyTable, request.ProductionTable, qualCol, surnameCol);
 
-CREATE INDEX IDX_ProdQual ON #ProdQualifications(ProdQualification);
-
--- Validate Pharmacy against Production
-SELECT
-    UPPER(LTRIM(RTRIM(CAST(PH.[{qualCol}] AS nvarchar(255))))) AS PharmQual,
-    UPPER(LTRIM(RTRIM(CAST(PH.[{surnameCol}] AS nvarchar(500))))) AS PharmSurname,
-    CASE WHEN PQ.ProdQualification IS NOT NULL THEN 'PASS' ELSE 'FAIL' END AS Status,
-    ISNULL(PQ.ProdQualification, '') AS MatchedQual,
-    ISNULL(PQ.ProdSurname, '') AS MatchedSurname
-FROM [{pharmTable}] PH
-LEFT JOIN #ProdQualifications PQ
-    ON UPPER(LTRIM(RTRIM(CAST(PH.[{qualCol}] AS nvarchar(255))))) = PQ.ProdQualification
-WHERE PH.[{qualCol}] IS NOT NULL AND PH.[{qualCol}] <> ''
-ORDER BY Status DESC, PharmQual;
-
-DROP TABLE #ProdQualifications;");
-        }
-
-        public async Task<PharmacyWorkspaceState?> GetCurrentWorkspaceStateAsync(int clientId, string? userEmail = null)
-        {
-            try
+            int total, passed, failed;
+            await using (var countCmd = connection.CreateCommand())
             {
-                if (clientId <= 0) return null;
-
-                await using var connection = await OpenSystemConnectionAsync();
-                await using var command = connection.CreateConfiguredCommand();
-                command.CommandText = @"
-SELECT TOP 1
-    RunID, HemisServer, AuditDatabase, StudTable, DeceasedTable, StudColumn, DeceasedColumn,
-    Status, RunTimestamp, ResultsJSON, WorkspaceSavedAt
-FROM dbo.ValidationRuns
-WHERE ClientID = @ClientID AND RuleNumber = 72
-ORDER BY IsCurrent DESC, RunTimestamp DESC;";
-                command.Parameters.AddWithValue("@ClientID", clientId);
-
-                await using var reader = await command.ExecuteReaderAsync();
+                countCmd.CommandText = $@"
+WITH {ctes}
+SELECT
+    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE validation_result = 'PASS') AS pass_count,
+    COUNT(*) FILTER (WHERE validation_result = 'FAIL') AS fail_count
+FROM results;";
+                await using var reader = await countCmd.ExecuteReaderAsync();
                 if (await reader.ReadAsync())
                 {
-                    var runId = reader.GetInt32(0);
-                    var resultsJson = reader.IsDBNull(9) ? null : reader.GetString(9);
-                    PharmacyValidationSummary? summary = null;
-                    if (!string.IsNullOrWhiteSpace(resultsJson))
-                    {
-                        try { summary = JsonConvert.DeserializeObject<PharmacyValidationSummary>(ValidationPayloadCodec.Decode(resultsJson)); }
-                        catch { }
-                    }
-                    if (summary != null && summary.ReviewRows.Count > BrowserPreviewRowLimit)
-                        summary.ReviewRows = summary.ReviewRows.Take(BrowserPreviewRowLimit).ToList();
-
-                    var ws = new PharmacyWorkspaceState
-                    {
-                        ClientId = clientId,
-                        LastRunId = runId,
-                        Server = reader.IsDBNull(1) ? "" : reader.GetString(1),
-                        Database = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                        PharmacyTable = reader.IsDBNull(3) ? "Pharmacy" : reader.GetString(3),
-                        ProductionTable = reader.IsDBNull(4) ? "Clinical_Production" : reader.GetString(4),
-                        QualificationColumn = reader.IsDBNull(5) ? "QUALIFICATION" : reader.GetString(5),
-                        SurnameColumn = reader.IsDBNull(6) ? "Surname" : reader.GetString(6),
-                        LastRunStatus = reader.IsDBNull(7) ? null : reader.GetString(7),
-                        CurrentStatus = reader.IsDBNull(7) ? null : reader.GetString(7),
-                        LastRunAt = reader.IsDBNull(8) ? null : reader.GetDateTime(8),
-                        Summary = summary
-                    };
-                    await reader.CloseAsync();
-                    ws.IsWorkspaceSaved = await QualSurnameModuleHelper.IsWorkspaceSavedAsync(connection, runId);
-
-                    int? userId = await GetSystemUserIdByEmailAsync(connection, userEmail);
-                    if (userId.HasValue)
-                        ws.CurrentUserEngagementRole = await QualSurnameModuleHelper.GetEngagementRoleAsync(connection, clientId, userId.Value) ?? "";
-
-                    var (hasDA, currentSigned, currentComment) = await QualSurnameModuleHelper.GetSignoffStateAsync(
-                        connection, runId, userId, ws.CurrentUserEngagementRole);
-                    ws.HasDataAnalystSignoff = hasDA;
-                    ws.CurrentUserHasSignedOff = currentSigned;
-                    ws.CurrentUserSignoffComment = currentComment;
-
-                    if (ws.Summary != null) ws.Summary.SavedRunId = runId;
-                    return ws;
+                    total  = Convert.ToInt32(reader.GetValue(0));
+                    passed = Convert.ToInt32(reader.GetValue(1));
+                    failed = Convert.ToInt32(reader.GetValue(2));
                 }
+                else { total = passed = failed = 0; }
             }
-            catch { }
 
-            try
+            var rows = new List<PharmacyValidationRowRecord>();
+            await using (var cmd = connection.CreateCommand())
             {
-                var cached = _pendingValidationCache.GetPending<PharmacyValidationRequest, PharmacyValidationSummary>(72, clientId, userEmail ?? "");
-                if (cached?.Request is not null && cached.Summary is not null)
+                cmd.CommandText = $@"
+WITH {ctes}
+SELECT source_qual, source_surname, matched_surname, validation_result FROM results
+ORDER BY CASE WHEN validation_result = 'FAIL' THEN 0 ELSE 1 END, source_qual
+LIMIT @limit;";
+                cmd.Parameters.AddWithValue("limit", RowLimit);
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
                 {
-                    var req = cached.Request;
-                    return new PharmacyWorkspaceState
+                    var row = new PharmacyValidationRowRecord
                     {
-                        ClientId = clientId,
-                        Server = req.Server,
-                        Database = req.Database,
-                        Driver = req.Driver,
-                        PharmacyTable = req.PharmacyTable,
-                        ProductionTable = req.ProductionTable,
-                        QualificationColumn = req.QualificationColumn,
-                        SurnameColumn = req.SurnameColumn,
-                        Summary = cached.Summary,
-                        LastRunAt = DateTime.UtcNow
+                        ValidationNumber = rows.Count + 1,
+                        ControlType = "Control_1",
+                        ControlLabel = "Control 1",
+                        ValidationResult = GetString(reader, 3) ?? "FAIL",
+                        DisplayValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            ["SOURCE_QUAL"] = GetString(reader, 0),
+                            ["SOURCE_SURNAME"] = GetString(reader, 1),
+                            ["PRODUCTION_SURNAME"] = GetString(reader, 2)
+                        }
                     };
+                    EnrichDisplayValues(row);
+                    rows.Add(row);
                 }
             }
-            catch { }
 
-            return null;
-        }
+            var rate = total == 0 ? 0m : Math.Round((decimal)failed / total * 100m, 2);
+            var overallStatus = failed == 0 ? "PASS" : "FAIL";
 
-        public async Task<bool> SaveWorkspaceStateAsync(int clientId, PharmacyValidationRequest config, string? userEmail = null)
-        {
-            try
+            var controlSummaries = new List<PharmacyControlSummaryItemViewModel>
             {
-                if (clientId <= 0) return false;
-                await using var connection = await OpenSystemConnectionAsync();
-                await using var cmd = connection.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT TOP 1 RunID FROM dbo.ValidationRuns WHERE ClientID = @ClientID AND RuleNumber = 72 ORDER BY IsCurrent DESC, RunTimestamp DESC;";
-                cmd.Parameters.AddWithValue("@ClientID", clientId);
-                var val = await cmd.ExecuteScalarAsync();
-                if (val == null || val == DBNull.Value) return false;
-                return await QualSurnameModuleHelper.MarkWorkspaceSavedAsync(connection, Convert.ToInt32(val));
-            }
-            catch { return false; }
-        }
+                new()
+                {
+                    ControlType  = "Control_1",
+                    ControlLabel = "Control 1",
+                    CriteriaText = $"Every {request.PharmacyTable} [{qualCol}] value must exist in {request.ProductionTable} [{qualCol}]",
+                    TotalCount   = total,
+                    PassCount    = passed,
+                    FailCount    = failed,
+                    Status       = failed == 0 ? "PASS" : "FAIL"
+                }
+            };
 
-        public async Task<PharmacyValidationSummary?> GetFullSummaryByRunIdAsync(int runId)
-        {
-            try
+            return new PharmacyValidationSummary
             {
-                if (runId <= 0) return null;
-                await using var connection = await OpenSystemConnectionAsync();
-                await using var cmd = connection.CreateConfiguredCommand();
-                cmd.CommandText = "SELECT ResultsJSON FROM dbo.ValidationRuns WHERE RunID = @RunID;";
-                cmd.Parameters.AddWithValue("@RunID", runId);
-                var val = await cmd.ExecuteScalarAsync();
-                if (val == null || val == DBNull.Value) return null;
-                return JsonConvert.DeserializeObject<PharmacyValidationSummary>(ValidationPayloadCodec.Decode(val.ToString()!));
-            }
-            catch { return null; }
+                Success               = true,
+                PharmacyRecordCount   = srcCount,
+                ProductionRecordCount = prodCount,
+                TotalValidated        = total,
+                DisplayedCount        = rows.Count,
+                PassCount             = passed,
+                FailCount             = failed,
+                ExceptionRate         = rate,
+                Status                = overallStatus,
+                Timestamp             = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                PharmacyTable         = request.PharmacyTable,
+                ProductionTable       = request.ProductionTable,
+                QualificationColumn   = qualCol,
+                SurnameColumn         = surnameCol,
+                TableLinkageText      = $"{request.PharmacyTable}.{qualCol} <> {request.ProductionTable}.{qualCol}",
+                RuleModeText          = $"100% population testing of {request.PharmacyTable} against {request.ProductionTable}",
+                ProcedureSteps        = new List<string>
+                {
+                    $"Select all records from {request.PharmacyTable} where [{qualCol}] is not null/empty as the population to test.",
+                    $"For each record, check if a matching row exists in {request.ProductionTable} on [{qualCol}] (case-insensitive, trimmed).",
+                    "Mark PASS when the qualification code is found in Production; FAIL when it is missing.",
+                    "The matching Production surname (when found) is shown alongside the result for reference."
+                },
+                ClientId              = request.ClientId,
+                ControlSummaries      = controlSummaries,
+                ReviewRows            = rows,
+                Warning = total > rows.Count
+                    ? $"{total:N0} rows were found; only the first {rows.Count:N0} are stored to keep the app responsive. All totals above are exact."
+                    : null
+            };
         }
 
-        // ── Helpers ────────────────────────────────────────────────────────────
-
-        private static string BuildConnectionString(string server, string database, string driver) =>
-            $"Server={server};Database={database};Trusted_Connection=True;TrustServerCertificate=True;Encrypt=False;Connection Timeout=180;";
-
-        private static string BuildPopulationCountSql(string pharmTable, string prodTable, string qualCol) => $@"
-SELECT
-    COUNT(*) AS TotalTested,
-    SUM(CASE WHEN PQ.ProdQualification IS NOT NULL THEN 1 ELSE 0 END) AS MatchedCount,
-    SUM(CASE WHEN PQ.ProdQualification IS NULL THEN 1 ELSE 0 END) AS MissingCount
-FROM (
-    SELECT DISTINCT UPPER(LTRIM(RTRIM(CAST([{qualCol}] AS nvarchar(255))))) AS PharmQual
-    FROM [{pharmTable}]
-    WHERE [{qualCol}] IS NOT NULL AND [{qualCol}] <> ''
-) PH
-LEFT JOIN (
-    SELECT DISTINCT UPPER(LTRIM(RTRIM(CAST([{qualCol}] AS nvarchar(255))))) AS ProdQualification
-    FROM [{prodTable}]
-    WHERE [{qualCol}] IS NOT NULL AND [{qualCol}] <> ''
-) PQ ON PH.PharmQual = PQ.ProdQualification;";
-
-        private static async Task<int> CountAsync(SqlConnection conn, string sql)
+        private static void EnrichDisplayValues(PharmacyValidationRowRecord row)
         {
-            await using var cmd = conn.CreateConfiguredCommand();
-            cmd.CommandText = sql;
-            var result = await cmd.ExecuteScalarAsync();
-            return result is int count ? count : 0;
+            var v = row.DisplayValues;
+            var isPass = string.Equals(row.ValidationResult, "PASS", StringComparison.OrdinalIgnoreCase);
+            var qual = v.TryGetValue("SOURCE_QUAL", out var q) ? q ?? "" : "";
+            var surname = v.TryGetValue("SOURCE_SURNAME", out var s) ? s ?? "" : "";
+
+            v["FINAL_RESULT_MESSAGE"] = isPass
+                ? $"PASS: qualification '{qual}' (surname: {surname}) found in Production."
+                : $"FAIL: qualification '{qual}' (surname: {surname}) not found in Production.";
+            row.ValidationExplanation = v["FINAL_RESULT_MESSAGE"] ?? "";
         }
 
-        private static int GetInt(SqlDataReader reader, int ordinal) =>
-            reader.IsDBNull(ordinal) ? 0 : reader.GetInt32(ordinal);
-
-        private static string Sanitise(string? objectName)
+        private static PharmacyValidationSummary ApplyUiSample(PharmacyValidationSummary full)
         {
-            if (string.IsNullOrWhiteSpace(objectName)) return "";
-            var trimmed = objectName.Trim().Replace("'", "").Replace("\"", "");
-            return trimmed.Length > 128 ? trimmed[..128] : trimmed;
+            if (full.ReviewRows.Count <= UiSampleLimit) return full;
+            return new PharmacyValidationSummary
+            {
+                Success = full.Success, PharmacyRecordCount = full.PharmacyRecordCount, ProductionRecordCount = full.ProductionRecordCount,
+                TotalValidated = full.TotalValidated, DisplayedCount = full.DisplayedCount,
+                PassCount = full.PassCount, FailCount = full.FailCount, ExceptionRate = full.ExceptionRate,
+                Status = full.Status, Timestamp = full.Timestamp,
+                PharmacyTable = full.PharmacyTable, ProductionTable = full.ProductionTable,
+                QualificationColumn = full.QualificationColumn, SurnameColumn = full.SurnameColumn,
+                TableLinkageText = full.TableLinkageText, RuleModeText = full.RuleModeText,
+                ProcedureSteps = full.ProcedureSteps, ClientId = full.ClientId, SavedRunId = full.SavedRunId,
+                ControlSummaries = full.ControlSummaries,
+                ReviewRows = full.ReviewRows.Take(UiSampleLimit).ToList(),
+                Warning = "Showing preview (first 10 rows) — see stat cards above for full counts. Download for full results."
+            };
         }
 
-        private static void ValidateObjectName(string? name)
+        // ─── SQL Builders ────────────────────────────────────────────────────────
+
+        private static string BuildValidationCtes(string schema, string pharmacyTable, string productionTable, string qualCol, string surnameCol)
         {
-            if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("Object name cannot be empty.");
-            if (name.Length > 128) throw new ArgumentException("Object name cannot exceed 128 characters.");
+            var srcTable = Sanitise(pharmacyTable);
+            var prodTable = Sanitise(productionTable);
+
+            return $@"
+results AS (
+    SELECT
+        TRIM(CAST(ph.""{qualCol}"" AS text)) AS source_qual,
+        TRIM(CAST(ph.""{surnameCol}"" AS text)) AS source_surname,
+        (
+            SELECT TRIM(CAST(p.""{surnameCol}"" AS text))
+            FROM ""{schema}"".""{prodTable}"" p
+            WHERE UPPER(TRIM(CAST(p.""{qualCol}"" AS text))) = UPPER(TRIM(CAST(ph.""{qualCol}"" AS text)))
+            LIMIT 1
+        ) AS matched_surname,
+        CASE
+            WHEN EXISTS (
+                SELECT 1 FROM ""{schema}"".""{prodTable}"" p
+                WHERE UPPER(TRIM(CAST(p.""{qualCol}"" AS text))) = UPPER(TRIM(CAST(ph.""{qualCol}"" AS text)))
+            ) THEN 'PASS' ELSE 'FAIL'
+        END AS validation_result
+    FROM ""{schema}"".""{srcTable}"" ph
+    WHERE ph.""{qualCol}"" IS NOT NULL AND TRIM(CAST(ph.""{qualCol}"" AS text)) <> ''
+)";
         }
 
-        private static void ValidateRequest(PharmacyVerifyRequest r)
+        public string GenerateSql(PharmacyValidationRequest request)
         {
-            if (string.IsNullOrWhiteSpace(r.Server)) throw new ArgumentException("Server must be specified.");
-            if (string.IsNullOrWhiteSpace(r.Database)) throw new ArgumentException("Database must be specified.");
-            if (string.IsNullOrWhiteSpace(r.PharmacyTable)) throw new ArgumentException("Pharmacy table must be specified.");
-            if (string.IsNullOrWhiteSpace(r.ProductionTable)) throw new ArgumentException("Production table must be specified.");
+            var qualCol = Sanitise(request.QualificationColumn);
+            var surnameCol = Sanitise(request.SurnameColumn);
+            var ctes = BuildValidationCtes("{schema}", request.PharmacyTable, request.ProductionTable, qualCol, surnameCol);
+
+            return $@"-- ============================================================
+-- HEMIS RULE 72 - Pharmacy Qualification & Surname Validation
+-- Generated : {DateTime.Now:yyyy-MM-dd HH:mm:ss}
+-- Source    : this engagement's own uploaded tables (schema engagement_{{ClientId}}), not a live SQL Server.
+-- Check     : all {Sanitise(request.PharmacyTable)}.[{qualCol}] values must exist in {Sanitise(request.ProductionTable)}.[{qualCol}]
+-- ============================================================
+WITH {ctes}
+SELECT * FROM results
+ORDER BY CASE WHEN validation_result = 'FAIL' THEN 0 ELSE 1 END, source_qual;".Trim();
         }
 
-        private static void ValidateRequest(PharmacyValidationRequest r)
-        {
-            if (string.IsNullOrWhiteSpace(r.Server)) throw new ArgumentException("Server must be specified.");
-            if (string.IsNullOrWhiteSpace(r.Database)) throw new ArgumentException("Database must be specified.");
-            if (string.IsNullOrWhiteSpace(r.PharmacyTable)) throw new ArgumentException("Pharmacy table must be specified.");
-            if (string.IsNullOrWhiteSpace(r.ProductionTable)) throw new ArgumentException("Production table must be specified.");
-        }
-
-        private static string? FindFirst(List<string> items, string[] preferred, string[] contains)
-        {
-            foreach (var p in preferred)
-                if (items.Any(i => i.Equals(p, StringComparison.OrdinalIgnoreCase)))
-                    return items.First(i => i.Equals(p, StringComparison.OrdinalIgnoreCase));
-            foreach (var c in contains)
-                if (items.Any(i => i.Contains(c, StringComparison.OrdinalIgnoreCase)))
-                    return items.First(i => i.Contains(c, StringComparison.OrdinalIgnoreCase));
-            return null;
-        }
-
-        private static PharmacyValidationSummary CloneSummary(PharmacyValidationSummary s) =>
-            JsonConvert.DeserializeObject<PharmacyValidationSummary>(JsonConvert.SerializeObject(s)) ?? new();
-
-        private static PharmacyValidationRequest CloneRequest(PharmacyValidationRequest r) =>
-            JsonConvert.DeserializeObject<PharmacyValidationRequest>(JsonConvert.SerializeObject(r)) ?? new();
+        // ─── Save / Load ───────────────────────────────────────────────────────
 
         private async Task<int> SaveValidationRunAsync(PharmacyValidationRequest request, PharmacyValidationSummary summary, string? userEmail, string? userName)
         {
-            await using var connection = await OpenSystemConnectionAsync();
-            await EnsureClientNotArchivedAsync(connection, request.ClientId);
-            await MarkPreviousRunsHistoricalAsync(connection, request.ClientId, 72);
+            await _systemDb.EnsureClientNotArchivedAsync(request.ClientId);
+            await _systemDb.MarkPreviousRuleRunsHistoricalAsync(request.ClientId, 72);
 
-            var systemUserId = await GetSystemUserIdByEmailAsync(connection, userEmail);
-            if (!systemUserId.HasValue)
-                throw new InvalidOperationException("The current analyst could not be resolved in the system database.");
-
-            var previousHash = await GetLatestValidationHashAsync(connection, request.ClientId, 72);
-
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"
-INSERT INTO dbo.ValidationRuns
-(ClientID, UserID, RuleNumber, RuleName, Status, TotalRecords, PassCount, FailCount, ExceptionRate, RunTimestamp,
- HemisServer, AuditDatabase, StudTable, DeceasedTable, StudColumn, DeceasedColumn,
- ExceptionsJSON, ResultsJSON, RunByUserName, LastEditedByUserName, LastEditedAt, PreviousHash, RecordHash, IsCurrent)
-VALUES
-(@ClientID, @UserID, 72, @RuleName, @Status, @TotalRecords, @PassCount, @FailCount, @ExceptionRate, GETDATE(),
- @HemisServer, @AuditDatabase, @StudTable, @DeceasedTable, @StudColumn, @DeceasedColumn,
- @ExceptionsJSON, @ResultsJSON, @RunByUserName, NULL, NULL, @PreviousHash, NULL, 1);
-SELECT CAST(SCOPE_IDENTITY() AS int);";
-            command.Parameters.AddWithValue("@ClientID", request.ClientId);
-            command.Parameters.AddWithValue("@UserID", systemUserId.Value);
-            command.Parameters.AddWithValue("@RuleName", "Pharmacy Qualification Validation");
-            command.Parameters.AddWithValue("@Status", summary.Status ?? "");
-            command.Parameters.AddWithValue("@TotalRecords", summary.TotalValidated);
-            command.Parameters.AddWithValue("@PassCount", summary.PassCount);
-            command.Parameters.AddWithValue("@FailCount", summary.FailCount);
-            command.Parameters.AddWithValue("@ExceptionRate", summary.ExceptionRate);
-            command.Parameters.AddWithValue("@HemisServer", request.Server);
-            command.Parameters.AddWithValue("@AuditDatabase", request.Database);
-            command.Parameters.AddWithValue("@StudTable", request.PharmacyTable);
-            command.Parameters.AddWithValue("@DeceasedTable", request.ProductionTable);
-            command.Parameters.AddWithValue("@StudColumn", request.QualificationColumn);
-            command.Parameters.AddWithValue("@DeceasedColumn", request.SurnameColumn);
-            command.Parameters.AddWithValue("@ExceptionsJSON", ValidationPayloadCodec.Encode(
-                JsonConvert.SerializeObject(summary.ReviewRows.Where(r => r.Status == "FAIL").ToList())));
-            command.Parameters.AddWithValue("@ResultsJSON", ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary)));
-            command.Parameters.AddWithValue("@RunByUserName", (object?)userName ?? DBNull.Value);
-            command.Parameters.AddWithValue("@PreviousHash", (object?)previousHash ?? DBNull.Value);
-
-            var value = await command.ExecuteScalarAsync();
-            var runId = Convert.ToInt32(value);
-
-            await using var hashCommand = connection.CreateConfiguredCommand();
-            hashCommand.CommandText = "UPDATE dbo.ValidationRuns SET RecordHash = @RecordHash WHERE RunID = @RunID;";
-            hashCommand.Parameters.AddWithValue("@RunID", runId);
-            hashCommand.Parameters.AddWithValue("@RecordHash", ComputeHash(
-                $"Pharmacy|{runId}|{request.ClientId}|{systemUserId.Value}|{summary.Status}|{summary.TotalValidated}|{summary.PassCount}|{summary.FailCount}|{summary.ExceptionRate}|{previousHash}"));
-            await hashCommand.ExecuteNonQueryAsync();
+            var runId = await _systemDb.SaveValidationRunAsync(new SaveValidationRunRequest
+            {
+                ClientId = request.ClientId,
+                RuleNumber = 72,
+                RuleName = "Pharmacy Qualification & Surname Validation",
+                Status = summary.Status,
+                TotalRecords = summary.TotalValidated,
+                PassCount = summary.PassCount,
+                FailCount = summary.FailCount,
+                ExceptionRate = summary.ExceptionRate,
+                StudTable = request.PharmacyTable,
+                DeceasedTable = request.ProductionTable,
+                StudColumn = request.QualificationColumn,
+                DeceasedColumn = request.SurnameColumn,
+                ExceptionsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(
+                    summary.ReviewRows.Where(r => string.Equals(r.ValidationResult, "FAIL", StringComparison.OrdinalIgnoreCase)).ToList())),
+                ResultsJSON = ValidationPayloadCodec.Encode(JsonConvert.SerializeObject(summary))
+            }, userEmail, userName);
 
             return runId;
         }
 
-        private async Task<SqlConnection> OpenSystemConnectionAsync()
+        public async Task<int?> GetClientIdForRunAsync(int runId) => await _systemDb.GetClientIdForRunAsync(runId);
+
+        public async Task<PharmacyValidationSummary?> GetStoredSummaryAsync(int runId)
         {
-            var server = _configuration["SystemDatabase:Server"] ?? @"(localdb)\MSSQLLocalDB";
-            var database = _configuration["SystemDatabase:Name"] ?? "HEMISBaseSystem";
-            var trust = _configuration.GetValue("SystemDatabase:TrustServerCertificate", true);
-            var builder = new SqlConnectionStringBuilder
+            var row = await _systemDb.GetRuleRunByIdAsync(runId, 72);
+            if (row == null) return null;
+            var summary = DeserializeSummary(row.ResultsJSON);
+            if (summary != null) summary.SavedRunId = runId;
+            return summary;
+        }
+
+        public async Task<PharmacyWorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null)
+        {
+            var row = await _systemDb.GetCurrentRuleRunAsync(clientId, 72);
+            if (row == null) return null;
+
+            var summary = DeserializeSummary(row.ResultsJSON);
+            if (summary != null) summary = ApplyUiSample(summary);
+
+            var workspace = new PharmacyWorkspaceStateViewModel
             {
-                DataSource = server, InitialCatalog = database, IntegratedSecurity = true,
-                TrustServerCertificate = trust, Encrypt = false, ConnectTimeout = 180
+                ClientId = row.ClientId,
+                RunId = row.RunId,
+                PharmacyTable = string.IsNullOrWhiteSpace(row.StudTable) ? "Pharmacy" : row.StudTable,
+                ProductionTable = string.IsNullOrWhiteSpace(row.DeceasedTable) ? "Clinical_Production" : row.DeceasedTable,
+                QualificationColumn = string.IsNullOrWhiteSpace(row.StudColumn) ? "QUALIFICATION" : row.StudColumn,
+                SurnameColumn = string.IsNullOrWhiteSpace(row.DeceasedColumn) ? "Surname" : row.DeceasedColumn,
+                CurrentStatus = row.Status,
+                LastEditedByUserName = row.LastEditedByUserName,
+                LastEditedAt = row.LastEditedAt,
+                Summary = summary
             };
-            var connection = new SqlConnection(builder.ConnectionString);
+
+            if (summary != null) workspace.CurrentStatus = summary.Status;
+
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            workspace.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(clientId, currentUser.Id) ?? ""
+                : "";
+
+            var signoffs = await _systemDb.GetRuleRunSignoffsAsync(workspace.RunId!.Value, currentUser?.Id);
+            workspace.HasDataAnalystSignoff = signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+            var mySignoff = signoffs.FirstOrDefault(s => ValidationRunAccessPolicy.IsSignoffOwnedByEngagementRole(s.SignoffRole, workspace.CurrentUserEngagementRole));
+            workspace.CurrentUserHasSignedOff = mySignoff != null;
+            workspace.CurrentUserSignoffComment = mySignoff?.Comment ?? "";
+            workspace.IsWorkspaceSaved = await _systemDb.IsWorkspaceSavedAsync(workspace.RunId!.Value);
+
+            if (workspace.Summary != null) workspace.Summary.SavedRunId = workspace.RunId;
+            return workspace;
+        }
+
+        public async Task<PharmacyRunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null)
+        {
+            var row = await _systemDb.GetRuleRunByIdAsync(runId, 72);
+            if (row == null) return null;
+
+            var summary = DeserializeSummary(row.ResultsJSON);
+            if (summary == null) return null;
+            summary = ApplyUiSample(summary);
+            summary.SavedRunId = runId;
+
+            var viewModel = new PharmacyRunReviewViewModel
+            {
+                RunId = row.RunId,
+                ClientId = row.ClientId,
+                IsCurrentRun = row.IsCurrent,
+                EngagementName = row.EngagementName,
+                MaconomyNumber = row.MaconomyNumber,
+                Summary = summary
+            };
+
+            var currentUser = string.IsNullOrWhiteSpace(currentUserEmail) ? null : await _userManager.FindByEmailAsync(currentUserEmail);
+            viewModel.CurrentUserEngagementRole = currentUser != null
+                ? await _systemDb.GetRawEngagementRoleAsync(viewModel.ClientId, currentUser.Id) ?? ""
+                : "";
+            viewModel.Signoffs = await _systemDb.GetRuleRunSignoffsAsync(runId, currentUser?.Id);
+            viewModel.HasDataAnalystSignoff = viewModel.Signoffs.Any(s => string.Equals(s.SignoffRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
+            viewModel.GeneratedSql = GenerateSql(new PharmacyValidationRequest
+            {
+                ClientId = viewModel.ClientId,
+                PharmacyTable = summary.PharmacyTable,
+                ProductionTable = summary.ProductionTable,
+                QualificationColumn = summary.QualificationColumn,
+                SurnameColumn = summary.SurnameColumn
+            });
+
+            return viewModel;
+        }
+
+        public async Task<PharmacyWorkspaceSaveResult> SaveWorkspaceAsync(PharmacyValidationRequest request, string reviewerEmail, string? reviewerName = null)
+        {
+            try
+            {
+                if (request.RunId is null || request.RunId <= 0)
+                    return new PharmacyWorkspaceSaveResult { Success = false, Error = "Run the validation first." };
+
+                var clientId = await _systemDb.GetClientIdForRunAsync(request.RunId.Value);
+                if (!clientId.HasValue || clientId.Value != request.ClientId)
+                    return new PharmacyWorkspaceSaveResult { Success = false, Error = "The saved run could not be found for this engagement." };
+
+                await _systemDb.EnsureClientNotArchivedAsync(request.ClientId);
+                var cleared = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(request.RunId.Value);
+
+                await _systemDb.SaveRuleWorkspaceFieldsAsync(new SaveRuleWorkspaceFieldsRequest
+                {
+                    RunId = request.RunId.Value,
+                    ClientId = request.ClientId,
+                    StudTable = request.PharmacyTable,
+                    DeceasedTable = request.ProductionTable,
+                    StudColumn = request.QualificationColumn,
+                    DeceasedColumn = request.SurnameColumn
+                }, reviewerName ?? reviewerEmail);
+
+                var workspace = await GetCurrentWorkspaceStateAsync(request.ClientId, reviewerEmail);
+                return new PharmacyWorkspaceSaveResult
+                {
+                    Success = true,
+                    Message = cleared > 0 ? $"Workspace saved. {cleared} signoff(s) were cleared." : "Workspace saved.",
+                    SignoffsCleared = cleared > 0,
+                    ClearedSignoffCount = cleared,
+                    Workspace = workspace
+                };
+            }
+            catch (Exception ex) { return new PharmacyWorkspaceSaveResult { Success = false, Error = ex.Message }; }
+        }
+
+        public async Task<PharmacyWorkspaceSaveResult> BeginWorkspaceEditAsync(int runId, string reviewerEmail, string? reviewerName = null)
+        {
+            try
+            {
+                var clientId = await _systemDb.GetClientIdForRunAsync(runId);
+                if (!clientId.HasValue)
+                    return new PharmacyWorkspaceSaveResult { Success = false, Error = "Saved run not found." };
+
+                await _systemDb.EnsureClientNotArchivedAsync(clientId.Value);
+                var cleared = await _systemDb.ClearRuleSignoffsAndFlagForReviewAsync(runId);
+                await _systemDb.MarkRuleWorkspaceEditStartedAsync(runId, reviewerName ?? reviewerEmail);
+
+                var workspace = await GetCurrentWorkspaceStateAsync(clientId.Value, reviewerEmail);
+                return new PharmacyWorkspaceSaveResult
+                {
+                    Success = true,
+                    Message = cleared > 0 ? $"Workspace unlocked for editing. {cleared} signoff(s) cleared." : "Workspace unlocked for editing.",
+                    SignoffsCleared = cleared > 0,
+                    ClearedSignoffCount = cleared,
+                    Workspace = workspace
+                };
+            }
+            catch (Exception ex) { return new PharmacyWorkspaceSaveResult { Success = false, Error = ex.Message }; }
+        }
+
+        public async Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment)
+        {
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
+                ?? throw new InvalidOperationException("Your account could not be resolved in the system database.");
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
+                ?? throw new InvalidOperationException("Validation run not found.");
+
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
+
+            if (!await _systemDb.RuleWorkspaceReadyForSignoffAsync(runId))
+                throw new InvalidOperationException("The data analyst must save the workspace before signoff is available.");
+
+            var role = await _systemDb.GetRawEngagementRoleAsync(clientId, reviewer.Id);
+            if (!CanSignOffAsRole(role))
+                throw new InvalidOperationException("Only assigned data analysts, managers, and directors can sign off.");
+
+            if (!string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) &&
+                !await _systemDb.HasRuleSignoffRoleAsync(runId, "DataAnalyst"))
+                throw new InvalidOperationException("The assigned data analyst must sign off first.");
+
+            await _systemDb.AddOrUpdateRuleSignoffAsync(runId, clientId, reviewer.Id, role!, comment);
+        }
+
+        public async Task RemoveSignoffAsync(int runId, string reviewerEmail)
+        {
+            var reviewer = await _userManager.FindByEmailAsync(reviewerEmail)
+                ?? throw new InvalidOperationException("Your account could not be resolved.");
+            var clientId = await _systemDb.GetClientIdForRunAsync(runId)
+                ?? throw new InvalidOperationException("Validation run not found.");
+
+            await _systemDb.EnsureClientNotArchivedAsync(clientId);
+            await _systemDb.RemoveRuleSignoffByReviewerAsync(runId, reviewer.Id);
+        }
+
+        // ─── Utilities ─────────────────────────────────────────────────────────
+
+        private static string Sanitise(string name) => name.Replace("\"", "").Replace("'", "").Replace(";", "").Trim();
+
+        private static string? GetString(System.Data.Common.DbDataReader reader, int ordinal)
+        {
+            if (reader.IsDBNull(ordinal)) return null;
+            var value = Convert.ToString(reader.GetValue(ordinal));
+            return string.IsNullOrEmpty(value) ? null : value;
+        }
+
+        private static async Task<int> CountAsync(NpgsqlConnection conn, string sql)
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
+        private async Task ValidateColumnsExistAsync(int clientId, string tableName, IEnumerable<string> requiredColumns)
+        {
+            var actual = await _datasets.GetValidatedColumnsAsync(clientId, tableName);
+            var missing = requiredColumns.Where(c => !string.IsNullOrWhiteSpace(c) && !actual.Contains(c, StringComparer.OrdinalIgnoreCase)).Distinct().ToList();
+            if (missing.Count > 0)
+                throw new InvalidOperationException(
+                    $"Column(s) {string.Join(", ", missing.Select(m => $"\"{m}\""))} were not found in table \"{tableName}\". " +
+                    "Update the column mapping to match your uploaded data, then run again.");
+        }
+
+        private static string? FindFirst(IEnumerable<string> values, string[] exactMatches, string[] containsMatches)
+        {
+            foreach (var exact in exactMatches)
+            {
+                var m = values.FirstOrDefault(v => string.Equals(v, exact, StringComparison.OrdinalIgnoreCase));
+                if (m != null) return m;
+            }
+            foreach (var fragment in containsMatches)
+            {
+                var m = values.FirstOrDefault(v => v.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0);
+                if (m != null) return m;
+            }
+            return null;
+        }
+
+        private static PharmacyValidationSummary? DeserializeSummary(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return null;
+            try { return JsonConvert.DeserializeObject<PharmacyValidationSummary>(ValidationPayloadCodec.Decode(json)); }
+            catch { return null; }
+        }
+
+        private static bool CanSignOffAsRole(string? role) =>
+            string.Equals(role, "DataAnalyst", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(role, "Manager", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(role, "Director", StringComparison.OrdinalIgnoreCase);
+
+        private async Task<(NpgsqlConnection Connection, string Schema)> OpenEngagementConnectionAsync(int clientId)
+        {
+            var database = await _datasets.GetDatabaseAsync(clientId)
+                ?? throw new InvalidOperationException("Create a database for this engagement before running this rule.");
+
+            var connectionString = HemisAudit.Data.PostgresConnectionStringHelper.WithResiliencyDefaults(
+                _configuration.GetConnectionString("Postgres")
+                    ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured."),
+                commandTimeoutSeconds: 0);
+
+            var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();
-            return connection;
-        }
-
-        private static async Task<int?> GetSystemUserIdByEmailAsync(SqlConnection connection, string? email)
-        {
-            if (string.IsNullOrWhiteSpace(email)) return null;
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 UserID FROM dbo.Users WHERE Email = @Email;";
-            command.Parameters.AddWithValue("@Email", email);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToInt32(value);
-        }
-
-        private static async Task EnsureClientNotArchivedAsync(SqlConnection connection, int clientId)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = "SELECT TOP 1 Status FROM dbo.Clients WHERE ClientID = @ClientID;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            var status = Convert.ToString(await command.ExecuteScalarAsync());
-            if (string.Equals(status, "Archived", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Archived engagements are read-only.");
-        }
-
-        private static async Task MarkPreviousRunsHistoricalAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"UPDATE dbo.ValidationRuns SET IsCurrent = 0
-WHERE ClientID = @ClientID AND RuleNumber = @RuleNumber AND IsCurrent = 1;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            await command.ExecuteNonQueryAsync();
-        }
-
-        private static async Task<string?> GetLatestValidationHashAsync(SqlConnection connection, int clientId, int ruleNumber)
-        {
-            await using var command = connection.CreateConfiguredCommand();
-            command.CommandText = @"SELECT TOP 1 RecordHash FROM dbo.ValidationRuns
-WHERE ClientID = @ClientID AND RuleNumber = @RuleNumber AND RecordHash IS NOT NULL
-ORDER BY RunTimestamp DESC, RunID DESC;";
-            command.Parameters.AddWithValue("@ClientID", clientId);
-            command.Parameters.AddWithValue("@RuleNumber", ruleNumber);
-            var value = await command.ExecuteScalarAsync();
-            return value == null || value == DBNull.Value ? null : Convert.ToString(value);
-        }
-
-        public async Task AddOrUpdateSignoffAsync(int runId, string email, string comment)
-        {
-            await using var connection = await OpenSystemConnectionAsync();
-            var clientId = await QualSurnameModuleHelper.GetClientIdForRunAsync(connection, runId)
-                ?? throw new InvalidOperationException("Validation run was not found.");
-            var userId = await GetSystemUserIdByEmailAsync(connection, email)
-                ?? throw new InvalidOperationException("Reviewer could not be resolved in the system database.");
-            var role = await QualSurnameModuleHelper.GetEngagementRoleAsync(connection, clientId, userId)
-                ?? throw new InvalidOperationException("User is not assigned to this engagement.");
-            await QualSurnameModuleHelper.AddOrUpdateSignoffAsync(connection, runId, clientId, userId, role, comment);
-        }
-
-        public async Task RemoveSignoffAsync(int runId, string email)
-        {
-            await using var connection = await OpenSystemConnectionAsync();
-            var clientId = await QualSurnameModuleHelper.GetClientIdForRunAsync(connection, runId)
-                ?? throw new InvalidOperationException("Validation run was not found.");
-            var userId = await GetSystemUserIdByEmailAsync(connection, email)
-                ?? throw new InvalidOperationException("Reviewer could not be resolved in the system database.");
-            var role = await QualSurnameModuleHelper.GetEngagementRoleAsync(connection, clientId, userId)
-                ?? throw new InvalidOperationException("User is not assigned to this engagement.");
-            await QualSurnameModuleHelper.RemoveSignoffAsync(connection, runId, role);
-        }
-
-        private static string ComputeHash(string input)
-        {
-            using var sha = SHA256.Create();
-            return Convert.ToHexString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(input)));
+            await using (var setTimeout = connection.CreateCommand())
+            {
+                setTimeout.CommandText = "SET statement_timeout = 0;";
+                await setTimeout.ExecuteNonQueryAsync();
+            }
+            var schema = string.IsNullOrWhiteSpace(database.SchemaName) ? $"engagement_{clientId}" : database.SchemaName;
+            return (connection, schema);
         }
     }
 }

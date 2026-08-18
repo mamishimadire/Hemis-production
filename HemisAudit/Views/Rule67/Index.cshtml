@@ -1,55 +1,16 @@
 @using HemisAudit.Models
-@using HemisAudit.ViewModels
 @{
     ViewData["Title"] = "Rule 67 - CREG-STUD Pair Validation";
     Layout = "~/Views/Shared/_Layout.cshtml";
     var clients = ViewBag.Clients as List<Client> ?? new();
-    var selectedClientId = ViewBag.ClientId is int currentClientId ? currentClientId : 0;
+    var selectedClientId = ViewBag.ClientId is int cid ? cid : 0;
     var currentSystemRole = ViewBag.CurrentSystemRole as string ?? "";
     var isResultsOnlyRole =
         string.Equals(currentSystemRole, "Manager", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(currentSystemRole, "Director", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(currentSystemRole, "Trainee", StringComparison.OrdinalIgnoreCase);
-    var moduleNavigation = ViewBag.ModuleNavigation as ModuleSequenceNavigationViewModel;
+    var moduleNavigation = ViewBag.ModuleNavigation as HemisAudit.ViewModels.ModuleSequenceNavigationViewModel;
 }
-
-<style>
-    .R67-results-wrap { display:grid; gap:24px; }
-    .R67-table-wrap { overflow-x:auto; border:1px solid var(--rule15-table-border); border-radius:14px; background:var(--rule15-card-alt); }
-    .R67-grid { width:100%; min-width:700px; border-collapse:collapse; table-layout:fixed; }
-    .R67-grid th, .R67-grid td { border:1px solid var(--rule15-table-border); padding:8px 10px; text-align:left; white-space:normal; word-break:normal; overflow-wrap:anywhere; vertical-align:top; font-family:Consolas,"Courier New",monospace; font-size:12px; color:var(--text); }
-    .R67-grid .group-creg   { background:var(--rule15-group-bridge); }
-    .R67-grid .group-stud   { background:var(--rule15-group-stud); }
-    .R67-grid .group-final  { background:var(--rule15-group-final); }
-    .R67-grid .is-pass { color:var(--rule15-pass); font-weight:800; }
-    .R67-grid .is-fail { color:var(--rule15-fail); font-weight:800; }
-    .R67-grid .result-text  { font-weight:800; margin-bottom:4px; display:block; }
-    .R67-grid .message-text { display:block; }
-    .R67-filterbar { display:flex; gap:12px; flex-wrap:wrap; align-items:end; margin-bottom:18px; }
-    .R67-filterbar label { font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:6px; }
-    .R67-summary-grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); }
-    .R67-cat-tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:4px; }
-    .R67-cat-tab { padding:7px 14px; border-radius:20px; border:2px solid var(--border,#ddd); background:var(--card-bg,#fff); color:var(--text,#333); font-size:12px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:6px; transition:background .15s,border-color .15s; }
-    .R67-cat-tab:hover { border-color:var(--primary,#1a237e); color:var(--primary,#1a237e); }
-    .R67-cat-tab.active { background:var(--primary,#1a237e); border-color:var(--primary,#1a237e); color:#fff; }
-    .R67-cat-tab[data-cat="PASS"].active         { background:#1b5e20; border-color:#1b5e20; }
-    .R67-cat-tab[data-cat="NOT_IN_STUD"].active  { background:#b71c1c; border-color:#b71c1c; }
-    .R67-cat-tab[data-cat="NOT_IN_STUD_E051_YES"].active  { background:#c62828; border-color:#c62828; }
-    .R67-cat-tab[data-cat="NOT_IN_STUD_E051_NO"].active   { background:#ad1457; border-color:#ad1457; }
-    .R67-cat-tab[data-cat="E051_INVALID"].active { background:#e65100; border-color:#e65100; }
-    .R67-cat-tab[data-cat="CONFIRMED"].active         { background:#2e7d32; border-color:#2e7d32; }
-    .R67-cat-tab[data-cat="NOT_CONFIRMED"].active     { background:#f57f17; border-color:#f57f17; }
-    .R67-cat-tab[data-cat="RULE29_ONLY"].active       { background:#880e4f; border-color:#880e4f; }
-    .R67-cat-tab[data-cat="RULE29_CONFIRMED"].active    { background:#1565c0; border-color:#1565c0; }
-    .R67-cat-tab[data-cat="RULE29_NOT_CONFIRMED"].active{ background:#6a1b9a; border-color:#6a1b9a; }
-    .R67-cat-tab[data-cat="RULE29_NOT_IN_CREG"].active  { background:#b71c1c; border-color:#b71c1c; }
-    .R67-cat-count { background:rgba(255,255,255,.25); border-radius:10px; padding:1px 7px; font-size:11px; font-weight:700; }
-    .R67-cat-tab:not(.active) .R67-cat-count { background:var(--border,#e5e7eb); color:var(--text-muted,#666); }
-    .R67-recon { display:inline-block; border-radius:10px; padding:2px 8px; font-size:11px; font-weight:700; white-space:nowrap; }
-    .R67-recon--confirmed    { background:#e8f5e9; color:#2e7d32; border:1px solid #a5d6a7; }
-    .R67-recon--notconfirmed { background:#fff8e1; color:#e65100; border:1px solid #ffcc80; }
-    .R67-recon--only         { background:#fce4ec; color:#880e4f; border:1px solid #f48fb1; }
-</style>
 
 <div id="app" class="rule-page-shell">
     @if (moduleNavigation != null)
@@ -60,7 +21,7 @@
     <div class="engagement-selector">
         <label for="clientId">Engagement</label>
         <select id="clientId">
-            <option value="">Select engagement (results saved here)</option>
+            <option value="">Select engagement</option>
             @foreach (var client in clients)
             {
                 <option value="@client.Id" selected="@(client.Id == selectedClientId ? "selected" : null)">
@@ -68,14 +29,17 @@
                 </option>
             }
         </select>
-        <small>Rule 67 checks that every <code>CREG._007 + _001</code> pair exists in <code>STUD._007 + _001</code> and that <code>CREG._051</code> matches the E051 filter.</small>
     </div>
 
     <div class="rule-header">
         <div class="rule-header__icon">R67</div>
         <div>
-            <h1 class="rule-header__title">HEMIS Rule 67: CREG-STUD Pair Validation</h1>
-            <p class="rule-header__sub">Every <code>CREG._007 + _001</code> (student number + qualification code) pair must exist in <code>STUD</code> and <code>CREG._051</code> must match the E051 filter. Exception code <strong>00708</strong> when the pair is missing from STUD or E051 is not in the expected values.</p>
+            <h1 class="rule-header__title">HEMIS RULE 67: CREG-STUD Pair Validation</h1>
+            <p class="rule-header__sub">
+                Rule 67 checks that every distinct <code>CREG._007 + _001</code> (student number + qualification code) pair
+                exists in <code>STUD</code>, and that <code>CREG._051</code> matches a configurable filter. A student missing
+                from STUD entirely is flagged as a ghost student. Exception code <strong>00708</strong> applies on FAIL.
+            </p>
         </div>
         <div class="rule-header__badge" id="statusBadge" style="display:none"></div>
     </div>
@@ -85,25 +49,14 @@
         <div class="accordion-stack">
             <div class="accordion-item">
                 <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
-                    <span class="acc-icon">DB</span><span>Database Connection</span><span class="acc-chevron">v</span>
+                    <span class="acc-icon">DB</span><span>Engagement Dataset</span><span class="acc-chevron">v</span>
                 </button>
                 <div class="accordion-body" id="body-connection">
-                    <div class="form-grid">
-                        <div class="field-group"><label for="server">Server Name</label><input id="server" type="text" placeholder="e.g. MYSERVER\INSTANCE" /></div>
-                        <div class="field-group">
-                            <label for="driver">Driver</label>
-                            <select id="driver">
-                                <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                                <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                                <option value="SQL Server">SQL Server</option>
-                            </select>
-                        </div>
-                        <div class="field-group"><label for="database">Database</label><select id="database"></select></div>
+                    <div id="connectionOutput" class="status-output"><div class="alert alert--info">Select an engagement above to load its uploaded tables.</div></div>
+                    <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
+                        <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                        <button type="button" class="btn btn-primary" id="refreshTablesBtn">Refresh Tables</button>
                     </div>
-                    <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                        <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
-                    </div>
-                    <div id="connectionOutput" class="status-output"></div>
                 </div>
             </div>
 
@@ -113,50 +66,94 @@
                 </button>
                 <div class="accordion-body" id="body-config" style="display:none">
                     <div class="info-box info-box--red">
-                        <strong>Rule 67 Logic:</strong><br />
-                        From <strong>CREG</strong>, take each distinct <code>_007</code> (student no) + <code>_001</code> (qualification code) + <code>_051</code> (E051 code) combination.<br />
-                        Check if the <code>_007 + _001</code> pair exists in <strong>STUD</strong>. Also check that <code>_051</code> is in the E051 filter values (default: <code>E</code>).<br />
-                        <strong>PASS</strong> when pair is found in STUD AND E051 matches. <strong>FAIL (00708)</strong> otherwise.<br />
-                        Multiple E051 values are supported — e.g. <code>E,N,G</code>. Leave blank to skip the E051 check.
+                        <strong>Audit Logic:</strong><br />
+                        <span>Population: distinct CREG student+qualification pairs.</span><br />
+                        <span>PASS when the pair is found in STUD and E051 matches the filter.</span><br />
+                        <span>FAIL when the pair is missing from STUD, or E051 doesn't match (exception 00708).</span><br />
+                        <span>Optional: cross-reference FAIL results against a Rule 29 detail table to confirm findings.</span>
                     </div>
                     <div class="form-grid">
-                        <div class="field-group"><label for="cregTable">CREG Table (source)</label><select id="cregTable"></select></div>
-                        <div class="field-group"><label for="studTable">STUD Table (lookup)</label><select id="studTable"></select></div>
-                    </div>
-                    <div class="form-grid" style="margin-top:12px">
-                        <div class="field-group"><label>CREG Student No Column <small>(_007)</small></label><select id="cregStudentNoCol"><option value="_007">_007</option></select></div>
-                        <div class="field-group"><label>CREG Qualification Column <small>(_001)</small></label><select id="cregQualCol"><option value="_001">_001</option></select></div>
-                        <div class="field-group"><label>CREG E051 Column <small>(_051)</small></label><select id="cregE051Col"><option value="_051">_051</option></select></div>
-                    </div>
-                    <div class="form-grid" style="margin-top:12px">
-                        <div class="field-group"><label>STUD Student No Column <small>(_007)</small></label><select id="studStudentNoCol"><option value="_007">_007</option></select></div>
-                        <div class="field-group"><label>STUD Qualification Column <small>(_001)</small></label><select id="studQualCol"><option value="_001">_001</option></select></div>
-                        <div class="field-group"><label for="e051FilterValues">E051 Filter Values <small>(comma separated, e.g. E,N,G)</small></label><input id="e051FilterValues" type="text" value="E" placeholder="e.g. E,N,G" /></div>
-                        <div class="field-group"><label for="detailTable">Rule 29 Detail Table <small>(for reconciliation — select none to skip)</small></label><select id="detailTable"><option value="">(none — skip reconciliation)</option></select></div>
-                        <div class="field-group"><label for="detailErrorCode">Detail Error Code(s) <small>(comma separated, e.g. 00708,00159 — leading zeros ignored)</small></label><input id="detailErrorCode" type="text" value="00708" placeholder="e.g. 00708,00159" /></div>
-                        <div class="field-group"><label for="detailErrorCol">Detail Error Column <small>(column in detail table holding the error code)</small></label><select id="detailErrorCol"><option value="Error">Error</option></select></div>
-                        <div class="field-group"><label for="detailElementInfoCol">Detail Element Info Column <small>(column holding E007: StudentNo E001: QualCode)</small></label><select id="detailElementInfoCol"><option value="Element_Information">Element_Information</option></select></div>
-                    </div>
-                    <div class="action-bar" style="justify-content:flex-start;margin:10px 0 0">
-                        <button type="button" class="btn btn-secondary" onclick="autoDetectColumns()">Auto-Detect Columns</button>
-                    </div>
-                    <div class="alert alert--info" style="margin-top:16px">
-                        <strong>Control 1:</strong> Every <code>[CREG].[_007]+[_001]</code> pair must exist in <code>[STUD].[_007]+[_001]</code> and <code>[CREG].[_051]</code> must be IN the E051 filter.<br />
-                        Use Auto-Detect after connecting to populate column dropdowns. Enter one or more E051 codes separated by commas (e.g. <code>E</code> or <code>E,N</code>).
+                        <div class="field-group">
+                            <label for="cregTable">CREG Table</label>
+                            <select id="cregTable" onchange="loadCols('creg',this.value)"></select>
+                        </div>
+                        <div class="field-group">
+                            <label for="studTable">STUD Table</label>
+                            <select id="studTable" onchange="loadCols('stud',this.value)"></select>
+                        </div>
+                        <div class="field-group">
+                            <label for="detailTable">Rule 29 Detail Table <small>(optional — select none to skip)</small></label>
+                            <select id="detailTable" onchange="loadCols('detail',this.value)"><option value="">(none — skip reconciliation)</option></select>
+                        </div>
                     </div>
                     <div id="configOutput" class="status-output"></div>
                 </div>
             </div>
 
             <div class="accordion-item">
-                <button class="accordion-toggle" type="button" onclick="toggleAccordion('downloads')">
-                    <span class="acc-icon">DL</span><span>Export Options</span><span class="acc-chevron">v</span>
+                <button class="accordion-toggle" type="button" onclick="toggleAccordion('colmap')">
+                    <span class="acc-icon">CM</span><span>Column Mapping</span><span class="acc-chevron">v</span>
                 </button>
-                <div class="accordion-body" id="body-downloads" style="display:none">
-                    <div class="checkbox-row">
-                        <label class="checkbox-label"><input type="checkbox" id="chkExcel" checked /> Excel</label>
-                        <label class="checkbox-label"><input type="checkbox" id="chkCsv" checked /> CSV</label>
-                        <label class="checkbox-label"><input type="checkbox" id="chkSql" checked /> SQL</label>
+                <div class="accordion-body" id="body-colmap" style="display:none">
+                    <div class="alert alert--info" style="margin-bottom:12px">
+                        Map your uploaded table's column names to the fields Rule 67 uses. Defaults match the standard HEMIS layout. Select tables above to auto-populate column lists.
+                    </div>
+                    <div style="font-weight:700;font-size:13px;text-transform:uppercase;color:#555;margin-bottom:8px">CREG Table</div>
+                    <div class="form-grid">
+                        <div class="field-group">
+                            <label>Student Number <small>(default <code>_007</code>)</small></label>
+                            <select id="cm_cregStudentNoCol"><option value="_007">_007</option></select>
+                        </div>
+                        <div class="field-group">
+                            <label>Qualification <small>(default <code>_001</code>)</small></label>
+                            <select id="cm_cregQualCol"><option value="_001">_001</option></select>
+                        </div>
+                        <div class="field-group">
+                            <label>E051 <small>(default <code>_051</code>)</small></label>
+                            <select id="cm_cregE051Col"><option value="_051">_051</option></select>
+                        </div>
+                        <div class="field-group">
+                            <label>
+                                E051 Filter Value(s)
+                                <span style="font-size:11px;color:#888;font-weight:normal;margin-left:6px">Comma-separated (e.g. E). Leave blank to include all.</span>
+                            </label>
+                            <input type="text" id="e051FilterValuesInput"
+                                   placeholder="e.g. E (leave blank to include all)"
+                                   style="text-transform:uppercase;width:260px;font-family:monospace;font-size:15px;font-weight:bold"
+                                   oninput="this.value=this.value.toUpperCase();state.e051FilterValues=this.value.trim();updateE051Preview();"
+                                   onblur="markWorkspaceDirty();" />
+                            <small id="e051PreviewText" style="display:block;margin-top:4px;color:#555">
+                                No filter value entered - all E051 values will be included.
+                            </small>
+                        </div>
+                    </div>
+
+                    <div style="font-weight:700;font-size:13px;text-transform:uppercase;color:#555;margin:14px 0 8px">STUD Table</div>
+                    <div class="form-grid">
+                        <div class="field-group">
+                            <label>Student Number <small>(default <code>_007</code>)</small></label>
+                            <select id="cm_studStudentNoCol"><option value="_007">_007</option></select>
+                        </div>
+                        <div class="field-group">
+                            <label>Qualification <small>(default <code>_001</code>)</small></label>
+                            <select id="cm_studQualCol"><option value="_001">_001</option></select>
+                        </div>
+                    </div>
+
+                    <div style="font-weight:700;font-size:13px;text-transform:uppercase;color:#555;margin:14px 0 8px">Rule 29 Detail Table <small>(only used when a detail table is selected above)</small></div>
+                    <div class="form-grid">
+                        <div class="field-group">
+                            <label>Error Code Column <small>(default <code>Error</code>)</small></label>
+                            <select id="cm_detailErrorCol"><option value="Error">Error</option></select>
+                        </div>
+                        <div class="field-group">
+                            <label>Element Information Column <small>(default <code>Element_Information</code>)</small></label>
+                            <select id="cm_detailElementInfoCol"><option value="Element_Information">Element_Information</option></select>
+                        </div>
+                        <div class="field-group">
+                            <label>Error Code(s) <small>(comma-separated, default <code>00708</code>)</small></label>
+                            <input type="text" id="detailErrorCodeInput" value="00708" style="width:160px;font-family:monospace" onblur="markWorkspaceDirty();" />
+                        </div>
                     </div>
                 </div>
             </div>
@@ -167,17 +164,32 @@
         <div class="workspace-signoff-card__header">
             <div>
                 <div class="workspace-signoff-card__title">Saved Workspace</div>
-                <div class="workspace-signoff-card__subtitle">The latest Rule 67 connection, results, and signoffs reload automatically for this engagement.</div>
+                <div class="workspace-signoff-card__subtitle">Latest Rule 67 configuration and results reload automatically for this engagement.</div>
             </div>
             <div id="workspaceRunState" class="badge badge--neutral badge--sm">No saved run loaded</div>
         </div>
         <div id="workspaceInfo" class="alert alert--info">Select an engagement to load the saved Rule 67 workspace.</div>
         <div class="workspace-signoff-grid">
-            <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Current Run</div><div id="workspaceRunLabel">No saved run yet</div></div>
-            <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Status</div><div id="workspaceStatusLabel">-</div></div>
-            <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Last Edited</div><div id="workspaceEditedLabel">-</div></div>
-            <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Your Role</div><div id="workspaceRoleLabel">@(string.IsNullOrWhiteSpace(currentSystemRole) ? "-" : currentSystemRole)</div></div>
-            <div class="field-group" style="grid-column:1 / -1"><label for="workspaceSignoffComment">Signoff Comment</label><textarea id="workspaceSignoffComment" rows="3" placeholder="Add review or completion notes"></textarea></div>
+            <div>
+                <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Current Run</div>
+                <div id="workspaceRunLabel">No saved run yet</div>
+            </div>
+            <div>
+                <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Status</div>
+                <div id="workspaceStatusLabel">-</div>
+            </div>
+            <div>
+                <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Last Edited</div>
+                <div id="workspaceEditedLabel">-</div>
+            </div>
+            <div>
+                <div style="color:#757575;font-size:12px;text-transform:uppercase;font-weight:700">Your Role</div>
+                <div id="workspaceRoleLabel">@(string.IsNullOrWhiteSpace(currentSystemRole) ? "-" : currentSystemRole)</div>
+            </div>
+            <div class="field-group" style="grid-column:1/-1">
+                <label for="workspaceSignoffComment">Signoff Comment</label>
+                <textarea id="workspaceSignoffComment" rows="3" placeholder="Add review or completion notes"></textarea>
+            </div>
         </div>
         <div class="workspace-signoff-actions">
             @if (!isResultsOnlyRole)
@@ -203,15 +215,21 @@
     <div class="results-panel">
         <div class="results-tabs">
             <button class="tab-btn active" type="button" data-tab="analysis">Analysis</button>
-            <button class="tab-btn" type="button" data-tab="results">Results</button>
+            <button class="tab-btn" type="button" data-tab="flagged">FLAGGED</button>
+            <button class="tab-btn" type="button" data-tab="clear">CLEAR</button>
+            <button class="tab-btn" type="button" data-tab="reconciliation">Reconciliation</button>
             <button class="tab-btn" type="button" data-tab="sql">SQL</button>
             <button class="tab-btn" type="button" data-tab="downloads">Downloads</button>
         </div>
-        <div class="tab-pane active" data-tab-panel="analysis" id="analysisPane"></div>
-        <div class="tab-pane" data-tab-panel="results" id="resultsPane"></div>
-        <div class="tab-pane" data-tab-panel="sql"><textarea id="sqlText" rows="18" readonly></textarea></div>
+        <div class="tab-pane active" data-tab-panel="analysis"></div>
+        <div class="tab-pane" data-tab-panel="flagged"></div>
+        <div class="tab-pane" data-tab-panel="clear"></div>
+        <div class="tab-pane" data-tab-panel="reconciliation"></div>
+        <div class="tab-pane" data-tab-panel="sql">
+            <textarea id="sqlText" rows="20" readonly style="width:100%;font-family:monospace;font-size:12px"></textarea>
+        </div>
         <div class="tab-pane" data-tab-panel="downloads">
-            <div class="alert alert--info" style="margin-bottom:16px">Excel and CSV export all results with PASS/FAIL per CREG pair. SQL shows the CREG → STUD join query with E051 check.</div>
+            <div class="alert alert--info" style="margin-bottom:12px">Download the full validated result set. Excel and CSV include both FLAGGED and CLEAR rows, plus the reconciliation sheets when a detail table is configured.</div>
             <div class="action-bar" style="justify-content:flex-start;margin:0">
                 <button type="button" class="btn btn-info" id="downloadExcelBtn">Excel</button>
                 <button type="button" class="btn btn-info" id="downloadCsvBtn">CSV</button>
@@ -221,11 +239,16 @@
     </div>
 
     <div id="spinner" class="spinner-overlay" style="display:none">
-        <div class="spinner-box"><div class="spinner-ring"></div><p id="spinnerMsg">Processing...</p></div>
+        <div class="spinner-box">
+            <div class="spinner-ring"></div>
+            <p id="spinnerMsg">Processing...</p>
+        </div>
     </div>
 </div>
 
-<form id="antiForgeryForm" method="post" style="display:none">@Html.AntiForgeryToken()</form>
+<form id="antiForgeryForm" method="post" style="display:none">
+    @Html.AntiForgeryToken()
+</form>
 
 <script>
 window.toggleAccordion = function (section) {
@@ -241,182 +264,262 @@ window.toggleAccordion = function (section) {
 
     const state = {
         clientId: @(selectedClientId > 0 ? selectedClientId : 0),
-        currentRunId: null, summary: null, sql: '',
-        resultsVisible: false, hasPendingValidation: false,
-        currentUserEngagementRole: '', currentUserHasSignedOff: false,
-        isWorkspaceSaved: false, hasDataAnalystSignoff: false,
-        currentStatus: '', categoryTab: 'ALL'
+        currentRunId: null,
+        summary: null,
+        sql: '',
+        currentStatus: '',
+        e051FilterValues: '',
+        currentUserEngagementRole: '',
+        currentUserHasSignedOff: false,
+        isWorkspaceSaved: false,
+        hasDataAnalystSignoff: false,
+        resultsVisible: false
     };
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'), driver: document.getElementById('driver'), database: document.getElementById('database'),
-        cregTable: document.getElementById('cregTable'), studTable: document.getElementById('studTable'),
-        cregStudentNoCol: document.getElementById('cregStudentNoCol'), cregQualCol: document.getElementById('cregQualCol'),
-        cregE051Col: document.getElementById('cregE051Col'), studStudentNoCol: document.getElementById('studStudentNoCol'),
-        studQualCol: document.getElementById('studQualCol'), e051FilterValues: document.getElementById('e051FilterValues'),
+        datasetsLink: document.getElementById('datasetsLink'),
+        cregTable: document.getElementById('cregTable'),
+        studTable: document.getElementById('studTable'),
         detailTable: document.getElementById('detailTable'),
-        detailErrorCode: document.getElementById('detailErrorCode'),
-        connectionOutput: document.getElementById('connectionOutput'), configOutput: document.getElementById('configOutput'),
-        analysisPane: document.getElementById('analysisPane'), resultsPane: document.getElementById('resultsPane'),
-        sqlText: document.getElementById('sqlText'), downloadAllBtn: document.getElementById('downloadAllBtn'),
-        workspaceInfo: document.getElementById('workspaceInfo'), workspaceRunState: document.getElementById('workspaceRunState'),
-        workspaceRunLabel: document.getElementById('workspaceRunLabel'), workspaceStatusLabel: document.getElementById('workspaceStatusLabel'),
-        workspaceEditedLabel: document.getElementById('workspaceEditedLabel'), workspaceRoleLabel: document.getElementById('workspaceRoleLabel'),
+        connectionOutput: document.getElementById('connectionOutput'),
+        configOutput: document.getElementById('configOutput'),
+        analysisPane: document.querySelector('[data-tab-panel="analysis"]'),
+        flaggedPane: document.querySelector('[data-tab-panel="flagged"]'),
+        clearPane: document.querySelector('[data-tab-panel="clear"]'),
+        reconciliationPane: document.querySelector('[data-tab-panel="reconciliation"]'),
+        sqlText: document.getElementById('sqlText'),
+        downloadAllBtn: document.getElementById('downloadAllBtn'),
+        workspaceInfo: document.getElementById('workspaceInfo'),
+        workspaceRunState: document.getElementById('workspaceRunState'),
+        workspaceRunLabel: document.getElementById('workspaceRunLabel'),
+        workspaceStatusLabel: document.getElementById('workspaceStatusLabel'),
+        workspaceEditedLabel: document.getElementById('workspaceEditedLabel'),
+        workspaceRoleLabel: document.getElementById('workspaceRoleLabel'),
         workspaceSignoffComment: document.getElementById('workspaceSignoffComment'),
-        beginEditBtn: document.getElementById('beginEditBtn'), saveWorkspaceBtn: document.getElementById('saveWorkspaceBtn'),
-        signoffBtn: document.getElementById('signoffBtn'), removeSignoffBtn: document.getElementById('removeSignoffBtn'),
-        statusBadge: document.getElementById('statusBadge')
+        beginEditBtn: document.getElementById('beginEditBtn'),
+        saveWorkspaceBtn: document.getElementById('saveWorkspaceBtn'),
+        signoffBtn: document.getElementById('signoffBtn'),
+        removeSignoffBtn: document.getElementById('removeSignoffBtn'),
+        statusBadge: document.getElementById('statusBadge'),
+        spinner: document.getElementById('spinner'),
+        spinnerMsg: document.getElementById('spinnerMsg'),
+        cm_cregStudentNoCol: document.getElementById('cm_cregStudentNoCol'),
+        cm_cregQualCol: document.getElementById('cm_cregQualCol'),
+        cm_cregE051Col: document.getElementById('cm_cregE051Col'),
+        cm_studStudentNoCol: document.getElementById('cm_studStudentNoCol'),
+        cm_studQualCol: document.getElementById('cm_studQualCol'),
+        cm_detailErrorCol: document.getElementById('cm_detailErrorCol'),
+        cm_detailElementInfoCol: document.getElementById('cm_detailElementInfoCol'),
+        e051FilterValuesInput: document.getElementById('e051FilterValuesInput'),
+        detailErrorCodeInput: document.getElementById('detailErrorCodeInput')
     };
 
     const tabButtons = Array.from(document.querySelectorAll('.tab-btn'));
     tabButtons.forEach(btn => btn.addEventListener('click', () => setActiveTab(btn.dataset.tab)));
 
-    function showSpinner(msg) { document.getElementById('spinnerMsg').textContent = msg || 'Processing...'; document.getElementById('spinner').style.display = 'flex'; }
-    function hideSpinner() { document.getElementById('spinner').style.display = 'none'; }
-    function escapeHtml(v) { return String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'); }
-    function formatNumber(v) { return Number(v || 0).toLocaleString('en-US'); }
-    function normalizeRole(v) { return String(v || '').replace(/[^a-z0-9]+/gi,'').toLowerCase(); }
-    function setAlert(target, type, message) { if (target) target.innerHTML = `<div class="alert alert--${type}">${message}</div>`; }
-    function setWorkspaceState(message, type) { els.workspaceInfo.className = `alert alert--${type}`; els.workspaceInfo.textContent = message || ''; }
-    function setStatusBadge(text, type) {
-        if (!text) { els.statusBadge.style.display='none'; return; }
-        els.statusBadge.style.display='inline-block';
-        els.statusBadge.className=`rule-header__badge ${type==='fail'?'badge--fail':'badge--pass'}`;
-        els.statusBadge.textContent=text;
-    }
     function setActiveTab(tab) {
-        tabButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
+        tabButtons.forEach(button => button.classList.toggle('active', button.dataset.tab === tab));
         document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.toggle('active', pane.dataset.tabPanel === tab));
-        if (tab === 'results') setTimeout(() => renderResults(true), 0);
-    }
-    function getActiveTab() { return document.querySelector('.tab-btn.active')?.dataset.tab || 'analysis'; }
-
-    async function postJson(url, data) {
-        return await window.fetchJsonWithProgress(url, { method:'POST', headers:{'Content-Type':'application/json','RequestVerificationToken':token}, body:JSON.stringify(data) });
-    }
-    async function downloadBlob(url, payload, defaultName) {
-        await window.downloadFileWithProgress({ url, method:'POST', headers:{'Content-Type':'application/json','RequestVerificationToken':token}, body:JSON.stringify(payload), defaultFileName:defaultName, label:'Downloading' });
     }
 
-    function populateSelect(sel, values, selected) {
-        if (!sel) return;
-        sel.innerHTML = '<option value="">Select table</option>';
-        values.forEach(v => { const o = document.createElement('option'); o.value = o.textContent = v; sel.appendChild(o); });
-        if (selected) { if (![...sel.options].some(o => o.value === selected)) { const o = document.createElement('option'); o.value = o.textContent = selected; sel.appendChild(o); } sel.value = selected; }
-    }
-    function fillColSel(selEl, cols, preferred) {
-        if (!selEl) return;
-        const cur = selEl.value; selEl.innerHTML = '';
-        (cols || []).forEach(c => { const o = document.createElement('option'); o.value = o.textContent = c; if (c === (preferred || cur)) o.selected = true; selEl.appendChild(o); });
-        if (!selEl.value && cols.length) selEl.value = cols[0];
-    }
-    function setColSel(selEl, value) {
-        if (!selEl || !value) return;
-        if (![...selEl.options].some(o => o.value === value)) { const o = document.createElement('option'); o.value = o.textContent = value; selEl.appendChild(o); }
-        selEl.value = value;
+    function esc(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
-    function getRequest() {
+    function fmt(value) {
+        return Number(value || 0).toLocaleString();
+    }
+
+    function markWorkspaceDirty() { /* no-op hook kept for parity with other rule pages */ }
+
+    function updateE051Preview() {
+        var textEl = document.getElementById('e051PreviewText');
+        if (!textEl) return;
+        var v = (state.e051FilterValues || '').trim();
+        textEl.innerHTML = v
+            ? 'Only CREG records where E051 is in <strong>' + esc(v) + '</strong> will pass this check.'
+            : 'No filter value entered - all E051 values will be included.';
+    }
+
+    function populateSelect(selectEl, items, selected, allowBlank) {
+        if (!selectEl) return;
+        selectEl.innerHTML = allowBlank ? '<option value="">(none — skip reconciliation)</option>' : '<option value="">Select table</option>';
+        (items || []).forEach(item => {
+            const option = document.createElement('option');
+            option.value = item;
+            option.textContent = item;
+            if (selected && selected === item) option.selected = true;
+            selectEl.appendChild(option);
+        });
+        if (selected && !(items || []).includes(selected)) {
+            const option = document.createElement('option');
+            option.value = selected; option.textContent = selected; option.selected = true;
+            selectEl.appendChild(option);
+        }
+    }
+
+    // Never invent an option for a column that doesn't actually exist in the uploaded table - if
+    // neither the backend's fuzzy match nor the hardcoded default is a real column, leave the
+    // field visibly blank so the analyst notices and picks the correct one.
+    function populateColumnSelect(selectEl, columns, selected, defaultValue) {
+        if (!selectEl) return;
+        const cols = columns || [];
+        const val = (selected && cols.includes(selected)) ? selected
+            : ((defaultValue && cols.includes(defaultValue)) ? defaultValue : '');
+        selectEl.innerHTML = '<option value="">Select column</option>';
+        cols.forEach(c => {
+            const option = document.createElement('option');
+            option.value = c;
+            option.textContent = c;
+            if (c === val) option.selected = true;
+            selectEl.appendChild(option);
+        });
+        if (!val) selectEl.value = '';
+    }
+
+    function getColumnMapping() {
         return {
-            clientId: parseInt(els.clientId.value||'0',10)||0,
-            runId: state.currentRunId,
-            server: els.server?.value.trim()||'',
-            database: els.database?.value||'',
-            driver: els.driver?.value||'ODBC Driver 17 for SQL Server',
-            cregTable:         els.cregTable?.value||'',
-            studTable:         els.studTable?.value||'dbo_STUD_VALPAC',
-            cregStudentNoCol:  els.cregStudentNoCol?.value||'_007',
-            cregQualCol:       els.cregQualCol?.value||'_001',
-            cregE051Col:       els.cregE051Col?.value||'_051',
-            studStudentNoCol:  els.studStudentNoCol?.value||'_007',
-            studQualCol:       els.studQualCol?.value||'_001',
-            e051FilterValues:  els.e051FilterValues?.value?.trim()||'E',
-            detailTable:          els.detailTable?.value?.trim()||'',
-            detailErrorCode:      els.detailErrorCode?.value?.trim()||'00708',
-            detailErrorCol:       els.detailErrorCol?.value?.trim()||'Error',
-            detailElementInfoCol: els.detailElementInfoCol?.value?.trim()||'Element_Information'
+            cregStudentNoCol: els.cm_cregStudentNoCol?.value || '',
+            cregQualCol: els.cm_cregQualCol?.value || '',
+            cregE051Col: els.cm_cregE051Col?.value || '',
+            studStudentNoCol: els.cm_studStudentNoCol?.value || '',
+            studQualCol: els.cm_studQualCol?.value || '',
+            detailErrorCol: els.cm_detailErrorCol?.value || '',
+            detailElementInfoCol: els.cm_detailElementInfoCol?.value || ''
         };
     }
 
-    async function loadCols(role, tableName) {
-        const server = els.server?.value?.trim(); const db = els.database?.value;
-        if (!server || !db || !tableName) return;
-        try {
-            const endpoint = role === 'creg' ? `${apiBase}/GetCregColumns` : `${apiBase}/GetStudColumns`;
-            const req = { server, database: db, driver: els.driver?.value||'ODBC Driver 17 for SQL Server', cregTable: tableName, studTable: tableName };
-            const data = await postJson(endpoint, req);
-            if (!data.success || !data.columns) return;
-            const cols = data.columns || [];
-            if (role === 'creg') {
-                fillColSel(els.cregStudentNoCol, cols, '_007');
-                fillColSel(els.cregQualCol, cols, '_001');
-                fillColSel(els.cregE051Col, cols, '_051');
-            } else {
-                fillColSel(els.studStudentNoCol, cols, '_007');
-                fillColSel(els.studQualCol, cols, '_001');
-            }
-            setAlert(els.configOutput, 'success', `Columns loaded for ${tableName}.`);
-        } catch (e) { /* silently ignore */ }
+    async function postJson(url, payload) {
+        return await window.fetchJsonWithProgress(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': token },
+            body: JSON.stringify(payload)
+        });
     }
 
-    async function loadDetailCols(tableName) {
-        const server = els.server?.value?.trim(); const db = els.database?.value;
-        if (!server || !db || !tableName) return;
-        try {
-            const req = { server, database: db, driver: els.driver?.value||'ODBC Driver 17 for SQL Server', cregTable: tableName, studTable: tableName };
-            const data = await postJson(`${apiBase}/GetCregColumns`, req);
-            if (!data.success || !data.columns) return;
-            const cols = data.columns || [];
-            const errColEl  = document.getElementById('detailErrorCol');
-            const elemColEl = document.getElementById('detailElementInfoCol');
-            if (errColEl) {
-                const currentErr = errColEl.value;
-                fillColSel(errColEl, cols, cols.find(c => /error/i.test(c)) || 'Error');
-                if (cols.includes(currentErr)) errColEl.value = currentErr;
-            }
-            if (elemColEl) {
-                const currentElem = elemColEl.value;
-                fillColSel(elemColEl, cols, cols.find(c => /element/i.test(c)) || 'Element_Information');
-                if (cols.includes(currentElem)) elemColEl.value = currentElem;
-            }
-        } catch (e) { /* silently ignore */ }
-    }
-
-    window.autoDetectColumns = async function() {
-        await Promise.all([
-            loadCols('creg', els.cregTable?.value),
-            loadCols('stud', els.studTable?.value),
-            loadDetailCols(els.detailTable?.value)
-        ]);
+    const colRoleMap = {
+        creg: [
+            [els.cm_cregStudentNoCol, 'creg_student_no', '_007'],
+            [els.cm_cregQualCol,      'creg_qual',        '_001'],
+            [els.cm_cregE051Col,      'creg_e051',        '_051']
+        ],
+        stud: [
+            [els.cm_studStudentNoCol, 'stud_student_no', '_007'],
+            [els.cm_studQualCol,      'stud_qual',        '_001']
+        ],
+        detail: [
+            [els.cm_detailErrorCol,        'detail_error',       'Error'],
+            [els.cm_detailElementInfoCol,  'detail_elementinfo',  'Element_Information']
+        ]
     };
+
+    async function loadCols(role, tableName) {
+        if (!tableName || !state.clientId) return;
+        let loadedAny = false;
+        for (const [selEl, tableRole, fallback] of (colRoleMap[role] || [])) {
+            if (!selEl) continue;
+            try {
+                const data = await postJson(`${apiBase}/GetColumns`, { clientId: state.clientId, tableName, tableRole });
+                if (!data?.success || !data.columns) continue;
+                populateColumnSelect(selEl, data.columns, data.autoSelected, fallback);
+                loadedAny = true;
+            } catch (e) { /* leave this field's dropdown as-is */ }
+        }
+        if (loadedAny) els.configOutput.innerHTML = `<div class="alert alert--success">Columns loaded for ${esc(tableName)}.</div>`;
+    }
+    window.loadCols = function (role, tbl) { loadCols(role, tbl); };
+
+    function getRequest() {
+        const mapping = getColumnMapping();
+        return {
+            clientId: state.clientId,
+            runId: state.currentRunId,
+            cregTable: els.cregTable?.value || '',
+            studTable: els.studTable?.value || '',
+            detailTable: els.detailTable?.value || '',
+            cregStudentNoCol: mapping.cregStudentNoCol,
+            cregQualCol: mapping.cregQualCol,
+            cregE051Col: mapping.cregE051Col,
+            studStudentNoCol: mapping.studStudentNoCol,
+            studQualCol: mapping.studQualCol,
+            e051FilterValues: state.e051FilterValues || '',
+            detailErrorCol: mapping.detailErrorCol,
+            detailElementInfoCol: mapping.detailElementInfoCol,
+            detailErrorCode: els.detailErrorCodeInput?.value || '00708'
+        };
+    }
+
+    function findMissingMappedColumns(request) {
+        const required = [
+            ['cregStudentNoCol', 'CREG Student Number'], ['cregQualCol', 'CREG Qualification'], ['cregE051Col', 'CREG E051'],
+            ['studStudentNoCol', 'STUD Student Number'], ['studQualCol', 'STUD Qualification']
+        ];
+        if (request.detailTable) required.push(['detailErrorCol', 'Detail Error Column'], ['detailElementInfoCol', 'Detail Element Information Column']);
+        return required.filter(([key]) => !request[key]).map(([, label]) => label);
+    }
+
+    function setStatusBadge(status) {
+        if (!els.statusBadge) return;
+        if (!status) {
+            els.statusBadge.style.display = 'none';
+            return;
+        }
+        els.statusBadge.style.display = '';
+        els.statusBadge.textContent = status;
+        els.statusBadge.className = `rule-header__badge ${String(status).toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail'}`;
+    }
+
+    function setWorkspaceState(message, type) {
+        els.workspaceInfo.className = `alert alert--${type}`;
+        els.workspaceInfo.textContent = message;
+        window.showWorkspaceActionToast?.(message, type);
+    }
+
+    function normalizeRole(value) {
+        return String(value || '').replace(/[^a-z0-9]+/gi, '').toLowerCase();
+    }
 
     function updateWorkspaceButtons() {
         const role = state.currentUserEngagementRole || currentSystemRole || '';
-        const normalizedRole = normalizeRole(role); const normalizedSystemRole = normalizeRole(currentSystemRole);
-        const hasUnsaved = !!state.summary && (!!state.hasPendingValidation || (!state.currentRunId && !state.isWorkspaceSaved));
-        const canEdit = !isResultsOnlyRole && (normalizedSystemRole==='dataanalyst'||normalizedRole==='dataanalyst'||hasUnsaved);
-        const canSign = !state.hasPendingValidation && !!state.currentRunId && !!state.isWorkspaceSaved &&
-            (normalizedRole==='dataanalyst' || (state.resultsVisible && (normalizedRole==='manager'||normalizedRole==='director')));
-        const signoffLocked = !!state.currentUserHasSignedOff;
-        window.ruleWorkspaceUi.setReadonlyShell('app', !canEdit||signoffLocked);
-        window.ruleWorkspaceUi.setFormSectionReadonly('.accordion-stack', !canEdit||signoffLocked);
-        window.ruleWorkspaceUi.applyStates([
-            {target:'connectBtn',disabled:!canEdit||signoffLocked},{target:'verifyBtn',disabled:!canEdit||signoffLocked},
-            {target:'runBtn',disabled:!canEdit||signoffLocked},{target:'sqlBtn',disabled:!canEdit||signoffLocked},
-            {target:els.beginEditBtn,disabled:signoffLocked||!canEdit||!state.currentRunId||state.hasPendingValidation},
-            {target:els.saveWorkspaceBtn,disabled:signoffLocked||!canEdit||!hasUnsaved},
-            {target:els.signoffBtn,disabled:signoffLocked||!canSign,text:state.currentUserHasSignedOff?`Signed Off as ${role||currentSystemRole}`:'Save Signoff'},
-            {target:els.removeSignoffBtn,show:state.currentUserHasSignedOff,display:'',disabled:!state.currentUserHasSignedOff},
-            {target:els.workspaceSignoffComment,disabled:signoffLocked||!canSign},
-            {target:els.downloadAllBtn,disabled:!state.summary}
+        const normalizedRole = normalizeRole(role);
+        const normalizedSystemRole = normalizeRole(currentSystemRole);
+        const canEdit = !isResultsOnlyRole && (normalizedSystemRole === 'dataanalyst' || normalizedRole === 'dataanalyst');
+        const canSign = !!state.currentRunId && !!state.isWorkspaceSaved &&
+            (normalizedRole === 'dataanalyst' || (state.resultsVisible && (normalizedRole === 'manager' || normalizedRole === 'director')));
+        const signed = !!state.currentUserHasSignedOff;
+
+        window.ruleWorkspaceUi?.setReadonlyShell('app', !canEdit || signed);
+        window.ruleWorkspaceUi?.setFormSectionReadonly('.accordion-stack', !canEdit || signed);
+        window.ruleWorkspaceUi?.applyStates([
+            { target: 'refreshTablesBtn', disabled: !canEdit || signed },
+            { target: 'verifyBtn', disabled: !canEdit || signed },
+            { target: 'runBtn', disabled: !canEdit || signed },
+            { target: 'sqlBtn', disabled: !canEdit || signed },
+            { target: els.beginEditBtn, disabled: signed || !canEdit || !state.currentRunId },
+            { target: els.saveWorkspaceBtn, disabled: signed || !canEdit || !state.currentRunId || !state.summary },
+            {
+                target: els.signoffBtn,
+                disabled: signed || !canSign,
+                text: signed ? `Signed Off as ${role || currentSystemRole}` : 'Save Signoff'
+            },
+            { target: els.removeSignoffBtn, show: signed, display: '', disabled: !signed },
+            { target: els.workspaceSignoffComment, disabled: signed || !canSign },
+            { target: els.downloadAllBtn, disabled: !state.summary }
         ]);
-        window.ruleWorkspaceUi.setButtonGroupReadonly(['.workspace-signoff-actions','.action-bar'],signoffLocked,{allow:['#downloadAllBtn','#downloadExcelBtn','#downloadCsvBtn','#downloadSqlBtn','#removeSignoffBtn']});
+        window.ruleWorkspaceUi?.setButtonGroupReadonly(['.workspace-signoff-actions', '.action-bar'], signed, {
+            allow: ['#downloadExcelBtn', '#downloadCsvBtn', '#downloadSqlBtn', '#removeSignoffBtn']
+        });
         applyWorkspaceAccessMode(canEdit);
     }
 
     function applyWorkspaceAccessMode(canEditWorkspace) {
-        ['body-connection', 'body-config'].forEach(function(id) {
+        ['body-connection', 'body-config', 'body-colmap'].forEach(function(id) {
             var body = document.getElementById(id);
             if (!body) return;
             body.style.opacity = canEditWorkspace ? '' : '0.45';
@@ -427,526 +530,477 @@ window.toggleAccordion = function (section) {
         });
     }
 
-    function applySummary(summary, options = {}) {
-        state.summary = summary;
-        if (!options.fromWorkspace) state.currentRunId = summary?.savedRunId||state.currentRunId;
-        state.currentStatus = summary?.status||state.currentStatus;
-        state.resultsVisible = !!summary||state.resultsVisible;
-        if (!summary) { els.analysisPane.innerHTML='<div class="empty-card"><p>No Rule 67 results loaded.</p></div>'; els.resultsPane.innerHTML='<div class="empty-card"><p>No Rule 67 results loaded.</p></div>'; setStatusBadge('','pass'); updateWorkspaceButtons(); return; }
-        if (state.hasPendingValidation) { els.workspaceRunState.textContent=`Pending save | ${summary.status||'Completed'}`; els.workspaceRunLabel.textContent='Unsaved Rule 67 validation'; els.workspaceStatusLabel.textContent='Pending Save'; }
-        else { els.workspaceRunState.textContent=state.currentRunId?`Run #${state.currentRunId} | ${state.currentStatus||'Completed'}`:'No saved run loaded'; els.workspaceRunLabel.textContent=state.currentRunId?`Run #${state.currentRunId}`:'No saved run yet'; els.workspaceStatusLabel.textContent=state.currentStatus||'-'; }
-        setStatusBadge(summary.status, summary.failCount>0?'fail':'pass');
-        renderAnalysis(summary); renderResults(); updateWorkspaceButtons();
+    function rowVal(row, key) {
+        return (row.displayValues && row.displayValues[key]) || '';
     }
 
-    function applyWorkspace(workspace, resultsVisible, preserveExistingSummary = false) {
-        if (!workspace) {
-            state.currentRunId=null;state.currentStatus='';state.currentUserEngagementRole='';state.currentUserHasSignedOff=false;state.isWorkspaceSaved=false;state.hasDataAnalystSignoff=false;state.resultsVisible=false;state.hasPendingValidation=false;
-            els.workspaceRunState.textContent='No saved run loaded';els.workspaceRunLabel.textContent='No saved run yet';els.workspaceStatusLabel.textContent='-';els.workspaceEditedLabel.textContent='-';
-            setWorkspaceState('No saved Rule 67 workspace exists for this engagement yet.','info');
-            if (!preserveExistingSummary) applySummary(null); else updateWorkspaceButtons();
+    function renderReviewRow(row) {
+        const result = String(row.validationResult || '').toUpperCase();
+        const badgeClass = result === 'PASS' ? 'badge--pass' : 'badge--fail';
+        return `<tr>
+            <td>${esc(row.validationNumber)}</td>
+            <td>${esc(rowVal(row, 'CREG_STUD_NO'))}</td>
+            <td>${esc(rowVal(row, 'CREG_QUAL'))}</td>
+            <td>${esc(rowVal(row, 'CREG_E051'))}</td>
+            <td>${esc(rowVal(row, 'STUD_NO') || '-')}</td>
+            <td>${esc(rowVal(row, 'GHOST_STUDENT') || '-')}</td>
+            <td style="text-align:center"><span class="badge ${badgeClass}">${esc(row.validationResult)}</span></td>
+            <td style="font-size:11px">${esc(row.validationExplanation)}</td>
+        </tr>`;
+    }
+
+    function reviewTableHtml(rows, emptyMessage) {
+        if (!rows || !rows.length) {
+            return `<div class="empty-card"><p>${esc(emptyMessage)}</p></div>`;
+        }
+        return `<div style="overflow-x:auto"><table class="data-table" style="font-size:12px">
+            <thead><tr>
+                <th>#</th>
+                <th>CREG Student No</th>
+                <th>CREG Qual</th>
+                <th>CREG E051</th>
+                <th>STUD No</th>
+                <th>Ghost Student</th>
+                <th>Result</th>
+                <th>Explanation</th>
+            </tr></thead>
+            <tbody>${rows.map(renderReviewRow).join('')}</tbody>
+        </table></div>`;
+    }
+
+    function renderAnalysis(summary) {
+        if (!summary) {
+            els.analysisPane.innerHTML = '<div class="empty-card"><p>No Rule 67 results loaded.</p></div>';
             return;
         }
-        state.clientId=workspace.clientId||state.clientId;state.currentRunId=workspace.runId||null;state.currentStatus=workspace.currentStatus||'';
-        state.currentUserEngagementRole=workspace.currentUserEngagementRole||currentSystemRole||'';state.currentUserHasSignedOff=!!workspace.currentUserHasSignedOff;
-        state.isWorkspaceSaved=!!workspace.isWorkspaceSaved;state.hasDataAnalystSignoff=!!workspace.hasDataAnalystSignoff;state.resultsVisible=!!resultsVisible;state.hasPendingValidation=false;
-        if (els.server) els.server.value=workspace.server||'';
-        if (els.driver) els.driver.value=workspace.driver||'ODBC Driver 17 for SQL Server';
-        populateSelect(els.database, workspace.database?[workspace.database]:[], workspace.database);
-        populateSelect(els.cregTable,   workspace.cregTable?[workspace.cregTable]:[], workspace.cregTable||'');
-        populateSelect(els.studTable,   workspace.studTable?[workspace.studTable]:[], workspace.studTable||'dbo_STUD_VALPAC');
-        if (els.detailTable) {
-            const savedDt = workspace.detailTable||'';
-            els.detailTable.innerHTML = '<option value="">(none — skip reconciliation)</option>';
-            if (savedDt) { const o=document.createElement('option'); o.value=o.textContent=savedDt; els.detailTable.appendChild(o); els.detailTable.value=savedDt; }
+        const statusClass = String(summary.status).toUpperCase() === 'PASS' ? 'badge--pass' : 'badge--fail';
+        els.analysisPane.innerHTML = `
+            <div class="stats-grid" style="margin-bottom:20px">
+                <div class="stat-card"><div class="stat-card__label">Total Pairs Checked</div><div class="stat-card__value">${fmt(summary.totalValidated)}</div></div>
+                <div class="stat-card stat-card--pass"><div class="stat-card__label">PASS</div><div class="stat-card__value">${fmt(summary.passCount)}</div></div>
+                <div class="stat-card stat-card--fail"><div class="stat-card__label">FAIL (00708)</div><div class="stat-card__value">${fmt(summary.failCount)}</div></div>
+                <div class="stat-card stat-card--fail"><div class="stat-card__label">Not in STUD</div><div class="stat-card__value">${fmt(summary.notInStudCount)}</div></div>
+                <div class="stat-card stat-card--fail"><div class="stat-card__label">Invalid E051</div><div class="stat-card__value">${fmt(summary.invalidE051Count)}</div></div>
+                <div class="stat-card stat-card--fail"><div class="stat-card__label">Ghost Students</div><div class="stat-card__value">${fmt(summary.ghostStudentCount)}</div></div>
+                <div class="stat-card"><div class="stat-card__label">Exception Rate</div><div class="stat-card__value">${esc(String(summary.exceptionRate))}%</div></div>
+                <div class="stat-card"><div class="stat-card__label">Status</div><div class="stat-card__value"><span class="badge ${statusClass}">${esc(summary.status)}</span></div></div>
+            </div>
+            <div class="card" style="padding:20px">
+                <div class="form-grid" style="margin-bottom:16px">
+                    <div><div class="stat-label">Tables</div><div>CREG: ${esc(summary.cregTable)} | STUD: ${esc(summary.studTable)} | Detail: ${summary.detailTable ? esc(summary.detailTable) : '(not used)'}</div></div>
+                    <div><div class="stat-label">Columns</div><div>CREG No: ${esc(summary.cregStudentNoCol || '_007')} | CREG Qual: ${esc(summary.cregQualCol || '_001')} | CREG E051: ${esc(summary.cregE051Col || '_051')} | STUD No: ${esc(summary.studStudentNoCol || '_007')} | STUD Qual: ${esc(summary.studQualCol || '_001')}</div></div>
+                    <div><div class="stat-label">E051 Filter</div><div>${esc(summary.e051FilterValues) || '(all - no filter applied)'}</div></div>
+                    <div><div class="stat-label">Timestamp</div><div>${esc(summary.timestamp)}</div></div>
+                </div>
+                ${summary.warning ? `<div class="alert alert--warning">${esc(summary.warning)}</div>` : ''}
+                ${summary.isPreviewOnly ? `<div class="alert alert--warning">Browser preview is limited to ${fmt(summary.previewLimit)} rows. Download the result files for the full tested population.</div>` : ''}
+            </div>`;
+    }
+
+    function renderFlagged(summary) {
+        if (!summary) {
+            els.flaggedPane.innerHTML = '<div class="empty-card"><p>No Rule 67 results loaded.</p></div>';
+            return;
         }
-        if (workspace.cregStudentNoCol) setColSel(els.cregStudentNoCol, workspace.cregStudentNoCol);
-        if (workspace.cregQualCol) setColSel(els.cregQualCol, workspace.cregQualCol);
-        if (workspace.cregE051Col) setColSel(els.cregE051Col, workspace.cregE051Col);
-        if (workspace.studStudentNoCol) setColSel(els.studStudentNoCol, workspace.studStudentNoCol);
-        if (workspace.studQualCol) setColSel(els.studQualCol, workspace.studQualCol);
-        if (els.e051FilterValues) els.e051FilterValues.value = workspace.e051FilterValues ?? 'E';
-        if (els.detailErrorCode)      els.detailErrorCode.value      = workspace.detailErrorCode      ?? '00708';
-        if (workspace.detailErrorCol)       setColSel(els.detailErrorCol, workspace.detailErrorCol);
-        if (workspace.detailElementInfoCol) setColSel(els.detailElementInfoCol, workspace.detailElementInfoCol);
-        els.workspaceRunState.textContent=workspace.runId?`Run #${workspace.runId}`:'No saved run loaded';
-        els.workspaceRunLabel.textContent=workspace.runId?`Rule 67 Run #${workspace.runId}`:'No saved run yet';
-        els.workspaceStatusLabel.textContent=workspace.currentStatus||'-';
-        els.workspaceEditedLabel.textContent=workspace.lastEditedAt?new Date(workspace.lastEditedAt).toLocaleString():'-';
-        els.workspaceRoleLabel.textContent=workspace.currentUserEngagementRole||currentSystemRole||'-';
-        els.workspaceSignoffComment.value=workspace.currentUserSignoffComment||'';
-        if (!resultsVisible) { setWorkspaceState('Saved Rule 67 results are not available for your engagement role.','info'); if (!preserveExistingSummary) applySummary(null); else updateWorkspaceButtons(); return; }
-        setWorkspaceState(workspace.summary?'Saved workspace loaded.':'Rule 67 workspace loaded. Run validation to generate results.','success');
-        if (workspace.summary) applySummary(workspace.summary,{fromWorkspace:true}); else if (!preserveExistingSummary) applySummary(null); else updateWorkspaceButtons();
+        const rows = (summary.reviewRows || []).filter(r => String(r.validationResult || '').toUpperCase() === 'FAIL');
+        els.flaggedPane.innerHTML = `
+            <div class="card" style="padding:16px;margin-bottom:12px">
+                <strong>FLAGGED Rows</strong> - ${fmt(summary.failCount)} CREG pair(s) missing from STUD or failing the E051 filter (exception 00708).
+                ${summary.isPreviewOnly ? `<span class="badge badge--neutral">Preview limited to ${fmt(summary.previewLimit)} rows</span>` : ''}
+            </div>
+            ${reviewTableHtml(rows, 'No flagged rows were returned for this run.')}`;
+    }
+
+    function renderClear(summary) {
+        if (!summary) {
+            els.clearPane.innerHTML = '<div class="empty-card"><p>No Rule 67 results loaded.</p></div>';
+            return;
+        }
+        const rows = (summary.reviewRows || []).filter(r => String(r.validationResult || '').toUpperCase() === 'PASS');
+        els.clearPane.innerHTML = `
+            <div class="card" style="padding:16px;margin-bottom:12px">
+                <strong>CLEAR Rows</strong> - ${fmt(summary.passCount)} CREG pair(s) found in STUD with a valid E051 code.
+                ${summary.isPreviewOnly ? `<span class="badge badge--neutral">Preview limited to ${fmt(summary.previewLimit)} rows</span>` : ''}
+            </div>
+            ${reviewTableHtml(rows, 'No clear rows were returned for this run.')}`;
+    }
+
+    function renderReconciliation(summary) {
+        if (!summary) {
+            els.reconciliationPane.innerHTML = '<div class="empty-card"><p>No Rule 67 results loaded.</p></div>';
+            return;
+        }
+        if (!summary.detailTable) {
+            els.reconciliationPane.innerHTML = '<div class="empty-card"><p>No Rule 29 detail table was configured for this run - reconciliation was skipped.</p></div>';
+            return;
+        }
+        const rows = summary.rule29OnlyRows || [];
+        const rowsHtml = rows.length
+            ? `<div style="overflow-x:auto"><table class="data-table" style="font-size:12px">
+                <thead><tr><th>#</th><th>Student No</th><th>Qualification</th><th>Confirmed by Rule 67?</th></tr></thead>
+                <tbody>${rows.map(r => `<tr>
+                    <td>${esc(r.rowNumber)}</td>
+                    <td>${esc(r.studentNo)}</td>
+                    <td>${esc(r.qualCode)}</td>
+                    <td>${esc(r.confirmedByR67)}</td>
+                </tr>`).join('')}</tbody>
+            </table></div>`
+            : `<div class="empty-card"><p>No Rule 29 detail rows were returned for this run.</p></div>`;
+        els.reconciliationPane.innerHTML = `
+            <div class="stats-grid" style="margin-bottom:20px">
+                <div class="stat-card"><div class="stat-card__label">Detail Records (${esc(summary.detailErrorCode || '00708')})</div><div class="stat-card__value">${fmt(summary.detailRecordCount)}</div></div>
+                <div class="stat-card stat-card--pass"><div class="stat-card__label">Confirmed by Rule 29</div><div class="stat-card__value">${fmt(summary.confirmedByRule29Count)}</div></div>
+                <div class="stat-card stat-card--fail"><div class="stat-card__label">Not in Rule 29</div><div class="stat-card__value">${fmt(summary.notInRule29Count)}</div></div>
+                <div class="stat-card"><div class="stat-card__label">R29 Only (all)</div><div class="stat-card__value">${fmt(summary.rule29OnlyCount)}</div></div>
+                <div class="stat-card stat-card--pass"><div class="stat-card__label">R29: Confirmed by R67</div><div class="stat-card__value">${fmt(summary.rule29ConfirmedByR67Count)}</div></div>
+                <div class="stat-card"><div class="stat-card__label">R29: In CREG, R67 PASS</div><div class="stat-card__value">${fmt(summary.rule29InCregPassCount)}</div></div>
+                <div class="stat-card stat-card--fail"><div class="stat-card__label">R29: Not in CREG</div><div class="stat-card__value">${fmt(summary.rule29NotInCregCount)}</div></div>
+            </div>
+            <div class="card" style="padding:16px">
+                <strong>Rule 29 Detail Pairs</strong> - all student/qualification pairs from <code>${esc(summary.detailTable)}</code> with error code ${esc(summary.detailErrorCode || '00708')}, showing whether Rule 67 also flagged them.
+            </div>
+            ${rowsHtml}`;
+    }
+
+    function applySummary(summary, options = {}) {
+        state.summary = summary;
+        if (!options.fromWorkspace) state.currentRunId = summary?.savedRunId || state.currentRunId;
+        state.currentStatus = summary?.status || state.currentStatus;
+        state.resultsVisible = !!summary || state.resultsVisible;
+        if (summary) {
+            state.e051FilterValues = summary.e051FilterValues || '';
+            if (els.e051FilterValuesInput) els.e051FilterValuesInput.value = state.e051FilterValues;
+            if (els.detailErrorCodeInput) els.detailErrorCodeInput.value = summary.detailErrorCode || '00708';
+            updateE051Preview();
+            els.workspaceRunState.textContent = state.currentRunId ? `Run #${state.currentRunId} | ${state.currentStatus}` : 'No saved run loaded';
+            els.workspaceRunLabel.textContent = state.currentRunId ? `Run #${state.currentRunId}` : 'No saved run yet';
+            els.workspaceStatusLabel.textContent = state.currentStatus || '-';
+        }
+        setStatusBadge(summary?.status || '');
+        renderAnalysis(summary);
+        renderFlagged(summary);
+        renderClear(summary);
+        renderReconciliation(summary);
+        updateWorkspaceButtons();
+    }
+
+    function applyWorkspace(workspace, resultsVisible, preserveExisting = false) {
+        if (els.datasetsLink) els.datasetsLink.href = state.clientId ? '/EngagementDatasets?clientId=' + state.clientId : '#';
+
+        if (!workspace) {
+            state.currentRunId = null;
+            state.currentStatus = '';
+            state.currentUserEngagementRole = '';
+            state.currentUserHasSignedOff = false;
+            state.isWorkspaceSaved = false;
+            state.hasDataAnalystSignoff = false;
+            state.resultsVisible = false;
+            setWorkspaceState('No saved Rule 67 workspace exists for this engagement yet.', 'info');
+            els.workspaceRunState.textContent = 'No saved run loaded';
+            els.workspaceRunLabel.textContent = 'No saved run yet';
+            els.workspaceStatusLabel.textContent = '-';
+            els.workspaceEditedLabel.textContent = '-';
+            applySummary(null);
+            updateWorkspaceButtons();
+            if (state.clientId) loadTables().catch(() => {});
+            return;
+        }
+
+        state.clientId = workspace.clientId || state.clientId;
+        state.currentRunId = workspace.runId || null;
+        state.currentStatus = workspace.currentStatus || '';
+        state.e051FilterValues = workspace.e051FilterValues || '';
+        state.currentUserEngagementRole = workspace.currentUserEngagementRole || currentSystemRole || '';
+        state.currentUserHasSignedOff = !!workspace.currentUserHasSignedOff;
+        state.isWorkspaceSaved = !!workspace.isWorkspaceSaved;
+        state.hasDataAnalystSignoff = !!workspace.hasDataAnalystSignoff;
+        state.resultsVisible = !!resultsVisible;
+
+        if (els.e051FilterValuesInput) els.e051FilterValuesInput.value = state.e051FilterValues;
+        if (els.detailErrorCodeInput) els.detailErrorCodeInput.value = workspace.detailErrorCode || '00708';
+        updateE051Preview();
+
+        els.workspaceRunState.textContent = workspace.runId ? `Run #${workspace.runId}` : 'No saved run loaded';
+        els.workspaceRunLabel.textContent = workspace.runId ? `Rule 67 Run #${workspace.runId}` : 'No saved run yet';
+        els.workspaceStatusLabel.textContent = workspace.currentStatus || '-';
+        els.workspaceEditedLabel.textContent = workspace.lastEditedAt ? new Date(workspace.lastEditedAt).toLocaleString() : '-';
+        els.workspaceRoleLabel.textContent = workspace.currentUserEngagementRole || currentSystemRole || '-';
+        els.workspaceSignoffComment.value = workspace.currentUserSignoffComment || '';
+
+        const set = (el, value) => { if (el) el.value = value || ''; };
+        set(els.cm_cregStudentNoCol, workspace.cregStudentNoCol);
+        set(els.cm_cregQualCol, workspace.cregQualCol);
+        set(els.cm_cregE051Col, workspace.cregE051Col);
+        set(els.cm_studStudentNoCol, workspace.studStudentNoCol);
+        set(els.cm_studQualCol, workspace.studQualCol);
+
+        loadTables({
+            preferredCregTable: workspace.cregTable || '',
+            preferredStudTable: workspace.studTable || '',
+            preferredDetailTable: workspace.detailTable || ''
+        }).catch(() => {});
+
+        if (!resultsVisible) {
+            setWorkspaceState('Saved Rule 67 results are not available for your engagement role.', 'info');
+            if (!preserveExisting) applySummary(null);
+            else updateWorkspaceButtons();
+            return;
+        }
+
+        setWorkspaceState(workspace.summary ? 'Saved Rule 67 workspace loaded.' : 'Rule 67 workspace loaded. Run validation to generate results.', 'success');
+        if (workspace.summary) applySummary(workspace.summary, { fromWorkspace: true });
+        else if (!preserveExisting) applySummary(null);
+        else updateWorkspaceButtons();
+    }
+
+    async function downloadBlob(url, payload, fileName) {
+        await window.downloadFileWithProgress({
+            url,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': token },
+            body: JSON.stringify(payload),
+            defaultFileName: fileName,
+            label: 'Downloading result'
+        });
+    }
+
+    function getSummaryDownloadPayload() {
+        if (state.currentRunId) {
+            return { savedRunId: state.currentRunId };
+        }
+
+        if (state.summary) {
+            return {
+                ...state.summary,
+                savedRunId: state.summary.savedRunId || state.currentRunId || null
+            };
+        }
+
+        return null;
+    }
+
+    function showSpinner(message) {
+        if (els.spinnerMsg) els.spinnerMsg.textContent = message;
+        if (els.spinner) els.spinner.style.display = 'flex';
+    }
+
+    function hideSpinner() {
+        if (els.spinner) els.spinner.style.display = 'none';
     }
 
     async function loadWorkspace() {
-        state.clientId=Number(els.clientId?.value||0);
-        if (!state.clientId) { applyWorkspace(null,false); return; }
-        const data = await window.fetchJsonWithProgress(`${apiBase}/GetWorkspaceState?clientId=${state.clientId}`,{method:'GET'});
-        if (!data.success) throw new Error(data.error||'Failed to load workspace.');
+        state.clientId = Number(els.clientId?.value || 0);
+        if (!state.clientId) {
+            applyWorkspace(null, false);
+            return;
+        }
+        const data = await window.fetchJsonWithProgress(`${apiBase}/GetWorkspaceState?clientId=${state.clientId}`, { method: 'GET' });
+        if (!data.success) throw new Error(data.error || 'Failed to load workspace.');
         applyWorkspace(data.workspace, data.resultsVisible);
     }
 
-    async function connect() {
-        const server = els.server?.value?.trim();
-        if (!server) throw new Error('Enter the SQL Server name first.');
-        showSpinner('Loading databases...');
+    async function loadTables(opts = {}) {
+        if (!state.clientId) return;
+        showSpinner('Loading tables...');
         try {
-            const data = await postJson(`${apiBase}/GetDatabases`, {server, driver:els.driver.value});
-            if (!data.success) throw new Error(data.error||'Connection failed.');
-            els.database.innerHTML='<option value="">Select database</option>';
-            (data.databases||[]).forEach(db => { const o=document.createElement('option');o.value=o.textContent=db;els.database.appendChild(o); });
-            if (data.databases.length === 1) els.database.value = data.databases[0];
-            setAlert(els.connectionOutput,'success',`Connected. Found ${data.databases.length} database(s).`);
-            if (els.database.value) await loadTables();
-            else setAlert(els.connectionOutput,'success',`Connected. Found ${data.databases.length} database(s). Select a database to load tables.`);
+            const data = await postJson(`${apiBase}/GetTables`, { clientId: state.clientId });
+            if (!data.success) throw new Error(data.error || 'Could not load tables.');
+            populateSelect(els.cregTable, data.tables || [], opts.preferredCregTable || data.autoCregTable, false);
+            populateSelect(els.studTable, data.tables || [], opts.preferredStudTable || data.autoStudTable, false);
+            populateSelect(els.detailTable, data.tables || [], opts.preferredDetailTable || '', true);
+            els.connectionOutput.innerHTML = `<div class="alert alert--success">Loaded ${(data.tables || []).length} table(s) from this engagement's dataset.</div>`;
+            const loads = [loadCols('creg', els.cregTable?.value), loadCols('stud', els.studTable?.value)];
+            if (els.detailTable?.value) loads.push(loadCols('detail', els.detailTable.value));
+            await Promise.all(loads);
         } finally { hideSpinner(); }
-    }
-
-    async function loadTables() {
-        if (!els.database.value) return;
-        const data = await postJson(`${apiBase}/GetTables`, {server:els.server.value.trim(), database:els.database.value, driver:els.driver.value});
-        if (!data.success) throw new Error(data.error||'Could not load tables.');
-        populateSelect(els.cregTable, data.tables||[], data.autoCregTable);
-        populateSelect(els.studTable, data.tables||[], data.autoStudTable);
-        // Populate detail table dropdown — auto-detect CREG_VALIDATION_DETAIL or similar
-        const tables = data.tables||[];
-        const autoDetailTable = tables.find(t=>t.toLowerCase()==='dbo_creg_validation_detail')
-            || tables.find(t=>t.toLowerCase().includes('creg_validation_detail'))
-            || tables.find(t=>t.toLowerCase().includes('validation_detail'))
-            || '';
-        if (els.detailTable) {
-            els.detailTable.innerHTML = '<option value="">(none — skip reconciliation)</option>';
-            tables.forEach(v => { const o=document.createElement('option'); o.value=o.textContent=v; els.detailTable.appendChild(o); });
-            if (autoDetailTable) els.detailTable.value = autoDetailTable;
-        }
-        setAlert(els.configOutput,'success',`Loaded ${data.tables.length} table(s). Auto-detecting columns...`);
-        await window.autoDetectColumns();
     }
 
     async function verifyTables() {
-        showSpinner('Verifying Rule 67 tables...');
+        showSpinner('Verifying tables...');
         try {
             const data = await postJson(`${apiBase}/VerifyTables`, getRequest());
-            if (!data.success) throw new Error(data.error||'Verification failed.');
-            els.configOutput.innerHTML=`<div class="alert alert--success">CREG rows: <strong>${formatNumber(data.cregRecordCount)}</strong> | STUD rows: <strong>${formatNumber(data.studRecordCount)}</strong></div>`;
-        } finally { hideSpinner(); }
+            if (!data.success) throw new Error(data.error || 'Verification failed.');
+            els.configOutput.innerHTML = `<div class="alert alert--success">
+                CREG rows: <strong>${fmt(data.cregRecordCount)}</strong> |
+                STUD rows: <strong>${fmt(data.studRecordCount)}</strong>
+            </div>`;
+        } finally {
+            hideSpinner();
+        }
     }
 
     async function runValidation() {
         const request = getRequest();
-        if (!request.clientId) { setWorkspaceState('Select the approved engagement assigned to you before running this rule.','warning'); return; }
-        if (!request.cregTable) { setAlert(els.configOutput,'warning','Select the CREG table in Rule Configuration before running.'); return; }
+        if (!request.clientId) {
+            setWorkspaceState('Select the approved engagement assigned to you before running.', 'warning');
+            return;
+        }
+        const missing = findMissingMappedColumns(request);
+        if (missing.length) {
+            setWorkspaceState(`Select a real column for: ${missing.join(', ')}. Auto-detect could not confidently match these to your uploaded data.`, 'warning');
+            return;
+        }
+        showSpinner('Running Rule 67...');
         try {
-            showSpinner('Running Rule 67: checking CREG-STUD pairs with E051 filter...');
             const data = await postJson(`${apiBase}/RunValidation`, request);
-            if (!data.success) throw new Error(data.error||'Rule 67 failed.');
-            state.hasPendingValidation=true;state.currentRunId=null;state.currentStatus=data.status||'';state.currentUserHasSignedOff=false;state.isWorkspaceSaved=false;state.hasDataAnalystSignoff=false;state.resultsVisible=true;state.currentUserEngagementRole=state.currentUserEngagementRole||currentSystemRole||'DataAnalyst';
+            if (!data.success) throw new Error(data.error || 'Rule 67 failed.');
+            state.currentUserHasSignedOff = false;
+            state.isWorkspaceSaved = false;
+            state.hasDataAnalystSignoff = false;
+            state.resultsVisible = true;
+            state.currentUserEngagementRole = state.currentUserEngagementRole || currentSystemRole || 'DataAnalyst';
             applySummary(data);
-            setWorkspaceState(`Rule 67 completed. CREG pairs checked: ${formatNumber(data.totalValidated)} | PASS: ${formatNumber(data.passCount)} | FAIL: ${formatNumber(data.failCount)}. Click Save Workspace before signoff.`,'success');
-        } finally { hideSpinner(); }
+            setWorkspaceState(`Rule 67 completed. PASS: ${fmt(data.passCount)} | FAIL: ${fmt(data.failCount)}. Overall ${data.status}.`, 'success');
+        } finally {
+            hideSpinner();
+        }
     }
 
     async function generateSql() {
         showSpinner('Generating SQL...');
-        try { const data=await postJson(`${apiBase}/GenerateSql`,getRequest()); if(!data.success) throw new Error(data.error||'SQL generation failed.'); state.sql=data.sql||''; els.sqlText.value=state.sql; setActiveTab('sql'); } finally { hideSpinner(); }
-    }
-
-    async function beginEdit() {
-        showSpinner('Preparing workspace edit...');
-        try { const data=await postJson(`${apiBase}/BeginWorkspaceEdit`,getRequest()); if(!data.success) throw new Error(data.error||'Could not begin editing.'); applyWorkspace(data.workspace,!!data.workspace?.resultsVisible,true); setWorkspaceState(data.message||'Workspace ready for editing.','warning'); } finally { hideSpinner(); }
+        try {
+            const data = await postJson(`${apiBase}/GenerateSql`, getRequest());
+            if (!data.success) throw new Error(data.error || 'SQL generation failed.');
+            state.sql = data.sql || '';
+            els.sqlText.value = state.sql;
+            setActiveTab('sql');
+        } finally {
+            hideSpinner();
+        }
     }
 
     async function saveWorkspace() {
         showSpinner('Saving workspace...');
-        try { const data=await postJson(`${apiBase}/SaveWorkspace`,getRequest()); if(!data.success) throw new Error(data.error||'Could not save workspace.'); state.hasPendingValidation=false; applyWorkspace(data.workspace,!!data.workspace?.resultsVisible,true); setWorkspaceState(data.message||'Workspace saved.',data.signoffsCleared?'warning':'success'); } finally { hideSpinner(); }
+        try {
+            const data = await postJson(`${apiBase}/SaveWorkspace`, getRequest());
+            if (!data.success) throw new Error(data.error || 'Workspace save failed.');
+            applyWorkspace(data.workspace, data.workspace?.resultsVisible ?? false, true);
+            setWorkspaceState(data.message || 'Workspace saved.', data.signoffsCleared ? 'warning' : 'success');
+        } finally {
+            hideSpinner();
+        }
+    }
+
+    async function beginEdit() {
+        showSpinner('Preparing workspace edit...');
+        try {
+            const data = await postJson(`${apiBase}/BeginWorkspaceEdit`, getRequest());
+            if (!data.success) throw new Error(data.error || 'Could not begin edit.');
+            applyWorkspace(data.workspace, data.workspace?.resultsVisible ?? false, true);
+            setWorkspaceState(data.message || 'Workspace ready for editing.', 'warning');
+        } finally {
+            hideSpinner();
+        }
     }
 
     async function signoffWorkspace() {
         showSpinner('Saving signoff...');
-        try { const data=await postJson(`${apiBase}/SignOffWorkspace`,{clientId:state.clientId,runId:state.currentRunId,comment:els.workspaceSignoffComment.value.trim()}); if(!data.success) throw new Error(data.error||'Signoff failed.'); state.currentUserHasSignedOff=true; applyWorkspace(data.workspace,!!data.workspace?.resultsVisible,true); setWorkspaceState(data.message||'Signoff saved.','success'); } finally { hideSpinner(); }
-    }
-
-    async function removeWorkspaceSignoff() {
-        showSpinner('Removing signoff...');
-        try { const prevRunId=state.currentRunId; const data=await postJson(`${apiBase}/RemoveWorkspaceSignoff`,{clientId:state.clientId,runId:state.currentRunId,comment:''}); if(!data.success) throw new Error(data.error||'Could not remove signoff.'); state.currentUserHasSignedOff=false;state.isWorkspaceSaved=false; applyWorkspace(data.workspace,!!data.workspace?.resultsVisible,!!(data.workspace&&prevRunId&&data.workspace.runId===prevRunId)); setWorkspaceState(data.message||'Signoff removed.','warning'); } finally { hideSpinner(); }
-    }
-
-    function renderAnalysis(summary) {
-        if (!summary) { els.analysisPane.innerHTML='<div class="empty-card"><p>No Rule 67 results loaded.</p></div>'; return; }
-        const controlRows = (summary.controlSummaries||[]).map(i=>`<tr><td>${escapeHtml(i.controlLabel)}</td><td>${escapeHtml(i.criteriaText)}</td><td>${formatNumber(i.totalCount)}</td><td>${formatNumber(i.passCount)}</td><td>${formatNumber(i.failCount)}</td><td>${escapeHtml(i.status)}</td></tr>`).join('');
-        const e051Col = summary.cregE051Col||'_051';
-        const e051Filter = summary.e051FilterValues||'E';
-        const allRows = summary.reviewRows||[];
-
-        const passRows         = allRows.filter(r=>String(r.validationResult||'').toUpperCase()==='PASS');
-        const notInStudRows    = allRows.filter(r=>String((r.displayValues||{}).FailReason||(r.displayValues||{}).FAILREASON||'').toLowerCase()==='not found in stud');
-        const notInStudE051YesRows = notInStudRows.filter(r=>String((r.displayValues||{}).E051_VALID||(r.displayValues||{}).e051_valid||'').toLowerCase()==='yes');
-        const notInStudE051NoRows  = notInStudRows.filter(r=>String((r.displayValues||{}).E051_VALID||(r.displayValues||{}).e051_valid||'').toLowerCase()==='no');
-        const e051InvalidRows  = allRows.filter(r=>String((r.displayValues||{}).FailReason||(r.displayValues||{}).FAILREASON||'').toLowerCase()==='e051 code not in expected values');
-        const confirmedRows    = summary.detailTable ? allRows.filter(r=>{ const rs=String((r.displayValues||{}).Reconciliation_Status||(r.displayValues||{}).RECONCILIATION_STATUS||''); return rs==='Confirmed by Rule 29'; }) : [];
-        const notConfirmedRows = summary.detailTable ? allRows.filter(r=>{ const rs=String((r.displayValues||{}).Reconciliation_Status||(r.displayValues||{}).RECONCILIATION_STATUS||''); return rs==='Not in Rule 29'; }) : [];
-        const rule29OnlyRowsList = summary.rule29OnlyRows||[];
-
-        const rowHeaders = `<tr><th>#</th><th>CREG [_007] Student No</th><th>CREG [_001] Qual</th><th>CREG [${escapeHtml(e051Col)}] E051</th><th>STUD [_007]</th><th>STUD [_001] Qual</th><th>In STUD</th><th>E051 Valid</th><th>Result</th></tr>`;
-
-        const buildPreviewTable = (rowList, rowBg, textColor) => rowList.map(row=>{
-            const v=Object.fromEntries(Object.entries(row.displayValues||{}).map(([k,val])=>[k.toUpperCase(),val]));
-            return `<tr style="background:${rowBg}">
-                <td>${row.validationNumber}</td>
-                <td style="font-weight:700;color:${textColor}">${escapeHtml(v.CREG_STUD_NO||'')}</td>
-                <td>${escapeHtml(v.CREG_QUAL||'')}</td>
-                <td>${escapeHtml(v.CREG_E051||'')}</td>
-                <td style="color:${textColor}">${escapeHtml(v.STUD_NO||'—')}</td>
-                <td>${escapeHtml(v.STUD_QUAL||'—')}</td>
-                <td style="color:${textColor}">${escapeHtml(v.IN_STUD||'')}</td>
-                <td style="color:${textColor}">${escapeHtml(v.E051_VALID||'')}</td>
-                <td style="color:${textColor};font-weight:700">${escapeHtml(String(row.validationResult||''))}</td>
-            </tr>`;
-        }).join('');
-
-        const goToResultsTab = (cat) => `
-            document.querySelectorAll('.R67-cat-tab').forEach(b=>b.classList.remove('active'));
-            const t=document.querySelector('.R67-cat-tab[data-cat="${cat}"]');
-            if(t){t.classList.add('active');}
-            if(typeof state!=='undefined') state.categoryTab='${cat}';`;
-
-        els.analysisPane.innerHTML = `
-            ${summary.isPreviewOnly?`<div class="alert alert--warning" style="margin-bottom:16px">Browser preview shows ${formatNumber(summary.previewLimit)} rows. Download Excel for complete categorised results.</div>`:''}
-            <div class="R67-summary-grid">
-                <div class="stat-card"><div class="stat-card__label">CREG Total Records</div><div class="stat-card__value">${formatNumber(summary.cregRecordCount)}</div></div>
-                <div class="stat-card"><div class="stat-card__label">STUD Total Records</div><div class="stat-card__value">${formatNumber(summary.studRecordCount)}</div></div>
-                <div class="stat-card"><div class="stat-card__label">All Results (Pairs Checked)</div><div class="stat-card__value">${formatNumber(summary.totalValidated)}</div><div style="font-size:11px;margin-top:4px;opacity:.7">= Excel &ldquo;All Results&rdquo; tab</div></div>
-                <div class="stat-card stat-card--pass" style="cursor:pointer" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='PASS';renderResults(true);" title="Click to view PASS rows">
-                    <div class="stat-card__label">PASS</div><div class="stat-card__value">${formatNumber(summary.passCount)}</div>
-                    <div style="font-size:11px;margin-top:4px;opacity:.75">= Excel &ldquo;PASS&rdquo; tab &nbsp;|&nbsp; Click to view &rarr;</div>
-                </div>
-                <div class="stat-card stat-card--fail">
-                    <div class="stat-card__label">FAIL (Total)</div><div class="stat-card__value">${formatNumber(summary.failCount)}</div>
-                    <div style="font-size:11px;margin-top:4px;opacity:.75">Exception rate: ${Number(summary.exceptionRate||0).toFixed(2)}%</div>
-                </div>
-                <div class="stat-card stat-card--fail" style="cursor:pointer" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='NOT_IN_STUD';renderResults(true);" title="Click to view Fail rows">
-                    <div class="stat-card__label">Fail</div><div class="stat-card__value">${formatNumber(summary.notInStudCount)}</div>
-                    <div style="font-size:11px;margin-top:4px;opacity:.75">= Excel &ldquo;Fail&rdquo; tab &nbsp;|&nbsp; Click &rarr;</div>
-                </div>
-                <div class="stat-card stat-card--fail" style="cursor:pointer" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='E051_INVALID';renderResults(true);" title="Click to view FAIL — E051 Invalid rows">
-                    <div class="stat-card__label">FAIL — E051 Invalid</div><div class="stat-card__value">${formatNumber(summary.invalidE051Count)}</div>
-                    <div style="font-size:11px;margin-top:4px;opacity:.75">= Excel &ldquo;FAIL - E051 Invalid&rdquo; tab &nbsp;|&nbsp; Click &rarr;</div>
-                </div>
-            </div>
-
-            ${summary.notInStudCount > 0 ? `
-            <div class="card" style="padding:20px;margin-top:20px;border-left:4px solid #b71c1c">
-                <h3 class="section-title" style="margin-top:0;color:#b71c1c">
-                    Fail &nbsp;<span class="badge badge--fail">${formatNumber(summary.notInStudCount)}</span>
-                    ${summary.isPreviewOnly&&notInStudRows.length<summary.notInStudCount?`<small style="font-weight:normal;font-size:13px"> (showing ${notInStudRows.length} in preview)</small>`:''}
-                </h3>
-                <p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">CREG pair not found in STUD table at all — exception code <strong>00708</strong></p>
-                ${notInStudRows.length === 0
-                    ? `<div class="alert alert--info">No preview rows for this category. Download Excel for full data.</div>`
-                    : `<div class="table-wrapper" style="overflow-x:auto"><table class="data-table" style="min-width:700px;font-size:12px;font-family:Consolas,monospace"><thead>${rowHeaders}</thead><tbody>${buildPreviewTable(notInStudRows,'#FFF3F3','var(--rule15-fail,#c62828)')}</tbody></table></div>`
-                }
-                <div style="margin-top:12px">
-                    <button type="button" class="btn btn-info" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='NOT_IN_STUD';renderResults(true);">View in Results tab &rarr;</button>
-                </div>
-            </div>` : ''}
-
-            ${summary.invalidE051Count > 0 ? `
-            <div class="card" style="padding:20px;margin-top:20px;border-left:4px solid #e65100">
-                <h3 class="section-title" style="margin-top:0;color:#e65100">
-                    FAIL — E051 Invalid &nbsp;<span class="badge badge--fail">${formatNumber(summary.invalidE051Count)}</span>
-                    ${summary.isPreviewOnly&&e051InvalidRows.length<summary.invalidE051Count?`<small style="font-weight:normal;font-size:13px"> (showing ${e051InvalidRows.length} in preview)</small>`:''}
-                </h3>
-                <p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">CREG pair found in STUD but <code>_051</code> value is not in the configured filter — exception code <strong>00708</strong></p>
-                ${e051InvalidRows.length === 0
-                    ? `<div class="alert alert--info">No preview rows for this category. Download Excel for full data.</div>`
-                    : `<div class="table-wrapper" style="overflow-x:auto"><table class="data-table" style="min-width:700px;font-size:12px;font-family:Consolas,monospace"><thead>${rowHeaders}</thead><tbody>${buildPreviewTable(e051InvalidRows,'#FFF8F3','#e65100')}</tbody></table></div>`
-                }
-                <div style="margin-top:12px">
-                    <button type="button" class="btn btn-info" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='E051_INVALID';renderResults(true);">View in Results tab &rarr;</button>
-                </div>
-            </div>` : ''}
-
-            ${summary.failCount === 0 ? `
-            <div class="alert alert--success" style="margin-top:16px">
-                All ${formatNumber(summary.totalValidated)} CREG pairs found in STUD with valid E051 codes. No exceptions.
-            </div>` : ''}
-
-            ${summary.passCount > 0 ? `
-            <div class="card" style="padding:20px;margin-top:20px;border-left:4px solid var(--rule15-pass,#2e7d32)">
-                <h3 class="section-title" style="margin-top:0;color:var(--rule15-pass,#2e7d32)">
-                    PASS — ${formatNumber(summary.passCount)} pair(s) valid
-                    ${summary.isPreviewOnly&&passRows.length<summary.passCount?`<small style="font-weight:normal;font-size:13px"> (showing ${passRows.length} in preview)</small>`:''}
-                </h3>
-                ${passRows.length === 0
-                    ? `<div class="alert alert--info">No PASS rows in preview. Download Excel for all ${formatNumber(summary.passCount)} valid pair(s).</div>`
-                    : `<div class="table-wrapper" style="overflow-x:auto"><table class="data-table" style="min-width:700px;font-size:12px;font-family:Consolas,monospace"><thead>${rowHeaders}</thead><tbody>${buildPreviewTable(passRows,'#F3FFF3','var(--rule15-pass,#2e7d32)')}</tbody></table></div>`
-                }
-                <div style="margin-top:12px">
-                    <button type="button" class="btn btn-info" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='PASS';renderResults(true);">View in Results tab &rarr;</button>
-                </div>
-            </div>` : ''}
-
-            ${(summary.detailTable&&(summary.confirmedByRule29Count>0||summary.notInRule29Count>0||rule29OnlyRowsList.length>0)) ? `
-            <div class="card" style="padding:20px;margin-top:20px;border-left:4px solid #880e4f">
-                <h3 class="section-title" style="margin-top:0;color:#880e4f">Reconciliation vs Rule 29 (${escapeHtml(summary.detailTable||'')})</h3>
-                <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">
-                    Cross-reference of Rule 67 FAIL results against <strong>${escapeHtml(summary.detailTable||'')}</strong> records with error code(s) <code>${escapeHtml(summary.detailErrorCode||'00708')}</code>
-                    (${formatNumber(summary.detailRecordCount)} detail records found &mdash; ${formatNumber(rule29OnlyRowsList.length)} distinct pairs in preview).
-                </p>
-                <div class="R67-summary-grid">
-                    <div class="stat-card" style="border-left:4px solid #2e7d32;cursor:pointer" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='CONFIRMED';renderResults(true);" title="Click to view confirmed rows">
-                        <div class="stat-card__label">Confirmed by Rule 29</div>
-                        <div class="stat-card__value" style="color:#2e7d32">${formatNumber(summary.confirmedByRule29Count)}</div>
-                        <div style="font-size:11px;margin-top:4px;opacity:.75">= Excel &ldquo;Confirmed by Rule 29&rdquo; tab &nbsp;|&nbsp; Click &rarr;</div>
-                    </div>
-                    <div class="stat-card" style="border-left:4px solid #f57f17;cursor:pointer" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='NOT_CONFIRMED';renderResults(true);" title="Click to view unconfirmed rows">
-                        <div class="stat-card__label">Not Confirmed (Rule 67 Only)</div>
-                        <div class="stat-card__value" style="color:#f57f17">${formatNumber(summary.notInRule29Count)}</div>
-                        <div style="font-size:11px;margin-top:4px;opacity:.75">= Excel &ldquo;Not Confirmed (R67 Only)&rdquo; tab &nbsp;|&nbsp; Click &rarr;</div>
-                    </div>
-                    <div class="stat-card" style="border-left:4px solid #880e4f;cursor:pointer" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='RULE29_ONLY';renderResults(true);" title="Click to view Rule 29 detail rows">
-                        <div class="stat-card__label">Rule 29 Detail (${escapeHtml(summary.detailErrorCode||'00708')})</div>
-                        <div class="stat-card__value" style="color:#880e4f">${formatNumber(rule29OnlyRowsList.filter(r=>r.confirmedByR67!=='Yes').length||summary.rule29OnlyCount)}</div>
-                        <div style="font-size:11px;margin-top:4px;opacity:.75">= Excel &ldquo;Rule 29 Only (${escapeHtml(summary.detailErrorCode||'00708')})&rdquo; tab &nbsp;|&nbsp; Click &rarr;</div>
-                    </div>
-                    <div class="stat-card" style="border-left:4px solid #1565c0;cursor:pointer" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='RULE29_CONFIRMED';renderResults(true);" title="Click to view Rule 29 confirmed rows">
-                        <div class="stat-card__label">Rule 29 Confirmed by Rule 67</div>
-                        <div class="stat-card__value" style="color:#1565c0">${formatNumber(rule29OnlyRowsList.filter(r=>r.confirmedByR67==='Yes').length||summary.confirmedByRule29Count)}</div>
-                        <div style="font-size:11px;margin-top:4px;opacity:.75">= Excel &ldquo;R29 Confirmed by R67&rdquo; tab &nbsp;|&nbsp; Click &rarr;</div>
-                    </div>
-                </div>
-                ${confirmedRows.length > 0 ? `
-                <div style="margin-top:18px;border-top:1px solid #e0e0e0;padding-top:16px">
-                    <h4 style="margin:0 0 8px;color:#2e7d32">Confirmed by Rule 29 — ${formatNumber(summary.confirmedByRule29Count)} pair(s) ${summary.isPreviewOnly&&confirmedRows.length<summary.confirmedByRule29Count?`<small style="font-weight:normal;font-size:12px">(showing ${confirmedRows.length} in preview)</small>`:''}</h4>
-                    <div class="table-wrapper" style="overflow-x:auto"><table class="data-table" style="min-width:700px;font-size:12px;font-family:Consolas,monospace"><thead>${rowHeaders}</thead><tbody>${buildPreviewTable(confirmedRows,'#E8F5E9','#2e7d32')}</tbody></table></div>
-                    <div style="margin-top:8px"><button type="button" class="btn btn-info" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='CONFIRMED';renderResults(true);">View all in Results tab &rarr;</button></div>
-                </div>` : ''}
-                ${notConfirmedRows.length > 0 ? `
-                <div style="margin-top:18px;border-top:1px solid #e0e0e0;padding-top:16px">
-                    <h4 style="margin:0 0 8px;color:#f57f17">Not Confirmed (Rule 67 Only) — ${formatNumber(summary.notInRule29Count)} pair(s) ${summary.isPreviewOnly&&notConfirmedRows.length<summary.notInRule29Count?`<small style="font-weight:normal;font-size:12px">(showing ${notConfirmedRows.length} in preview)</small>`:''}</h4>
-                    <div class="table-wrapper" style="overflow-x:auto"><table class="data-table" style="min-width:700px;font-size:12px;font-family:Consolas,monospace"><thead>${rowHeaders}</thead><tbody>${buildPreviewTable(notConfirmedRows,'#FFF3E0','#f57f17')}</tbody></table></div>
-                    <div style="margin-top:8px"><button type="button" class="btn btn-info" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='NOT_CONFIRMED';renderResults(true);">View all in Results tab &rarr;</button></div>
-                </div>` : ''}
-                ${rule29OnlyRowsList.length > 0 ? `
-                <div style="margin-top:18px;border-top:1px solid #e0e0e0;padding-top:16px">
-                    <h4 style="margin:0 0 8px;color:#880e4f">Rule 29 Detail (error ${escapeHtml(summary.detailErrorCode||'00708')}) — ${formatNumber(rule29OnlyRowsList.length)} pair(s) in preview</h4>
-                    <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">All records from <strong>${escapeHtml(summary.detailTable||'')}</strong> matching the error code. <span style="color:#2e7d32;font-weight:700">Green</span> = confirmed by Rule 67 FAIL &nbsp; <span style="color:#880e4f;font-weight:700">Pink</span> = not in Rule 67 FAIL</p>
-                    <div class="table-wrapper" style="overflow-x:auto"><table class="data-table" style="min-width:500px;font-size:12px;font-family:Consolas,monospace">
-                        <thead><tr><th>#</th><th>Student No (Rule 29)</th><th>Qual Code (Rule 29)</th><th>Confirmed by Rule 67?</th></tr></thead>
-                        <tbody>${rule29OnlyRowsList.map((row,i)=>{const conf=row.confirmedByR67==='Yes';return `<tr style="background:${conf?'#E8F5E9':'#FCE4EC'}"><td>${i+1}</td><td style="font-weight:700;color:${conf?'#2e7d32':'#880e4f'}">${escapeHtml(String(row.studentNo||''))}</td><td>${escapeHtml(String(row.qualCode||''))}</td><td style="font-weight:700;color:${conf?'#2e7d32':'#880e4f'}">${conf?'Yes':'No'}</td></tr>`;}).join('')}</tbody>
-                    </table></div>
-                    <div style="margin-top:8px"><button type="button" class="btn btn-info" onclick="document.querySelector('[data-tab=\\'results\\']')?.click();state.categoryTab='RULE29_ONLY';renderResults(true);">View all Rule 29 detail in Results tab &rarr;</button></div>
-                </div>` : ''}
-            </div>` : ''}
-
-            <div class="card" style="padding:20px;margin-top:20px">
-                <h3 class="section-title" style="margin-top:0">Run Summary</h3>
-                <div class="form-grid">
-                    <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Database</div><div>${escapeHtml(summary.database)}</div></div>
-                    <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">CREG Table</div><div>${escapeHtml(summary.cregTable||'')}</div></div>
-                    <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">STUD Table</div><div>${escapeHtml(summary.studTable||'')}</div></div>
-                    <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">E051 Filter</div><div><code>${escapeHtml(e051Col)}</code> IN (${escapeHtml(e051Filter||'ALL — no filter applied')})</div></div>
-                    <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Exception Rate</div><div>${escapeHtml(String(summary.exceptionRate||0))}%</div></div>
-                    <div><div style="color:var(--text-muted);font-size:12px;text-transform:uppercase;font-weight:700">Status</div><div>${escapeHtml(summary.status)}</div></div>
-                </div>
-                <div style="margin-top:18px"><table class="data-table"><thead><tr><th>Control</th><th>Criteria</th><th>Rows Tested</th><th>PASS</th><th>FAIL</th><th>Status</th></tr></thead><tbody>${controlRows}</tbody></table></div>
-            </div>`;
-
-        document.getElementById('dlFailBtn')?.addEventListener('click', () => {
-            if (state.summary) downloadBlob(`${apiBase}/DownloadCsv`, state.summary, 'Rule67_CREG_STUD_Pair_FAIL.csv').catch(err=>setWorkspaceState(err.message,'error'));
-        });
-    }
-
-    function renderResults(force = false) {
-        if (!state.summary) { els.resultsPane.innerHTML='<div class="empty-card"><p>No Rule 67 results loaded.</p></div>'; return; }
-        if (!force && getActiveTab()!=='results') { els.resultsPane.innerHTML='<div class="empty-card"><p>Open the Results tab to load the browser preview.</p></div>'; return; }
-        const summary    = state.summary;
-        const allRows    = summary.reviewRows||[];
-        const e051Col    = summary.cregE051Col||'_051';
-        const hasDetail  = !!(summary.detailTable);
-
-        const passRows         = allRows.filter(r => String(r.validationResult||'').toUpperCase()==='PASS');
-        const notInStudRows    = allRows.filter(r => { const fr=String((r.displayValues||{}).FailReason||(r.displayValues||{}).FAILREASON||'').toLowerCase(); return fr==='not found in stud'; });
-        const notInStudE051YesRows = notInStudRows.filter(r => { const ev=String((r.displayValues||{}).E051_VALID||(r.displayValues||{}).e051_valid||'').toLowerCase(); return ev==='yes'; });
-        const notInStudE051NoRows  = notInStudRows.filter(r => { const ev=String((r.displayValues||{}).E051_VALID||(r.displayValues||{}).e051_valid||'').toLowerCase(); return ev==='no'; });
-        const e051InvalidRows  = allRows.filter(r => { const fr=String((r.displayValues||{}).FailReason||(r.displayValues||{}).FAILREASON||'').toLowerCase(); return fr==='e051 code not in expected values'; });
-        const getRecon         = r => String((r.displayValues||{}).Reconciliation_Status||(r.displayValues||{}).RECONCILIATION_STATUS||'');
-        const confirmedRows    = hasDetail ? allRows.filter(r=>getRecon(r)==='Confirmed by Rule 29') : [];
-        const notConfirmedRows = hasDetail ? allRows.filter(r=>getRecon(r)==='Not in Rule 29') : [];
-        const rule29OnlyRows   = hasDetail ? (summary.rule29OnlyRows||[]) : [];
-
-        const rule29ConfirmedRows    = rule29OnlyRows.filter(r => r.confirmedByR67 === 'Yes');
-        const rule29InCregPassRows   = rule29OnlyRows.filter(r => r.confirmedByR67 === 'No');
-        const rule29NotInCregRows    = rule29OnlyRows.filter(r => r.confirmedByR67 === 'Not in CREG');
-        const rule29NotConfirmedRows = rule29OnlyRows.filter(r => r.confirmedByR67 !== 'Yes');
-        const catMap = {
-            ALL:               { rows: allRows,             label: 'All Results',                    count: summary.totalValidated||allRows.length,          isRule29: false },
-            PASS:              { rows: passRows,             label: 'PASS',                           count: summary.passCount||passRows.length,              isRule29: false },
-            NOT_IN_STUD_E051_YES: { rows: notInStudE051YesRows, label: 'Fail (E051 Yes)',             count: summary.notInStudE051ValidCount||notInStudE051YesRows.length, isRule29: false },
-            NOT_IN_STUD_E051_NO:  { rows: notInStudE051NoRows,  label: 'Fail (E051 No)',              count: summary.notInStudE051InvalidCount||notInStudE051NoRows.length, isRule29: false },
-            NOT_IN_STUD:       { rows: notInStudRows,        label: 'Fail',                           count: summary.notInStudCount||notInStudRows.length,    isRule29: false },
-            E051_INVALID:      { rows: e051InvalidRows,      label: 'FAIL — E051 Invalid',            count: summary.invalidE051Count||e051InvalidRows.length, isRule29: false },
-            ...(hasDetail ? {
-                CONFIRMED:            { rows: confirmedRows,       label: 'Confirmed by Rule 29',           count: summary.confirmedByRule29Count||confirmedRows.length,    isRule29: false },
-                NOT_CONFIRMED:        { rows: notConfirmedRows,    label: 'Not Confirmed (R67 Only)',       count: summary.notInRule29Count||notConfirmedRows.length,       isRule29: false },
-                RULE29_ONLY:          { rows: rule29OnlyRows,      label: `Rule 29 Only (${escapeHtml(summary.detailErrorCode||'00708')})`, count: summary.rule29OnlyCount||rule29OnlyRows.length, isRule29: true },
-                RULE29_CONFIRMED:     { rows: rule29ConfirmedRows, label: 'R29 Confirmed by Rule 67',      count: summary.rule29ConfirmedByR67Count||rule29ConfirmedRows.length,  isRule29: true },
-                RULE29_NOT_CONFIRMED: { rows: rule29InCregPassRows,label: 'R29 In CREG — Not Confirmed',  count: summary.rule29InCregPassCount||rule29InCregPassRows.length,      isRule29: true },
-                RULE29_NOT_IN_CREG:   { rows: rule29NotInCregRows, label: 'R29 Not in CREG',              count: summary.rule29NotInCregCount||rule29NotInCregRows.length,        isRule29: true }
-            } : {})
-        };
-
-        // Validate active tab still exists after possible hasDetail=false
-        if (!catMap[state.categoryTab]) state.categoryTab = 'ALL';
-
-        const isRule29Tab = catMap[state.categoryTab]?.isRule29 === true;
-        const rows = catMap[state.categoryTab]?.rows || allRows;
-
-        const reconBadge = (reconVal) => {
-            if (!hasDetail || !reconVal) return '';
-            if (reconVal === 'Confirmed by Rule 29')
-                return `<span class="R67-recon R67-recon--confirmed">&#10003; Rule 29</span>`;
-            if (reconVal === 'Not in Rule 29')
-                return `<span class="R67-recon R67-recon--notconfirmed">&#9888; Not in Rule 29</span>`;
-            return '';
-        };
-
-        const buildRowHtml = (rowList) => rowList.map(row => {
-            const v=Object.fromEntries(Object.entries(row.displayValues||{}).map(([k,val])=>[k.toUpperCase(),val]));
-            const isFail=String(row.validationResult||'').toUpperCase()==='FAIL';
-            const recon = hasDetail ? v.RECONCILIATION_STATUS||'' : '';
-            return `<tr style="background:${isFail?'#FFF3F3':'#F3FFF3'}">
-                <td>${escapeHtml(String(row.validationNumber||''))}</td>
-                <td class="group-creg">${escapeHtml(v.CREG_STUD_NO||'')}</td>
-                <td class="group-creg">${escapeHtml(v.CREG_QUAL||'')}</td>
-                <td class="group-creg">${escapeHtml(v.CREG_E051||'')}</td>
-                <td class="group-stud ${isFail&&v.IN_STUD!=='Yes'?'is-fail':''}">${escapeHtml(v.STUD_NO||'—')}</td>
-                <td class="group-stud">${escapeHtml(v.STUD_QUAL||'—')}</td>
-                <td class="${isFail?'is-fail':'is-pass'}">${escapeHtml(v.IN_STUD||'')}</td>
-                <td class="${isFail&&v.E051_VALID!=='Yes'?'is-fail':'is-pass'}">${escapeHtml(v.E051_VALID||'')}</td>
-                <td class="group-final ${isFail?'is-fail':'is-pass'}">
-                    <span class="result-text">${escapeHtml(isFail?'FAIL':'PASS')} ${isFail?'(00708)':''}</span>
-                </td>
-                ${hasDetail?`<td>${reconBadge(recon)}</td>`:''}
-            </tr>`;
-        }).join('');
-
-        const buildRule29OnlyRowHtml = (rowList) => rowList.map((row,i) => {
-            const status = row.confirmedByR67 || 'Not in CREG';
-            let bg, clr, lbl;
-            if (status === 'Yes')           { bg='#E8F5E9'; clr='#2e7d32'; lbl='&#10003; Yes — Rule 67 also FAIL'; }
-            else if (status === 'No')       { bg='#FFF8E1'; clr='#f57f17'; lbl='&#9888; No — Rule 67 = PASS (student is in CREG)'; }
-            else                            { bg='#FCE4EC'; clr='#b71c1c'; lbl='&#10007; Not in CREG — Rule 67 did not validate this student'; }
-            const msg = row.errorMessage ? `<br><span style="font-size:10px;opacity:.8">${escapeHtml(String(row.errorMessage))}</span>` : '';
-            return `<tr style="background:${bg}">
-                <td>${i+1}</td>
-                <td style="font-weight:700;color:${clr}">${escapeHtml(String(row.studentNo||''))}</td>
-                <td>${escapeHtml(String(row.qualCode||''))}</td>
-                <td colspan="${hasDetail?7:6}" style="color:${clr};font-size:11px;font-weight:700">${lbl}${msg}</td>
-            </tr>`;
-        }).join('');
-
-        const colSpan = hasDetail ? 10 : 9;
-        const catTabsHtml = Object.entries(catMap).map(([key, cfg]) =>
-            `<button type="button" class="R67-cat-tab${state.categoryTab===key?' active':''}" data-cat="${key}">
-                ${escapeHtml(cfg.label)} <span class="R67-cat-count">${cfg.count.toLocaleString()}</span>
-            </button>`
-        ).join('');
-
-        const tableHeader = isRule29Tab
-            ? `<tr><th>#</th><th>Student No (from Rule 29)</th><th>Qualification (from Rule 29)</th><th colspan="${colSpan-2}">Note</th></tr>`
-            : `<tr>
-                <th>#</th>
-                <th class="group-creg">CREG [_007] Student No</th>
-                <th class="group-creg">CREG [_001] Qual</th>
-                <th class="group-creg">CREG [${escapeHtml(e051Col)}] E051</th>
-                <th class="group-stud">STUD [_007]</th>
-                <th class="group-stud">STUD [_001] Qual</th>
-                <th>In STUD</th>
-                <th>E051 Valid</th>
-                <th class="group-final">Result</th>
-                ${hasDetail?'<th>Reconciliation</th>':''}
-              </tr>`;
-
-        const activeCat = catMap[state.categoryTab];
-        const activeCatTotal = activeCat?.count || 0;
-        const noPreviewMsg = activeCatTotal > 0 && rows.length === 0
-            ? `<tr><td colspan="${colSpan}" style="text-align:center;padding:20px">
-                  <div class="alert alert--info" style="display:inline-block;text-align:left;max-width:600px">
-                      <strong>${formatNumber(activeCatTotal)} records</strong> in this category — browser preview does not include rows for this tab.<br>
-                      <button type="button" class="btn btn-primary btn-sm" style="margin-top:8px"
-                          onclick="downloadBlob(\`\${apiBase}/DownloadExcel\`,state.summary,'Rule67_CREG_STUD_Pair.xlsx').catch(e=>setWorkspaceState(e.message,'error'))">
-                          Download Excel for full data &darr;
-                      </button>
-                  </div>
-              </td></tr>`
-            : '';
-        const bodyHtml = isRule29Tab
-            ? (buildRule29OnlyRowHtml(rows)||(noPreviewMsg||`<tr><td colspan="${colSpan}" style="text-align:center;color:var(--text-muted);padding:16px">No Rule 29 records in this category.</td></tr>`))
-            : (buildRowHtml(rows)||(noPreviewMsg||`<tr><td colspan="${colSpan}" style="text-align:center;color:var(--text-muted);padding:16px">No rows in this category.</td></tr>`));
-
-        els.resultsPane.innerHTML=`
-            <div class="R67-cat-tabs">${catTabsHtml}</div>
-            <div style="font-size:12px;color:var(--text-muted);padding:6px 0 8px">
-                Showing ${formatNumber(rows.length)} of ${formatNumber(activeCatTotal)} rows
-                ${summary.isPreviewOnly||rows.length<activeCatTotal?`<em style="margin-left:4px">(browser preview — download Excel for complete data)</em>`:''}
-            </div>
-            <div class="R67-table-wrap">
-                <table class="R67-grid">
-                    <thead>${tableHeader}</thead>
-                    <tbody>${bodyHtml}</tbody>
-                </table>
-            </div>`;
-
-        els.resultsPane.querySelectorAll('.R67-cat-tab').forEach(btn => {
-            btn.addEventListener('click', () => {
-                state.categoryTab = btn.dataset.cat;
-                renderResults(true);
+        try {
+            const data = await postJson(`${apiBase}/SignOffWorkspace`, {
+                clientId: state.clientId,
+                runId: state.currentRunId,
+                comment: els.workspaceSignoffComment.value || ''
             });
-        });
+            if (!data.success) throw new Error(data.error || 'Signoff failed.');
+            state.currentUserHasSignedOff = true;
+            applyWorkspace(data.workspace, data.resultsVisible ?? false, true);
+            setWorkspaceState(data.message || 'Signoff saved.', 'success');
+        } finally {
+            hideSpinner();
+        }
     }
 
-    // ─── Wire up buttons ─────────────────────────────────────────────────────
+    async function removeSignoff() {
+        showSpinner('Removing signoff...');
+        try {
+            const data = await postJson(`${apiBase}/RemoveWorkspaceSignoff`, {
+                clientId: state.clientId,
+                runId: state.currentRunId,
+                comment: ''
+            });
+            if (!data.success) throw new Error(data.error || 'Signoff removal failed.');
+            state.currentUserHasSignedOff = false;
+            state.isWorkspaceSaved = false;
+            applyWorkspace(data.workspace, data.resultsVisible ?? false, false);
+            setWorkspaceState(data.message || 'Signoff removed.', 'warning');
+        } finally {
+            hideSpinner();
+        }
+    }
 
-    els.clientId?.addEventListener('change', async () => {
-        showSpinner('Loading workspace...'); try { await loadWorkspace(); } catch(e) { setWorkspaceState(e.message,'error'); } finally { hideSpinner(); }
-    });
-    els.database?.addEventListener('change', async () => {
-        try { showSpinner('Loading tables...'); await loadTables(); } catch(e) { setAlert(els.configOutput,'error',e.message); } finally { hideSpinner(); }
-    });
-    els.cregTable?.addEventListener('change', async () => { await loadCols('creg', els.cregTable.value).catch(()=>{}); });
-    els.studTable?.addEventListener('change', async () => { await loadCols('stud', els.studTable.value).catch(()=>{}); });
-    els.detailTable?.addEventListener('change', async () => { await loadDetailCols(els.detailTable.value).catch(()=>{}); });
-    document.getElementById('connectBtn')?.addEventListener('click', async () => { try { await connect(); } catch(e) { setAlert(els.connectionOutput,'error',e.message); } });
-    document.getElementById('verifyBtn')?.addEventListener('click', async () => { try { await verifyTables(); } catch(e) { setAlert(els.configOutput,'error',e.message); } });
-    document.getElementById('runBtn')?.addEventListener('click', async () => { try { await runValidation(); } catch(e) { setWorkspaceState(e.message,'error'); hideSpinner(); } });
-    document.getElementById('sqlBtn')?.addEventListener('click', async () => { try { await generateSql(); } catch(e) { setWorkspaceState(e.message,'error'); hideSpinner(); } });
-    els.beginEditBtn?.addEventListener('click', async () => { try { await beginEdit(); } catch(e) { setWorkspaceState(e.message,'error'); hideSpinner(); } });
-    els.saveWorkspaceBtn?.addEventListener('click', async () => { try { await saveWorkspace(); } catch(e) { setWorkspaceState(e.message,'error'); hideSpinner(); } });
-    els.signoffBtn?.addEventListener('click', async () => { try { await signoffWorkspace(); } catch(e) { setWorkspaceState(e.message,'error'); hideSpinner(); } });
-    els.removeSignoffBtn?.addEventListener('click', async () => { try { await removeWorkspaceSignoff(); } catch(e) { setWorkspaceState(e.message,'error'); hideSpinner(); } });
+    document.getElementById('refreshTablesBtn')?.addEventListener('click', () => loadTables().catch(error => {
+        hideSpinner();
+        els.connectionOutput.innerHTML = `<div class="alert alert--error">${esc(error.message)}</div>`;
+    }));
+    document.getElementById('verifyBtn')?.addEventListener('click', () => verifyTables().catch(error => {
+        hideSpinner();
+        els.configOutput.innerHTML = `<div class="alert alert--error">${esc(error.message)}</div>`;
+    }));
+    document.getElementById('runBtn')?.addEventListener('click', () => runValidation().catch(error => {
+        hideSpinner();
+        setWorkspaceState(error.message, 'error');
+    }));
+    document.getElementById('sqlBtn')?.addEventListener('click', () => generateSql().catch(error => {
+        hideSpinner();
+        els.sqlText.value = error.message;
+    }));
+    document.getElementById('saveWorkspaceBtn')?.addEventListener('click', () => saveWorkspace().catch(error => {
+        hideSpinner();
+        setWorkspaceState(error.message, 'error');
+    }));
+    document.getElementById('beginEditBtn')?.addEventListener('click', () => beginEdit().catch(error => {
+        hideSpinner();
+        setWorkspaceState(error.message, 'error');
+    }));
+    document.getElementById('signoffBtn')?.addEventListener('click', () => signoffWorkspace().catch(error => {
+        hideSpinner();
+        setWorkspaceState(error.message, 'error');
+    }));
+    document.getElementById('removeSignoffBtn')?.addEventListener('click', () => removeSignoff().catch(error => {
+        hideSpinner();
+        setWorkspaceState(error.message, 'error');
+    }));
 
+    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => {
+        const payload = getSummaryDownloadPayload();
+        if (!payload) {
+            setWorkspaceState('Run Rule 67 first before downloading Excel results.', 'warning');
+            return;
+        }
+
+        downloadBlob(`${apiBase}/DownloadExcel`, payload, 'Rule67_CREG_STUD_Pair.xlsx')
+            .catch(error => setWorkspaceState(error.message, 'error'));
+    });
+    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => {
+        const payload = getSummaryDownloadPayload();
+        if (!payload) {
+            setWorkspaceState('Run Rule 67 first before downloading CSV results.', 'warning');
+            return;
+        }
+
+        downloadBlob(`${apiBase}/DownloadCsv`, payload, 'Rule67_CREG_STUD_Pair.csv')
+            .catch(error => setWorkspaceState(error.message, 'error'));
+    });
+    document.getElementById('downloadSqlBtn')?.addEventListener('click', () =>
+        downloadBlob(`${apiBase}/DownloadSql`, getRequest(), 'Rule67_CREG_STUD_Pair.sql').catch(error => setWorkspaceState(error.message, 'error')));
     document.getElementById('downloadAllBtn')?.addEventListener('click', async () => {
-        if (!state.summary) return;
-        const chkExcel = document.getElementById('chkExcel')?.checked ?? true;
-        const chkCsv   = document.getElementById('chkCsv')?.checked ?? true;
-        const chkSql   = document.getElementById('chkSql')?.checked ?? true;
-        if (chkExcel) await downloadBlob(`${apiBase}/DownloadExcel`, state.summary, 'Rule67_CREG_STUD_Pair.xlsx').catch(e=>setWorkspaceState(e.message,'error'));
-        if (chkCsv)   await downloadBlob(`${apiBase}/DownloadCsv`,   state.summary, 'Rule67_CREG_STUD_Pair.csv').catch(e=>setWorkspaceState(e.message,'error'));
-        if (chkSql)   await downloadBlob(`${apiBase}/DownloadSql`,   getRequest(),  'Rule67_CREG_STUD_Pair.sql').catch(e=>setWorkspaceState(e.message,'error'));
+        if (!state.currentRunId) { setWorkspaceState('Save the workspace before downloading.', 'warning'); return; }
+        const id = state.currentRunId;
+        const dl = (url, filename) => window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
+        await dl(`${apiBase}/DownloadSavedExcel?runId=${id}`, `Rule67_Run_${id}.xlsx`);
+        await dl(`${apiBase}/DownloadSavedCsv?runId=${id}`, `Rule67_Run_${id}.csv`);
+        await dl(`${apiBase}/DownloadSavedSql?runId=${id}`, `Rule67_Run_${id}.sql`);
     });
-    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => downloadBlob(`${apiBase}/DownloadExcel`, state.summary, 'Rule67_CREG_STUD_Pair.xlsx').catch(e=>setWorkspaceState(e.message,'error')));
-    document.getElementById('downloadCsvBtn')?.addEventListener('click',   () => downloadBlob(`${apiBase}/DownloadCsv`,   state.summary, 'Rule67_CREG_STUD_Pair.csv').catch(e=>setWorkspaceState(e.message,'error')));
-    document.getElementById('downloadSqlBtn')?.addEventListener('click',   () => downloadBlob(`${apiBase}/DownloadSql`,   getRequest(),  'Rule67_CREG_STUD_Pair.sql').catch(e=>setWorkspaceState(e.message,'error')));
 
-    // ─── Init ─────────────────────────────────────────────────────────────────
-    if (state.clientId > 0) {
-        (async () => { showSpinner('Loading workspace...'); try { await loadWorkspace(); } catch(e) { setWorkspaceState(e.message,'error'); } finally { hideSpinner(); } })();
-    } else {
-        applySummary(null);
-        updateWorkspaceButtons();
-    }
+    els.clientId?.addEventListener('change', () => loadWorkspace().catch(error => setWorkspaceState(error.message, 'error')));
+
+    renderAnalysis(null);
+    renderFlagged(null);
+    renderClear(null);
+    renderReconciliation(null);
+    updateWorkspaceButtons();
+
+    if (state.clientId) loadWorkspace().catch(error => setWorkspaceState(error.message, 'error'));
+    else if (isResultsOnlyRole) setWorkspaceState('Select an engagement to load the saved Rule 67 results.', 'info');
 })();
 </script>

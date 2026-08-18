@@ -136,32 +136,19 @@ namespace HemisAudit.Controllers
                 (string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(review.CurrentUserEngagementRole, "DataAnalyst", StringComparison.OrdinalIgnoreCase));
 
-            review.GeneratedSql = _rule65.GenerateSql(new Rule65ValidationRequest
-            {
-                ClientId = review.ClientId,
-                Database = review.Summary.Database,
-                CancellationTable = review.Summary.CancellationTable,
-                ClientTable = review.Summary.ClientTable,
-                ColumnMapping = review.Summary.ColumnMapping
-            });
-
             return View(review);
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule65.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule65.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule65.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule65GetColumnsRequest request) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule65.GetColumnsAsync(request.Server, request.Database, request.Driver, request.TableName)));
+            Json(await RequireDataAnalystAsync(async () => await _rule65.GetColumnsAsync(request.ClientId, request.TableName, request.TableRole)));
 
         [HttpPost]
-        public async Task<IActionResult> VerifyTables([FromBody] Rule65VerifyRequest request) =>
+        public async Task<IActionResult> VerifyTables([FromBody] Rule65ValidationRequest request) =>
             Json(await RequireDataAnalystAsync(async () => await _rule65.VerifyTablesAsync(request)));
 
         [HttpPost]
@@ -249,6 +236,7 @@ namespace HemisAudit.Controllers
         [HttpPost]
         public IActionResult GenerateSql([FromBody] Rule65ValidationRequest request) =>
             Json(new Rule65SqlResult { Success = true, Sql = _rule65.GenerateSql(request) });
+
         [HttpPost]
         public IActionResult GenerateRScript([FromBody] Rule65ValidationRequest request) =>
             Json(new Rule65SqlResult { Success = true, Sql = Rule65RScriptGenerator.Generate(request) + RScriptScaffold.BuildAutoExportFooter("Rule65") });
@@ -313,6 +301,44 @@ namespace HemisAudit.Controllers
             return Json(new { success = true, message = "Signoff removed.", resultsVisible, workspace });
         }
 
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedExcel(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId);
+            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
+            var fullSummary = await _rule65.GetStoredSummaryAsync(runId) ?? review.Summary;
+            var bytes = BuildExcelExport(fullSummary);
+            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                $"Rule65_Cancellation_Census_Date_Validation_Run_{runId}.xlsx");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedCsv(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId);
+            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
+            var fullSummary = await _rule65.GetStoredSummaryAsync(runId) ?? review.Summary;
+            var bytes = BuildCsvExport(fullSummary);
+            return File(bytes, "text/csv", $"Rule65_Cancellation_Census_Date_Validation_Run_{runId}.csv");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadSavedSql(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId);
+            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
+            var sql = _rule65.GenerateSql(new Rule65ValidationRequest
+            {
+                ClientId = review.ClientId,
+                CancellationTable = review.Summary.CancellationTable,
+                ClientTable = review.Summary.ClientTable,
+                UseClientCensusTable = review.Summary.UseClientCensusTable,
+                ColumnMapping = review.Summary.ColumnMapping
+            });
+            var bytes = System.Text.Encoding.UTF8.GetBytes(sql);
+            return File(bytes, "application/sql", $"Rule65_Cancellation_Census_Date_Validation_Run_{runId}.sql");
+        }
+
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule65ValidationSummary summary)
         {
@@ -355,7 +381,6 @@ namespace HemisAudit.Controllers
 
             var summaryRows = new (string Label, string Value)[]
             {
-                ("Database", summary.Database),
                 ("Timestamp", summary.Timestamp),
                 ("Cancellation Table", summary.CancellationTable),
                 ("Client Census Table", summary.ClientTable),
@@ -401,7 +426,6 @@ namespace HemisAudit.Controllers
             using var stream = new MemoryStream();
             using var writer = new StreamWriter(stream, System.Text.Encoding.UTF8);
             writer.WriteLine("\"HEMIS RULE 65 - Cancellation Census Date Validation\"");
-            writer.WriteLine($"\"Database\",\"{summary.Database}\"");
             writer.WriteLine($"\"Timestamp\",\"{summary.Timestamp}\"");
             writer.WriteLine($"\"Status\",\"{summary.Status}\"");
             writer.WriteLine($"\"Total Rows\",{summary.TotalCount},\"Clear Rows\",{summary.PassCount},\"Flagged Rows\",{summary.FailCount}");
@@ -440,16 +464,8 @@ namespace HemisAudit.Controllers
             var worksheet = workbook.Worksheets.Add(sheetName);
             var headers = new[]
             {
-                "Source Table",
-                "Student No",
-                "Qualification",
-                "Subject",
-                "Cancel Date",
-                "Census Date",
-                "Current Census",
-                "Error Code",
-                "Result",
-                "Explanation"
+                "Source Table", "Student No", "Qualification", "Subject",
+                "Cancel Date", "Census Date", "Current Census", "Error Code", "Result", "Explanation"
             };
 
             for (var index = 0; index < headers.Length; index++)
@@ -576,6 +592,34 @@ namespace HemisAudit.Controllers
                 "PASS_NOT_ON_CENSUS" => "Pass Not On Census",
                 _ => "Rule65 Category"
             };
+
+        private async Task<Rule65RunReviewViewModel?> LoadAuthorizedSavedRunAsync(int runId)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            var review = await _rule65.GetSavedRunAsync(runId, user?.Email);
+            if (review == null)
+            {
+                TempData["Error"] = "Saved validation run was not found.";
+                return null;
+            }
+            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
+            {
+                TempData["Error"] = "You do not have access to this saved validation run.";
+                return null;
+            }
+            if (!ValidationRunAccessPolicy.CanViewSignedResults(role, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff))
+            {
+                TempData["Error"] = "Only analyst-signed validation results are available for review.";
+                return null;
+            }
+            if (!ValidationRunAccessPolicy.CanDownloadSignedResults(role, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff))
+            {
+                TempData["Error"] = "The assigned data analyst must sign off before other assigned users can download this run.";
+                return null;
+            }
+            return review;
+        }
 
         private async Task<Rule65ValidationSummary> ResolveDownloadSummaryAsync(Rule65ValidationSummary? summary)
         {

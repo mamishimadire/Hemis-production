@@ -159,8 +159,6 @@ namespace HemisAudit.Controllers
             {
                 ClientId = review.ClientId,
                 RuleNumber = review.RuleNumber,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
                 QualTable = review.Summary.QualTable,
                 StudTable = review.Summary.StudTable,
                 CregTable = review.Summary.CregTable,
@@ -177,16 +175,12 @@ namespace HemisAudit.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> GetDatabases([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule10.GetDatabasesAsync(model.Server, model.Driver)));
-
-        [HttpPost]
-        public async Task<IActionResult> GetTables([FromBody] ConnectionViewModel model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule10.GetTablesAsync(model.Server, model.Database, model.Driver)));
+        public async Task<IActionResult> GetTables([FromBody] EngagementTableListRequest model) =>
+            Json(await RequireDataAnalystAsync(async () => await _rule10.GetTablesAsync(model.ClientId)));
 
         [HttpPost]
         public async Task<IActionResult> GetColumns([FromBody] Rule10GetColumnsRequest model) =>
-            Json(await RequireDataAnalystAsync(async () => await _rule10.GetColumnsAsync(model.Server, model.Database, model.Driver, model.TableName)));
+            Json(await RequireDataAnalystAsync(async () => await _rule10.GetColumnsAsync(model.ClientId, model.TableName)));
 
         [HttpPost]
         public async Task<IActionResult> VerifyTables([FromBody] Rule10VerifyRequest request)
@@ -599,9 +593,6 @@ namespace HemisAudit.Controllers
                 ClientId = review.ClientId,
                 RunId = review.RunId,
                 RuleNumber = review.RuleNumber,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
-                Driver = "ODBC Driver 17 for SQL Server",
                 QualTable = review.Summary.QualTable,
                 StudTable = review.Summary.StudTable,
                 CregTable = review.Summary.CregTable,
@@ -630,9 +621,6 @@ namespace HemisAudit.Controllers
                 ClientId = review.ClientId,
                 RunId = review.RunId,
                 RuleNumber = review.RuleNumber,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
-                Driver = "ODBC Driver 17 for SQL Server",
                 QualTable = review.Summary.QualTable,
                 StudTable = review.Summary.StudTable,
                 CregTable = review.Summary.CregTable,
@@ -660,8 +648,6 @@ namespace HemisAudit.Controllers
             {
                 ClientId = review.ClientId,
                 RuleNumber = review.RuleNumber,
-                Server = review.SourceServer,
-                Database = review.Summary.Database,
                 QualTable = review.Summary.QualTable,
                 StudTable = review.Summary.StudTable,
                 CregTable = review.Summary.CregTable,
@@ -786,9 +772,6 @@ namespace HemisAudit.Controllers
                         ClientId = review.ClientId,
                         RunId = review.RunId,
                         RuleNumber = review.RuleNumber,
-                        Server = review.SourceServer,
-                        Database = review.Summary.Database,
-                        Driver = "ODBC Driver 17 for SQL Server",
                         QualTable = review.Summary.QualTable,
                         StudTable = review.Summary.StudTable,
                         CregTable = review.Summary.CregTable,
@@ -816,9 +799,6 @@ namespace HemisAudit.Controllers
                             ClientId = review.ClientId,
                             RunId = review.RunId,
                             RuleNumber = review.RuleNumber,
-                            Server = review.SourceServer,
-                            Database = review.Summary.Database,
-                            Driver = "ODBC Driver 17 for SQL Server",
                             QualTable = review.Summary.QualTable,
                             StudTable = review.Summary.StudTable,
                             CregTable = review.Summary.CregTable,

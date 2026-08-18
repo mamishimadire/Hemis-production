@@ -63,30 +63,16 @@
         <div class="accordion-item" id="acc-connection">
             <button class="accordion-toggle" type="button" onclick="toggleAccordion('connection')">
                 <span class="acc-icon">DB</span>
-                <span>Database Connection</span>
+                <span>Engagement Dataset</span>
                 <span class="acc-chevron">v</span>
             </button>
             <div class="accordion-body" id="body-connection">
-                <div class="form-grid">
-                    <div class="field-group">
-                        <label for="server">Server Name</label>
-                        <input id="server" type="text" placeholder="(localdb)\MSSQLLocalDB" />
-                    </div>
-                    <div class="field-group">
-                        <label for="driver">Driver</label>
-                        <select id="driver">
-                            <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
-                            <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
-                            <option value="SQL Server">SQL Server</option>
-                        </select>
-                    </div>
-                    <div class="field-group">
-                        <label for="database">Database</label>
-                        <select id="database"></select>
-                    </div>
+                <div class="alert alert--info" id="datasetStatusAlert">
+                    Select an engagement above to load its uploaded tables.
                 </div>
                 <div class="action-bar" style="justify-content:flex-start;margin:12px 0 0">
-                    <button type="button" class="btn btn-primary" id="connectBtn">Connect</button>
+                    <a class="btn btn-secondary" id="datasetsLink" href="#">Manage Datasets</a>
+                    <button type="button" class="btn btn-primary" id="connectBtn">Refresh Tables</button>
                     <button type="button" class="btn btn-info" id="verifyBtn">Verify Table</button>
                 </div>
                 <div id="connectionOutput" class="status-output"></div>
@@ -280,7 +266,6 @@
 (function () {
     const currentSystemRole = '@currentSystemRole';
     const defaultExclusionCodes = '02202, 02301, 02302, 00708, 07201, 01501, 1501';
-    const preferredDatabaseName = 'HEMIS_2025';
     const ruleNumber = @ruleNumber;
     const ruleScope = '@ruleScope';
     const ruleTitle = '@ruleTitle';
@@ -311,9 +296,8 @@
 
     const els = {
         clientId: document.getElementById('clientId'),
-        server: document.getElementById('server'),
-        database: document.getElementById('database'),
-        driver: document.getElementById('driver'),
+        datasetStatusAlert: document.getElementById('datasetStatusAlert'),
+        datasetsLink: document.getElementById('datasetsLink'),
         tableName: document.getElementById('tableName'),
         errorTypeColumn: document.getElementById('errorTypeColumn'),
         errorColumn: document.getElementById('errorColumn'),
@@ -519,9 +503,6 @@
         return {
             clientId: state.clientId,
             runId: state.currentRunId,
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
             tableName: els.tableName.value,
             errorTypeColumn: els.errorTypeColumn.value,
             errorColumn: els.errorColumn.value,
@@ -829,9 +810,6 @@
             state.clientId = 0;
         }
 
-        els.server.value = '';
-        els.driver.value = 'ODBC Driver 17 for SQL Server';
-        els.database.innerHTML = '';
         els.tableName.innerHTML = '';
         els.errorTypeColumn.innerHTML = '';
         els.errorColumn.innerHTML = '';
@@ -878,8 +856,6 @@
             return;
         }
 
-        els.server.value = workspace.server || '';
-        els.driver.value = workspace.driver || 'ODBC Driver 17 for SQL Server';
         els.exclusionCodes.value = canonicalizeExclusionCodes(workspace.exclusionCodes || defaultExclusionCodes);
         els.workspaceRunLabel.textContent = workspace.runId ? `Run #${workspace.runId}` : 'No saved run yet';
         els.workspaceStatusLabel.textContent = workspace.currentStatus || '-';
@@ -1021,6 +997,8 @@
     }
 
     async function loadWorkspace() {
+        if (els.datasetsLink) els.datasetsLink.href = state.clientId ? `/EngagementDatasets?clientId=${state.clientId}` : '#';
+
         if (!state.clientId) {
             applyWorkspace(null, false);
             renderSummary(null);
@@ -1036,6 +1014,8 @@
             hideSpinner();
             return;
         }
+
+        await loadTables().catch(() => { /* best-effort background refresh */ });
 
         if (!result.hasWorkspace) {
             applyWorkspace(null, false);
@@ -1057,36 +1037,12 @@
 
     async function populateSavedSelections(workspace) {
         if (!workspace) return;
-        if (workspace.server) {
-            const dbs = await post(`${apiBasePath}/GetDatabases`, { server: workspace.server, driver: workspace.driver || els.driver.value });
-            if (dbs.success) {
-                const databases = dbs.databases || [];
-                const preferredDatabase =
-                    (workspace.database && findExactValue(databases, workspace.database)) ||
-                    findExactValue(databases, preferredDatabaseName) ||
-                    databases[0] ||
-                    null;
-                populateSelect(els.database, databases, preferredDatabase);
-            }
+        if (els.tableName.value) {
+            populateSelect(els.tableName, Array.from(els.tableName.options).map(o => o.value), workspace.tableName || els.tableName.value);
         }
-        if (workspace.server && els.database.value) {
-            const tables = await post(`${apiBasePath}/GetTables`, { server: workspace.server, database: els.database.value, driver: workspace.driver || els.driver.value });
-            if (tables.success) {
-                const tableItems = tables.tables || [];
-                const preferredTable =
-                    findExactValue(tableItems, preferredTableName) ||
-                    tables.autoStudTable ||
-                    workspace.tableName ||
-                    tableItems[0] ||
-                    null;
-                populateSelect(els.tableName, tableItems, preferredTable);
-            }
-        }
-        if (workspace.server && els.database.value && els.tableName.value) {
+        if (els.tableName.value) {
             const cols = await post(`${apiBasePath}/GetColumns`, {
-                server: workspace.server,
-                database: els.database.value,
-                driver: workspace.driver || els.driver.value,
+                clientId: state.clientId,
                 tableName: els.tableName.value
             });
             if (cols.success) {
@@ -1101,11 +1057,9 @@
                     findExactValue(columns, preferredErrorColumn) || cols.autoErrorColumn || workspace.errorColumn);
             }
         }
-        if (workspace.server && els.database.value && els.tableName.value && els.errorTypeColumn.value) {
+        if (els.tableName.value && els.errorTypeColumn.value) {
             const values = await post(`${apiBasePath}/LoadFilterValues`, {
-                server: workspace.server,
-                database: els.database.value,
-                driver: workspace.driver || els.driver.value,
+                clientId: state.clientId,
                 tableName: els.tableName.value,
                 errorTypeColumn: els.errorTypeColumn.value
             });
@@ -1113,48 +1067,16 @@
         }
     }
 
-    async function connectServer() {
-        if (!els.server.value.trim()) {
-            setConnectionText('Enter a server name first.', 'error');
-            return;
-        }
-
-        showSpinner('Connecting to server...');
-        const result = await post(`${apiBasePath}/GetDatabases`, { server: els.server.value.trim(), driver: els.driver.value });
-        if (!result.success) {
-            setConnectionText(result.error || 'Connection failed.', 'error');
-            hideSpinner();
-            return;
-        }
-
-        const databases = result.databases || [];
-        const preferredDatabase =
-            (state.workspace?.database && findExactValue(databases, state.workspace.database)) ||
-            findExactValue(databases, preferredDatabaseName) ||
-            databases[0] ||
-            null;
-
-        populateSelect(els.database, databases, preferredDatabase);
-        setConnectionText(`Connected to server. Found ${databases.length} database(s).`, 'info');
-
-        if (els.database.value) {
-            ensureAccordionOpen('table');
-            ensureAccordionOpen('columns');
-            ensureAccordionOpen('filter');
-            ensureAccordionOpen('exclusion');
-            await loadTables();
-        }
-        hideSpinner();
-    }
-
     async function loadTables() {
-        const result = await post(`${apiBasePath}/GetTables`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value
-        });
+        if (!state.clientId) {
+            setConnectionText('Select an engagement first.', 'warning');
+            return;
+        }
+
+        const result = await post(`${apiBasePath}/GetTables`, { clientId: state.clientId });
         if (!result.success) {
             setConnectionText(result.error || 'Unable to load tables.', 'error');
+            if (els.datasetStatusAlert) { els.datasetStatusAlert.className = 'alert alert--error'; els.datasetStatusAlert.textContent = result.error || 'Unable to load tables.'; }
             return;
         }
 
@@ -1170,18 +1092,23 @@
         setConnectionText(
             els.tableName.value
                 ? `Auto-detected table: ${els.tableName.value}`
-                : 'Connected, but no source table could be auto-detected.',
+                : 'Loaded tables, but no source table could be auto-detected.',
             els.tableName.value ? 'info' : 'error');
+        if (els.datasetStatusAlert) { els.datasetStatusAlert.className = 'alert alert--success'; els.datasetStatusAlert.textContent = `Loaded ${tables.length} table(s) from this engagement's dataset.`; }
 
-        if (els.tableName.value) await loadColumns();
+        if (els.tableName.value) {
+            ensureAccordionOpen('table');
+            ensureAccordionOpen('columns');
+            ensureAccordionOpen('filter');
+            ensureAccordionOpen('exclusion');
+            await loadColumns();
+        }
     }
 
     async function loadColumns() {
-        if (!els.tableName.value) return;
+        if (!els.tableName.value || !state.clientId) return;
         const result = await post(`${apiBasePath}/GetColumns`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
+            clientId: state.clientId,
             tableName: els.tableName.value
         });
         if (!result.success) {
@@ -1205,11 +1132,9 @@
     }
 
     async function loadFilterValues() {
-        if (!els.errorTypeColumn.value) return;
+        if (!els.errorTypeColumn.value || !state.clientId) return;
         const result = await post(`${apiBasePath}/LoadFilterValues`, {
-            server: els.server.value.trim(),
-            database: els.database.value,
-            driver: els.driver.value,
+            clientId: state.clientId,
             tableName: els.tableName.value,
             errorTypeColumn: els.errorTypeColumn.value
         });
@@ -1226,8 +1151,8 @@
 
     async function verifyTable() {
         const request = buildRequest();
-        if (!request.server || !request.database || !request.tableName || !request.errorTypeColumn || !request.errorColumn) {
-            setConnectionText('Select the server, database, table, error type column, and error column first.', 'warning');
+        if (!request.clientId || !request.tableName || !request.errorTypeColumn || !request.errorColumn) {
+            setConnectionText('Select the engagement, table, error type column, and error column first.', 'warning');
             return;
         }
 
@@ -1513,22 +1438,12 @@
         resetWorkspaceState(false);
         await loadWorkspace();
     });
-    els.server.addEventListener('change', async function () {
-        await markWorkspaceDirty();
-    });
-    els.driver.addEventListener('change', async function () {
-        await markWorkspaceDirty();
-    });
     els.exclusionCodes.addEventListener('blur', function () {
         els.exclusionCodes.value = canonicalizeExclusionCodes(els.exclusionCodes.value);
     });
     els.exclusionCodes.addEventListener('change', async function () {
         els.exclusionCodes.value = canonicalizeExclusionCodes(els.exclusionCodes.value);
         await markWorkspaceDirty();
-    });
-    els.database.addEventListener('change', async function () {
-        await markWorkspaceDirty();
-        await loadTables();
     });
     els.tableName.addEventListener('change', async function () {
         await markWorkspaceDirty();
@@ -1548,7 +1463,7 @@
         await markWorkspaceDirty();
     });
 
-    document.getElementById('connectBtn').addEventListener('click', connectServer);
+    document.getElementById('connectBtn').addEventListener('click', () => loadTables());
     document.getElementById('verifyBtn').addEventListener('click', verifyTable);
     document.getElementById('verifyBtnBar').addEventListener('click', verifyTable);
     document.getElementById('runBtn').addEventListener('click', runValidation);
