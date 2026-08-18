@@ -1,0 +1,103 @@
+@{
+    ViewData["Title"] = "Something's not right";
+    Layout = null;
+    int statusCode = ViewBag.StatusCode ?? 500;
+    bool isAuthenticated = ViewBag.IsAuthenticated ?? false;
+
+    string heading = statusCode switch
+    {
+        404 => "We couldn't find that",
+        403 => "You don't have access to this",
+        _ => "Something went wrong"
+    };
+    string message = statusCode switch
+    {
+        404 => "That page or record doesn't exist, may have been moved or deleted, or you may not have permission to view it.",
+        403 => "Your account doesn't have permission to view this page.",
+        _ => "Something went wrong on our end. Please try again, and contact support if this keeps happening."
+    };
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - HEMIS Audit</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <script>
+        (function () {
+            var theme = localStorage.getItem('hemis-theme') || 'light';
+            if (theme === 'light') document.documentElement.classList.add('light');
+        })();
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="~/css/site.css" />
+    <style>
+        html, body { height: 100%; }
+        .error-wrap {
+            min-height: 100dvh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        .error-card {
+            max-width: 460px;
+            width: 100%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            padding: 36px 32px;
+            text-align: center;
+        }
+        .error-code {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: .5px;
+            color: var(--text-soft);
+            margin-bottom: 14px;
+        }
+        .error-heading {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 10px;
+        }
+        .error-message {
+            font-size: 14px;
+            color: var(--text-muted);
+            line-height: 1.5;
+            margin-bottom: 26px;
+        }
+        .error-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+    </style>
+</head>
+<body class="login-page">
+    <div class="error-wrap">
+        <div class="error-card">
+            <div class="error-code">ERROR @statusCode</div>
+            <div class="error-heading">@heading</div>
+            <div class="error-message">@message</div>
+            <div class="error-actions">
+                @if (isAuthenticated)
+                {
+                    <a href="/Dashboard" class="btn btn-primary">Back to Dashboard</a>
+                }
+                else
+                {
+                    <a href="/Account/Login" class="btn btn-primary">Back to Login</a>
+                }
+                <a href="javascript:history.back()" class="btn btn-secondary">Go Back</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

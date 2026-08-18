@@ -216,10 +216,17 @@ app.UseForwardedHeaders(forwardedHeaderOptions);
 
 if (!app.Environment.IsDevelopment())
 {
-    app.UseExceptionHandler("/Home/Error");
+    // Was "/Home/Error" - HomeController doesn't exist in this app, so if this branch had ever
+    // actually fired it would have 404'd trying to render the error page itself.
+    app.UseExceptionHandler("/Error");
     app.UseHsts();
     app.UseHttpsRedirection();
 }
+
+// Any bare error status code with no body - routing 404s, and the ~190 `return NotFound()`/
+// `return Forbid()` calls across the rule controllers - re-executes against ErrorController
+// instead of falling through to the browser's own generic crash page.
+app.UseStatusCodePagesWithReExecute("/Error/{0}");
 
 app.UseResponseCompression();
 app.UseStaticFiles();
