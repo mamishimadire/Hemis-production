@@ -1246,16 +1246,20 @@ window.toggleAccordion = function (section) {
 
     async function ensureRule10JoinColumnsLoaded() {
         const datasets = state.rule10JoinConfig || [];
-        for (const dataset of datasets) {
+        // Each dataset needs its own round-trip to fetch that table's columns. Rule 10 has ~10-11
+        // documented join datasets versus at most 4 tables on any other rule, so loading them one at
+        // a time here made Rule 10 alone take roughly 10x longer than every other rule to finish
+        // auto-detecting. Loading them concurrently cuts that down to about the slowest single lookup.
+        await Promise.all(datasets.map(async dataset => {
             const tableName = dataset?.tableName;
-            if (!tableName) continue;
+            if (!tableName) return;
 
             const columns = await loadColumnsForTable(tableName);
             dataset.availableColumns = [...columns];
             const currentColumns = Array.isArray(dataset.keyColumns) ? dataset.keyColumns : [];
             dataset.keyColumns = currentColumns.map((selectedColumn, index) =>
                 columns.includes(selectedColumn) ? selectedColumn : (columns[index] || columns[0] || selectedColumn));
-        }
+        }));
     }
 
     function getRule10ColumnOptions(tableName, selectedColumn) {
