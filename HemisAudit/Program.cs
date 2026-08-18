@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using System.IO.Compression;
@@ -193,6 +194,21 @@ using (var scope = app.Services.CreateScope())
     await systemDb.EnsurePerformanceObjectsAsync();
     await DbInitializer.SeedAsync(scope.ServiceProvider);
 }
+
+// Render (and most container hosts) terminate TLS at their edge and forward plain HTTP to this
+// container, so without this the app sees every request as HTTP. UseHttpsRedirection below then
+// 307-redirects every single request - including every login POST - which either loops or lands
+// the user back on a fresh, empty login form with no visible error, matching the "submits, seems
+// to reload, rejects access, works on retry" symptom. Must run before UseHttpsRedirection/UseHsts,
+// and KnownNetworks/KnownProxies must be cleared since Render's proxy isn't in the default trusted
+// (loopback-only) list.
+var forwardedHeaderOptions = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+};
+forwardedHeaderOptions.KnownNetworks.Clear();
+forwardedHeaderOptions.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedHeaderOptions);
 
 if (!app.Environment.IsDevelopment())
 {
