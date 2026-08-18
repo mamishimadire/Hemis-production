@@ -290,172 +290,172 @@ for (var integrityRuleNumber = 1; integrityRuleNumber <= 10; integrityRuleNumber
 
 app.MapControllerRoute(
     name: "rule11-short",
-    pattern: "Rule11",
+    pattern: "Rule11/{action=Index}/{id?}",
     defaults: new { controller = "Rule11", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule12-short",
-    pattern: "Rule12",
+    pattern: "Rule12/{action=Index}/{id?}",
     defaults: new { controller = "Rule12", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule13-short",
-    pattern: "Rule13",
+    pattern: "Rule13/{action=Index}/{id?}",
     defaults: new { controller = "Rule13", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule14-short",
-    pattern: "Rule14",
+    pattern: "Rule14/{action=Index}/{id?}",
     defaults: new { controller = "Rule14", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule15-short",
-    pattern: "Rule15",
+    pattern: "Rule15/{action=Index}/{id?}",
     defaults: new { controller = "Rule15", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule16-short",
-    pattern: "Rule16",
+    pattern: "Rule16/{action=Index}/{id?}",
     defaults: new { controller = "Rule16", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule17-short",
-    pattern: "Rule17",
+    pattern: "Rule17/{action=Index}/{id?}",
     defaults: new { controller = "Rule17", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule18-short",
-    pattern: "Rule18",
+    pattern: "Rule18/{action=Index}/{id?}",
     defaults: new { controller = "Rule18", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule19-short",
-    pattern: "Rule19",
+    pattern: "Rule19/{action=Index}/{id?}",
     defaults: new { controller = "Rule19", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule20-short",
-    pattern: "Rule20",
+    pattern: "Rule20/{action=Index}/{id?}",
     defaults: new { controller = "Rule20", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule21-short",
-    pattern: "Rule21",
+    pattern: "Rule21/{action=Index}/{id?}",
     defaults: new { controller = "Rule21", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule22-short",
-    pattern: "Rule22",
+    pattern: "Rule22/{action=Index}/{id?}",
     defaults: new { controller = "Rule22", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule23-short",
-    pattern: "Rule23",
+    pattern: "Rule23/{action=Index}/{id?}",
     defaults: new { controller = "Rule23", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule24-short",
-    pattern: "Rule24",
+    pattern: "Rule24/{action=Index}/{id?}",
     defaults: new { controller = "Rule24", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule25-short",
-    pattern: "Rule25",
+    pattern: "Rule25/{action=Index}/{id?}",
     defaults: new { controller = "Rule25", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule26-short",
-    pattern: "Rule26",
+    pattern: "Rule26/{action=Index}/{id?}",
     defaults: new { controller = "Rule26", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule28-short",
-    pattern: "Rule28",
+    pattern: "Rule28/{action=Index}/{id?}",
     defaults: new { controller = "Rule28", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule29-short",
-    pattern: "Rule29",
+    pattern: "Rule29/{action=Index}/{id?}",
     defaults: new { controller = "Rule29", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule27-short",
-    pattern: "Rule27",
+    pattern: "Rule27/{action=Index}/{id?}",
     defaults: new { controller = "Rule27", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule30-short",
-    pattern: "Rule30",
+    pattern: "Rule30/{action=Index}/{id?}",
     defaults: new { controller = "Rule30", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule31-short",
-    pattern: "Rule31",
+    pattern: "Rule31/{action=Index}/{id?}",
     defaults: new { controller = "Rule31", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule32-short",
-    pattern: "Rule32",
+    pattern: "Rule32/{action=Index}/{id?}",
     defaults: new { controller = "Rule32", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule35-short",
-    pattern: "Rule35",
+    pattern: "Rule35/{action=Index}/{id?}",
     defaults: new { controller = "Rule35", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule36-short",
-    pattern: "Rule36",
+    pattern: "Rule36/{action=Index}/{id?}",
     defaults: new { controller = "Rule36", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule37-short",
-    pattern: "Rule37",
+    pattern: "Rule37/{action=Index}/{id?}",
     defaults: new { controller = "Rule37", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule38-short",
-    pattern: "Rule38",
+    pattern: "Rule38/{action=Index}/{id?}",
     defaults: new { controller = "Rule38", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule39-short",
-    pattern: "Rule39",
+    pattern: "Rule39/{action=Index}/{id?}",
     defaults: new { controller = "Rule39", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule40-short",
-    pattern: "Rule40",
+    pattern: "Rule40/{action=Index}/{id?}",
     defaults: new { controller = "Rule40", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule41-short",
-    pattern: "Rule41",
+    pattern: "Rule41/{action=Index}/{id?}",
     defaults: new { controller = "Rule41", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule44-short",
-    pattern: "Rule44",
+    pattern: "Rule44/{action=Index}/{id?}",
     defaults: new { controller = "Rule44", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule47-short",
-    pattern: "Rule47",
+    pattern: "Rule47/{action=Index}/{id?}",
     defaults: new { controller = "Rule47", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule48-short",
-    pattern: "Rule48",
+    pattern: "Rule48/{action=Index}/{id?}",
     defaults: new { controller = "Rule48", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule46-short",
-    pattern: "Rule46",
+    pattern: "Rule46/{action=Index}/{id?}",
     defaults: new { controller = "Rule46", action = "Index" });
 
 app.MapControllerRoute(
     name: "rule34-short",
-    pattern: "Rule34",
+    pattern: "Rule34/{action=Index}/{id?}",
     defaults: new { controller = "Rule34", action = "Index" });
 
 app.MapControllerRoute(
