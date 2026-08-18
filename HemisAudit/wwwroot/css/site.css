@@ -1681,6 +1681,15 @@ html.sidebar-hidden .wizard-nav-bar {
     box-shadow: inset 0 0 0 1px rgba(29,78,137,.08);
 }
 
+/* This card's background stays a fixed near-white "selected" highlight in every
+   theme, so its text must stay a fixed dark color too instead of following
+   --text/--text-muted - those go near-white in dark mode, which would make the
+   label and value unreadable against this same near-white background. */
+.dashboard-scope-card.is-active .dashboard-scope-card__label,
+.dashboard-scope-card.is-active .dashboard-scope-card__value {
+    color: #121a24;
+}
+
 .dashboard-toolbar {
     margin-bottom: 4px;
 }
