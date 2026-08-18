@@ -104,6 +104,13 @@
                 </div>
             }
 
+            @if (TempData["Error"] != null)
+            {
+                <div class="alert alert--error" style="margin-bottom:16px">
+                    @TempData["Error"]
+                </div>
+            }
+
             <form asp-action="Login" method="post">
                 <input type="hidden" name="ReturnUrl" value="@ViewData["ReturnUrl"]" />
                 <input asp-for="LoginMode" type="hidden" id="loginModeInput" />
