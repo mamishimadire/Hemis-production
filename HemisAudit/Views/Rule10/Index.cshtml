@@ -1848,7 +1848,17 @@ window.toggleAccordion = function (section) {
             state.currentUserEngagementRole = state.currentUserEngagementRole || currentSystemRole || 'DataAnalyst';
             applySummary(data);
 
-            setWorkspaceState(`${ruleLabel} completed. Failed checks: ${formatNumber(data.failedChecks)} | Total issues: ${formatNumber(data.totalIssues)}. The current run is already in the system database. Click Save Workspace before signoff or visibility to other users.`, 'success');
+            // The backend already tells us the truth here via `warning` (it differs depending on
+            // whether the run was actually persisted or only fell back to an in-memory pending
+            // cache - e.g. if the save failed for Rule 10's much larger combined result set) and
+            // `savedRunId` (null when it wasn't persisted). Showing a hardcoded "already in the
+            // system database" success message regardless of that meant a save failure was
+            // invisible to the user, and the run would simply be gone next time they opened the
+            // page - forcing a re-run every time with no indication why.
+            const countsText = `Failed checks: ${formatNumber(data.failedChecks)} | Total issues: ${formatNumber(data.totalIssues)}.`;
+            setWorkspaceState(
+                `${ruleLabel} completed. ${countsText} ${data.warning || ''}`.trim(),
+                data.savedRunId ? 'success' : 'warning');
         } finally {
             hideSpinner();
         }
