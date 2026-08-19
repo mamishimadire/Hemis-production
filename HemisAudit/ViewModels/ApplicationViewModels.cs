@@ -10,16 +10,14 @@ namespace HemisAudit.ViewModels
     // ═══════════════════════════════════════════════════════════════════════════
     public class LoginViewModel
     {
-        // ServiceProvider | Client
-        public string LoginMode { get; set; } = "Client";
-
         [Required, EmailAddress]
         public string Email { get; set; } = "";
 
         [Required, DataType(DataType.Password)]
         public string Password { get; set; } = "";
 
-        // Required only when LoginMode == "Client" — the firm's sequential access code.
+        // Required only for firm users (accounts with a FirmId) - Mamishi's own internal staff
+        // have no FirmId and leave this blank. One shared login form for both.
         public string? ClientCode { get; set; }
 
         public bool RememberMe { get; set; }

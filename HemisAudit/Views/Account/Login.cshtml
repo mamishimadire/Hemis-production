@@ -59,6 +59,15 @@
         html, body {
             background: transparent;
         }
+        /* .alert--error/.alert--success use a low-opacity tint + light pastel text, built for a
+           solid dark surface elsewhere in the app - illegible here over the busy photo background.
+           Force a solid, opaque backing with a dark, high-contrast text color instead. */
+        .login-alert--readable {
+            background: rgba(255, 255, 255, .94);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+        }
+        .login-alert--readable.alert--error   { color: #8b1a1a; }
+        .login-alert--readable.alert--success { color: #1a6b3a; }
     </style>
 </head>
 <body class="login-page">
@@ -76,20 +85,9 @@
 
             <h2 class="login-heading">Sign in to your account</h2>
 
-            <div class="login-mode-tabs" style="display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--border);">
-                <button type="button" id="tabClient" class="login-mode-tab" data-mode="Client"
-                        style="flex:1;padding:10px;border:none;background:none;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;">
-                    Client Login
-                </button>
-                <button type="button" id="tabServiceProvider" class="login-mode-tab" data-mode="ServiceProvider"
-                        style="flex:1;padding:10px;border:none;background:none;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;">
-                    Service Provider
-                </button>
-            </div>
-
             @if (!ViewData.ModelState.IsValid)
             {
-                <div class="alert alert--error" style="margin-bottom:16px">
+                <div class="alert alert--error login-alert--readable" style="margin-bottom:16px">
                     @foreach (var err in ViewData.ModelState.Values.SelectMany(v => v.Errors))
                     {
                         <div>@err.ErrorMessage</div>
@@ -99,25 +97,24 @@
 
             @if (TempData["Success"] != null)
             {
-                <div class="alert alert--success" style="margin-bottom:16px">
+                <div class="alert alert--success login-alert--readable" style="margin-bottom:16px">
                     @TempData["Success"]
                 </div>
             }
 
             @if (TempData["Error"] != null)
             {
-                <div class="alert alert--error" style="margin-bottom:16px">
+                <div class="alert alert--error login-alert--readable" style="margin-bottom:16px">
                     @TempData["Error"]
                 </div>
             }
 
             <form asp-action="Login" method="post">
                 <input type="hidden" name="ReturnUrl" value="@ViewData["ReturnUrl"]" />
-                <input asp-for="LoginMode" type="hidden" id="loginModeInput" />
                 @Html.AntiForgeryToken()
 
-                <div class="field-group" id="clientCodeGroup" style="margin-bottom:14px">
-                    <label asp-for="ClientCode">Client Code</label>
+                <div class="field-group" style="margin-bottom:14px">
+                    <label asp-for="ClientCode">Client Code <span style="font-weight:400;color:var(--text-muted)">(firm users only — leave blank if you're Mamishi staff)</span></label>
                     <input asp-for="ClientCode" type="text" placeholder="e.g. 100001" autocomplete="off" />
                     <span asp-validation-for="ClientCode" class="field-error"></span>
                 </div>
@@ -156,26 +153,6 @@
         </div>
 
         <script>
-            (function () {
-                var clientTab = document.getElementById('tabClient');
-                var spTab = document.getElementById('tabServiceProvider');
-                var modeInput = document.getElementById('loginModeInput');
-                var clientCodeGroup = document.getElementById('clientCodeGroup');
-
-                function setMode(mode) {
-                    modeInput.value = mode;
-                    var isClient = mode === 'Client';
-                    clientCodeGroup.style.display = isClient ? '' : 'none';
-                    clientTab.style.borderBottomColor = isClient ? 'var(--brand)' : 'transparent';
-                    spTab.style.borderBottomColor = isClient ? 'transparent' : 'var(--brand)';
-                }
-
-                clientTab.addEventListener('click', function () { setMode('Client'); });
-                spTab.addEventListener('click', function () { setMode('ServiceProvider'); });
-
-                setMode(modeInput.value === 'ServiceProvider' ? 'ServiceProvider' : 'Client');
-            })();
-
             var loginVideo = document.querySelector('.login-bg-video');
             if (loginVideo) {
                 loginVideo.play().catch(function () {

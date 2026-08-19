@@ -72,20 +72,6 @@ namespace HemisAudit.Controllers
             return View();
         }
 
-        // True if this user's firm has at least one ServiceProvider-role colleague — the same
-        // "internal vs. leased firm" test FirmsController uses to keep the platform owner's own
-        // org out of its client-management console (IsServiceProviderOwnedFirmAsync there).
-        private static readonly string[] InternalStaffRoles = { "Admin", "Director", "Manager", "DataAnalyst", "Trainee" };
-
-        // A user with no FirmId isn't tied to any external leased firm at all - they're one of
-        // Mamishi's own internal team, regardless of which internal role they hold. A leased firm's
-        // own Admin/Manager/DataAnalyst always has FirmId set (stamped when their account is created
-        // under that firm), so FirmId being null is exactly what distinguishes "platform owner's own
-        // staff" from "a leased firm's staff" in this data model - it's the actual test, not sharing
-        // a FirmId with whoever happens to hold the literal ServiceProvider role.
-        private static bool IsInternalServiceProviderStaff(ApplicationUser user, IList<string> roles) =>
-            user.FirmId == null && roles.Any(r => InternalStaffRoles.Contains(r, StringComparer.OrdinalIgnoreCase));
-
         private void ClearLegacyBrowserState()
         {
             var knownCookies = new[]
@@ -131,11 +117,6 @@ namespace HemisAudit.Controllers
                 return RedirectToAction(nameof(Login), new { force = true });
             }
 
-            var isServiceProviderMode = string.Equals(model.LoginMode, "ServiceProvider", StringComparison.OrdinalIgnoreCase);
-
-            if (!isServiceProviderMode && string.IsNullOrWhiteSpace(model.ClientCode))
-                ModelState.AddModelError(nameof(model.ClientCode), "Enter your firm's client code.");
-
             if (!ModelState.IsValid) return View(model);
 
             var user = await _users.FindByEmailAsync(model.Email);
@@ -145,23 +126,18 @@ namespace HemisAudit.Controllers
                 return View(model);
             }
 
-            var roles = await _users.GetRolesAsync(user);
-
-            if (isServiceProviderMode)
+            // One shared login form for everyone. A FirmId is only ever stamped onto a leased
+            // firm's own accounts when they're created under that firm - Mamishi's own internal
+            // staff never have one - so that alone decides whether a client code is required,
+            // instead of asking the user to pick a tab that says the same thing about themselves.
+            if (user.FirmId.HasValue)
             {
-                // "Service provider" isn't just the ServiceProvider role — it's anyone on the
-                // platform owner's own internal staff (Admin, Director, Manager, DataAnalyst,
-                // Trainee all included), as opposed to a leased firm's external users. Internal
-                // staff share a FirmId with whichever account actually holds the ServiceProvider
-                // role, so that's the real test, not the caller's own specific role.
-                if (!roles.Contains("ServiceProvider") && !IsInternalServiceProviderStaff(user, roles))
+                if (string.IsNullOrWhiteSpace(model.ClientCode))
                 {
-                    ModelState.AddModelError("", "This isn't a service provider account — use the Client Login tab instead, with the client code your service provider gave you.");
+                    ModelState.AddModelError(nameof(model.ClientCode), "Enter your firm's client code.");
                     return View(model);
                 }
-            }
-            else
-            {
+
                 var firm = await _db.Firms.FirstOrDefaultAsync(f => f.FirmCode == model.ClientCode);
                 if (firm == null || user.FirmId != firm.Id)
                 {
