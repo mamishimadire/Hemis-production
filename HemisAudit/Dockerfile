@@ -5,7 +5,11 @@ COPY HemisAudit.csproj .
 RUN dotnet restore HemisAudit.csproj
 
 COPY . .
-RUN dotnet publish HemisAudit.csproj -c Release -o /app --no-restore
+# ReadyToRun pre-JITs the app to native code at build time instead of leaving the runtime to
+# JIT-compile everything the first time each code path is hit. Startup-time-only change, no
+# behavior difference - directly targets cold-start latency, which matters most on a resource-
+# constrained instance where every deploy (and this app deploys often) starts fully cold.
+RUN dotnet publish HemisAudit.csproj -c Release -o /app --no-restore -r linux-x64 --self-contained false -p:PublishReadyToRun=true
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
