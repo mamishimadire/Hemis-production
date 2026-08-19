@@ -133,10 +133,14 @@ namespace HemisAudit.Controllers
         // ApplicationUser.ProfilePicturePath for why it's no longer stored on disk). Any
         // authenticated user can view any other's avatar, matching how the rest of the app already
         // shows names/initials for every user visible in a shared list.
+        // Parameter must be named "id" - the app's default route ("{controller=Account}/{action=Login}/{id?}")
+        // binds the URL's third segment to a parameter literally named "id"; a differently-named
+        // parameter here silently receives nothing, so every avatar request 404'd regardless of
+        // the userId actually in the URL.
         [HttpGet]
-        public async Task<IActionResult> Avatar(string userId)
+        public async Task<IActionResult> Avatar(string id)
         {
-            var user = await _users.FindByIdAsync(userId);
+            var user = await _users.FindByIdAsync(id);
             if (user?.ProfilePictureData == null || user.ProfilePictureData.Length == 0)
                 return NotFound();
 
