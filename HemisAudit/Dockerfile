@@ -2,7 +2,7 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
 COPY HemisAudit.csproj .
-RUN dotnet restore HemisAudit.csproj -r linux-x64
+RUN dotnet restore HemisAudit.csproj -r linux-x64 -p:PublishReadyToRun=true
 
 COPY . .
 # ReadyToRun pre-JITs the app to native code at build time instead of leaving the runtime to
