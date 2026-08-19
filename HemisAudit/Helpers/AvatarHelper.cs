@@ -18,10 +18,10 @@ namespace HemisAudit.Helpers
             "#283593"
         };
 
-        public static string GetAvatarSource(string? userId, string? firstName, string? lastName, string? profilePicturePath)
+        public static string GetAvatarSource(string? userId, string? firstName, string? lastName, bool hasProfilePicture)
         {
-            if (!string.IsNullOrWhiteSpace(profilePicturePath))
-                return profilePicturePath;
+            if (hasProfilePicture && !string.IsNullOrWhiteSpace(userId))
+                return $"/Profile/Avatar/{Uri.EscapeDataString(userId)}";
 
             var initials = WebUtility.HtmlEncode(GetInitials(firstName, lastName));
             var color = GetConsistentColor(userId);

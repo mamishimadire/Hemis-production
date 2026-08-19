@@ -14,7 +14,7 @@
         <input type="hidden" asp-for="Id" />
 
         <div class="profile-photo-card profile-photo-card--compact">
-            <img src="@AvatarHelper.GetAvatarSource(Model.Id, Model.FirstName, Model.LastName, Model.CurrentProfilePicturePath)" alt="@Model.FirstName @Model.LastName" class="avatar avatar--xl" />
+            <img src="@AvatarHelper.GetAvatarSource(Model.Id, Model.FirstName, Model.LastName, Model.HasProfilePicture)" alt="@Model.FirstName @Model.LastName" class="avatar avatar--xl" />
         </div>
 
         <div class="form-grid">

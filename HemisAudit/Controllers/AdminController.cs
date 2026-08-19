@@ -64,7 +64,7 @@ namespace HemisAudit.Controllers
                     FullName             = u.FullName,
                     Email                = u.Email ?? "",
                     EmployeeCode         = u.EmployeeCode,
-                    ProfilePicturePath   = u.ProfilePicturePath,
+                    HasProfilePicture    = u.ProfilePictureData != null && u.ProfilePictureData.Length > 0,
                     IsActive             = u.IsActive,
                     IsLockedOut          = isLockedOut,
                     LockoutEnd           = lockoutEnd,
@@ -220,7 +220,7 @@ namespace HemisAudit.Controllers
                 Gender = user.Gender,
                 Department = user.Department,
                 OfficeAddress = user.OfficeAddress,
-                CurrentProfilePicturePath = user.ProfilePicturePath,
+                HasProfilePicture = user.ProfilePictureData != null && user.ProfilePictureData.Length > 0,
                 Role         = roles.FirstOrDefault() ?? "DataAnalyst",
                 IsActive     = user.IsActive
             });
@@ -236,7 +236,7 @@ namespace HemisAudit.Controllers
             if (user == null) return NotFound();
 
             model.Email = user.Email ?? "";
-            model.CurrentProfilePicturePath = user.ProfilePicturePath;
+            model.HasProfilePicture = user.ProfilePictureData != null && user.ProfilePictureData.Length > 0;
 
             if (!ModelState.IsValid) return View(model);
 

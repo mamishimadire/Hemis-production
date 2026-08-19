@@ -28,7 +28,6 @@ namespace HemisAudit.Controllers
         private readonly IAuditLogService _audit;
         private readonly IPasswordPolicyService _passwordPolicy;
         private readonly ISystemDatabaseService _systemDb;
-        private readonly IWebHostEnvironment _environment;
 
         public ProfileController(
             UserManager<ApplicationUser> users,
@@ -36,8 +35,7 @@ namespace HemisAudit.Controllers
             ApplicationDbContext db,
             IAuditLogService audit,
             IPasswordPolicyService passwordPolicy,
-            ISystemDatabaseService systemDb,
-            IWebHostEnvironment environment)
+            ISystemDatabaseService systemDb)
         {
             _users = users;
             _signIn = signIn;
@@ -45,7 +43,6 @@ namespace HemisAudit.Controllers
             _audit = audit;
             _passwordPolicy = passwordPolicy;
             _systemDb = systemDb;
-            _environment = environment;
         }
 
         [HttpGet]
@@ -106,10 +103,10 @@ namespace HemisAudit.Controllers
 
             if (model.ProfilePicture != null && detectedExtension != null)
             {
-                var previousPath = user.ProfilePicturePath;
-                user.ProfilePicturePath = await SaveProfilePictureAsync(user.Id, model.ProfilePicture, detectedExtension, previousPath);
-                if (!string.Equals(previousPath, user.ProfilePicturePath, StringComparison.OrdinalIgnoreCase))
-                    changes["ProfilePicturePath"] = user.ProfilePicturePath;
+                var (data, contentType) = await ReadProfilePictureAsync(model.ProfilePicture);
+                user.ProfilePictureData = data;
+                user.ProfilePictureContentType = contentType;
+                changes["ProfilePicture"] = "updated";
             }
 
             await _db.SaveChangesAsync();
@@ -130,6 +127,21 @@ namespace HemisAudit.Controllers
                 : "No profile changes were detected.";
 
             return RedirectToAction(nameof(Edit));
+        }
+
+        // Serves the uploaded picture straight from the database (see the comment on
+        // ApplicationUser.ProfilePicturePath for why it's no longer stored on disk). Any
+        // authenticated user can view any other's avatar, matching how the rest of the app already
+        // shows names/initials for every user visible in a shared list.
+        [HttpGet]
+        public async Task<IActionResult> Avatar(string userId)
+        {
+            var user = await _users.FindByIdAsync(userId);
+            if (user?.ProfilePictureData == null || user.ProfilePictureData.Length == 0)
+                return NotFound();
+
+            Response.Headers.CacheControl = "private, max-age=3600";
+            return File(user.ProfilePictureData, user.ProfilePictureContentType ?? "application/octet-stream");
         }
 
         [HttpPost, ValidateAntiForgeryToken]
@@ -182,11 +194,12 @@ namespace HemisAudit.Controllers
             ProfilePasswordChangeViewModel? passwordModel = null)
         {
             var role = await GetCurrentRoleAsync(user);
+            var hasProfilePicture = user.ProfilePictureData != null && user.ProfilePictureData.Length > 0;
             if (editModel != null)
             {
                 editModel.Email = user.Email ?? string.Empty;
                 editModel.SystemRole = role;
-                editModel.CurrentProfilePicturePath = user.ProfilePicturePath;
+                editModel.HasProfilePicture = hasProfilePicture;
             }
 
             return new ProfilePageViewModel
@@ -199,7 +212,7 @@ namespace HemisAudit.Controllers
                     EmployeeCode = user.EmployeeCode,
                     Email = user.Email ?? string.Empty,
                     SystemRole = role,
-                    CurrentProfilePicturePath = user.ProfilePicturePath,
+                    HasProfilePicture = hasProfilePicture,
                     PhoneNumber = user.PhoneNumber,
                     Gender = user.Gender,
                     Department = user.Department,
@@ -239,38 +252,12 @@ namespace HemisAudit.Controllers
             return roles.FirstOrDefault() ?? string.Empty;
         }
 
-        private async Task<string> SaveProfilePictureAsync(
-            string userId,
-            IFormFile file,
-            string extension,
-            string? previousVirtualPath)
+        private static async Task<(byte[] Data, string ContentType)> ReadProfilePictureAsync(IFormFile file)
         {
-            var profileFolder = Path.Combine(_environment.WebRootPath, "uploads", "profiles");
-            Directory.CreateDirectory(profileFolder);
-
-            var fileName = $"{userId}_{Guid.NewGuid():N}{extension}";
-            var physicalPath = Path.Combine(profileFolder, fileName);
-            await using (var stream = System.IO.File.Create(physicalPath))
-            {
-                await file.CopyToAsync(stream);
-            }
-
-            DeletePreviousProfilePicture(previousVirtualPath, profileFolder);
-            return $"/uploads/profiles/{fileName}";
-        }
-
-        private static void DeletePreviousProfilePicture(string? previousVirtualPath, string profileFolder)
-        {
-            if (string.IsNullOrWhiteSpace(previousVirtualPath))
-                return;
-
-            var previousFileName = Path.GetFileName(previousVirtualPath);
-            if (string.IsNullOrWhiteSpace(previousFileName))
-                return;
-
-            var previousPhysicalPath = Path.Combine(profileFolder, previousFileName);
-            if (System.IO.File.Exists(previousPhysicalPath))
-                System.IO.File.Delete(previousPhysicalPath);
+            TryDetectImageType(file, out var mimeType, out _);
+            using var stream = new MemoryStream();
+            await file.CopyToAsync(stream);
+            return (stream.ToArray(), mimeType ?? "application/octet-stream");
         }
 
         private static bool TryValidateProfilePicture(IFormFile file, out string? extension, out string? error)

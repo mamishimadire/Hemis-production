@@ -13,7 +13,7 @@
         ? (user.FirstName.Length > 0 ? user.FirstName[0].ToString() : "") +
           (user.LastName.Length > 0 ? user.LastName[0].ToString() : "")
         : "?";
-    var avatarSrc = AvatarHelper.GetAvatarSource(user?.Id, user?.FirstName, user?.LastName, user?.ProfilePicturePath);
+    var avatarSrc = AvatarHelper.GetAvatarSource(user?.Id, user?.FirstName, user?.LastName, user?.ProfilePictureData != null && user.ProfilePictureData.Length > 0);
     var currentPath = Context.Request.Path.ToString().ToLowerInvariant();
 }
 <!DOCTYPE html>

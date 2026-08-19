@@ -3,7 +3,7 @@
 @{
     ViewData["Title"] = "Profile";
     Layout = "~/Views/Shared/_Layout.cshtml";
-    var avatarSrc = AvatarHelper.GetAvatarSource(Model.UserId, Model.Edit.FirstName, Model.Edit.LastName, Model.Edit.CurrentProfilePicturePath);
+    var avatarSrc = AvatarHelper.GetAvatarSource(Model.UserId, Model.Edit.FirstName, Model.Edit.LastName, Model.Edit.HasProfilePicture);
 }
 
 @if (TempData["Success"] != null)

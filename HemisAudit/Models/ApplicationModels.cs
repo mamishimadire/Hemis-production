@@ -25,7 +25,14 @@ namespace HemisAudit.Models
         public DateTime? PasswordSetDate { get; set; } = DateTime.UtcNow;
         public DateTime? PasswordChangedAt { get; set; }
         public string? PasswordHistory { get; set; }
+        // Superseded by ProfilePictureData below - files written to the container's local disk
+        // (wwwroot/uploads/profiles/) don't survive a restart/redeploy on Render, so any path
+        // stored here from before that change points at a file that's already gone. Column stays
+        // only so existing rows don't need a migration to drop it; nothing reads it any more.
         public string? ProfilePicturePath { get; set; }
+
+        public byte[]? ProfilePictureData { get; set; }
+        public string? ProfilePictureContentType { get; set; }
 
         [MaxLength(50)]
         public string? Gender { get; set; }

@@ -133,7 +133,7 @@ namespace HemisAudit.ViewModels
         public string FullName { get; set; } = "";
         public string Email { get; set; } = "";
         public string EmployeeCode { get; set; } = "";
-        public string? ProfilePicturePath { get; set; }
+        public bool HasProfilePicture { get; set; }
         public bool IsActive { get; set; }
         public bool IsLockedOut { get; set; }
         public DateTimeOffset? LockoutEnd { get; set; }
@@ -196,7 +196,7 @@ namespace HemisAudit.ViewModels
         [MaxLength(500)]
         public string? OfficeAddress { get; set; }
 
-        public string? CurrentProfilePicturePath { get; set; }
+        public bool HasProfilePicture { get; set; }
 
         [Required]
         public string Role { get; set; } = "DataAnalyst";
@@ -219,7 +219,7 @@ namespace HemisAudit.ViewModels
         public string Email { get; set; } = "";
 
         public string SystemRole { get; set; } = "";
-        public string? CurrentProfilePicturePath { get; set; }
+        public bool HasProfilePicture { get; set; }
         public IFormFile? ProfilePicture { get; set; }
 
         [Phone]
