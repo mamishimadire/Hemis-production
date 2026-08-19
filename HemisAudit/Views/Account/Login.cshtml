@@ -114,7 +114,7 @@
                 @Html.AntiForgeryToken()
 
                 <div class="field-group" style="margin-bottom:14px">
-                    <label asp-for="ClientCode">Client Code <span style="font-weight:400;color:var(--text-muted)">(firm users only — leave blank if you're Mamishi staff)</span></label>
+                    <label asp-for="ClientCode">Client Code</label>
                     <input asp-for="ClientCode" type="text" placeholder="e.g. 100001" autocomplete="off" />
                     <span asp-validation-for="ClientCode" class="field-error"></span>
                 </div>

@@ -61,9 +61,24 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 .AddEntityFrameworkStores<ApplicationDbContext>()
 .AddDefaultTokenProviders();
 
+// Relying on the default CookieSecurePolicy.SameAsRequest means each cookie's Secure flag depends
+// on THIS PARTICULAR request being correctly detected as HTTPS - behind Render's proxy (and
+// Cloudflare in front of it), any single request where that detection slips marks the cookie
+// insecurely, and the browser then withholds a *different*, Secure-flagged instance of the same
+// cookie on a later truly-HTTPS request. For the antiforgery cookie specifically, that shows up as
+// the login form's token silently failing to validate - a blank reload with no visible error - and
+// working again next attempt purely by chance. All production traffic is HTTPS-only in practice
+// (Cloudflare enforces it), so forcing Always removes the dependency on per-request detection
+// entirely; Development stays on the default since local runs are plain HTTP.
+var cookieSecurePolicy = builder.Environment.IsDevelopment()
+    ? CookieSecurePolicy.SameAsRequest
+    : CookieSecurePolicy.Always;
+
 builder.Services.ConfigureApplicationCookie(options =>
 {
     options.Cookie.Name = "HemisAudit.Auth.v2";
+    options.Cookie.SecurePolicy = cookieSecurePolicy;
+    options.Cookie.SameSite = SameSiteMode.Lax;
     options.LoginPath = "/Account/Login";
     options.AccessDeniedPath = "/Account/AccessDenied";
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
@@ -73,6 +88,8 @@ builder.Services.ConfigureApplicationCookie(options =>
 builder.Services.AddAntiforgery(options =>
 {
     options.Cookie.Name = "HemisAudit.AntiForgery.v2";
+    options.Cookie.SecurePolicy = cookieSecurePolicy;
+    options.Cookie.SameSite = SameSiteMode.Lax;
 });
 
 builder.Services.AddScoped<IPasswordPolicyService, PasswordPolicyService>();
