@@ -183,14 +183,25 @@
         </a>
 
         <nav class="sidebar__nav">
-            <a href="/Dashboard" class="sidebar__nav-item @(currentPath.StartsWith("/dashboard") ? "sidebar__nav-item--active" : "")">
+            @{
+                // Service Provider staff manage the whole book of business, not a personal set of
+                // assigned engagements, so "My Engagements" pointing at the Dashboard doesn't
+                // describe their actual first task here - onboarding a leased firm. Repointing this
+                // item at /Firms for them instead of adding a second, separate nav entry that would
+                // land on the exact same page under a different label.
+                var isServiceProvider = role == "ServiceProvider";
+                var topNavHref = isServiceProvider ? "/Firms" : "/Dashboard";
+                var topNavActive = isServiceProvider ? currentPath.StartsWith("/firms") : currentPath.StartsWith("/dashboard");
+                var topNavLabel = isServiceProvider ? "Onboard Client" : "My Engagements";
+            }
+            <a href="@topNavHref" class="sidebar__nav-item @(topNavActive ? "sidebar__nav-item--active" : "")">
                 <span class="nav-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" class="nav-icon__svg" xmlns="http://www.w3.org/2000/svg">
                         <path d="M5 10.5 12 4l7 6.5V20H5v-9.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
                         <path d="M9 20v-5h6v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                 </span>
-                <span class="sidebar__nav-label">My Engagements</span>
+                <span class="sidebar__nav-label">@topNavLabel</span>
             </a>
             <a href="/Profile/Edit" class="sidebar__nav-item @(currentPath.StartsWith("/profile") ? "sidebar__nav-item--active" : "")">
                 <span class="nav-icon" aria-hidden="true">
@@ -288,20 +299,6 @@
                 </span>
                 <span class="sidebar__nav-label">SAQA Search</span>
             </a>
-
-            @if (role == "ServiceProvider")
-            {
-                <div class="sidebar__nav-section">Service Provider</div>
-                <a href="/Firms" class="sidebar__nav-item @(currentPath.StartsWith("/firms") ? "sidebar__nav-item--active" : "")">
-                    <span class="nav-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" class="nav-icon__svg" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M4 21V9l8-5 8 5v12" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-                            <path d="M9 21v-6h6v6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-                        </svg>
-                    </span>
-                    <span class="sidebar__nav-label">Firms</span>
-                </a>
-            }
 
             @if (role == "Admin" || role == "Director")
             {
