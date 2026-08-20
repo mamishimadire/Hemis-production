@@ -189,7 +189,11 @@
                 // describe their actual first task here - onboarding a leased firm. Repointing this
                 // item at /Firms for them instead of adding a second, separate nav entry that would
                 // land on the exact same page under a different label.
-                var isServiceProvider = role == "ServiceProvider";
+                // Checking the full role list, not the "primary" `role` variable above - an
+                // account can hold ServiceProvider alongside Admin/Director/etc. (the seeded owner
+                // account does), and `role` is just roles.FirstOrDefault(), so it silently picks
+                // whichever role happens to come back first and can miss ServiceProvider entirely.
+                var isServiceProvider = roles.Contains("ServiceProvider");
                 var topNavHref = isServiceProvider ? "/Firms" : "/Dashboard";
                 var topNavActive = isServiceProvider ? currentPath.StartsWith("/firms") : currentPath.StartsWith("/dashboard");
                 var topNavLabel = isServiceProvider ? "Onboard Client" : "My Engagements";
