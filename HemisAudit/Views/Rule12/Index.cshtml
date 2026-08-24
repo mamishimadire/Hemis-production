@@ -757,10 +757,8 @@ window.toggleAccordion = function (section) {
         } catch (err) {
             window.showExcelTooLargeModal(
                 completedParts > 0
-                    ? `Downloaded ${completedParts} of ${totalParts} Excel parts, then hit an error: ${err.message} ` +
-                      `Please download the CSV instead, which reliably includes the full population of ${totalRecords} records.`
-                    : `This engagement's Excel export failed: ${err.message} ` +
-                      `Please download the CSV instead, which reliably includes the full population of ${totalRecords} records.`,
+                    ? `Downloaded ${completedParts} of ${totalParts} Excel parts, then hit an error: ${err.message}`
+                    : `This engagement's Excel export failed: ${err.message}`,
                 downloadCsvFile
             );
             return;

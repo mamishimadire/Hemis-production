@@ -618,11 +618,15 @@
 
     // Shared "Excel too large" popup used by every rule's export flow - one modal, one style,
     // instead of each Rule{N}/Index.cshtml duplicating this markup and wiring. onDownloadCsv is
-    // the calling page's own CSV download function, since that's rule-specific.
-    window.showExcelTooLargeModal = function (message, onDownloadCsv) {
+    // the calling page's own CSV download function, since that's rule-specific. reasonText is
+    // just the situation-specific part (e.g. why it failed) - the standard call-to-action
+    // sentence is always appended here so the wording is identical across every rule.
+    window.showExcelTooLargeModal = function (reasonText, onDownloadCsv) {
         var modal = document.getElementById('excelTooLargeModal');
         if (!modal) return;
-        document.getElementById('excelTooLargeMessage').textContent = message || '';
+        var fullMessage = (reasonText ? reasonText.trim() + ' ' : '') +
+            'Please download the CSV results for the full population.';
+        document.getElementById('excelTooLargeMessage').textContent = fullMessage;
 
         var csvBtn = document.getElementById('excelTooLargeCsvBtn');
         var cancelBtn = document.getElementById('excelTooLargeCancelBtn');
