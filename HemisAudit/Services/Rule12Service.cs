@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using HemisAudit.Helpers;
 using HemisAudit.Models;
 using HemisAudit.ViewModels;
@@ -173,6 +174,108 @@ namespace HemisAudit.Services
         {
             ValidateRequest(request.CregTable, request.QualTable, request.CresTable);
             return await AnalyseAsync(request, includeAllReviewRows: true);
+        }
+
+        // Bypasses AnalyseAsync/LoadControlRowsAsync entirely - those buffer every row as a full
+        // Dictionary<string,string?> before anything can be written out, which is fine for the
+        // ~10-row browser preview but exhausts this container's memory on a real, large engagement
+        // (confirmed OutOfMemoryException on a client with 450k+ rows even after raising the
+        // in-memory cap to Excel's own row ceiling). This reads and writes one row at a time, so
+        // memory use stays roughly constant no matter how large the population is.
+        public async Task StreamCsvExportAsync(Rule12ValidationRequest request, Stream outputStream)
+        {
+            ValidateRequest(request.CregTable, request.QualTable, request.CresTable);
+
+            var cfg = await ResolveColumnConfigAsync(
+                request.ClientId, request.CregTable, request.QualTable, request.CresTable,
+                request.CregStudentCol, request.CregQualCol, request.CregCourseCol,
+                request.QualJoinCol, request.QualDescCol,
+                request.CresCourseCol, request.CresStatusCol, request.CresStatusFilter,
+                request.CregExtra1Col, request.CregExtra2Col, request.CregFilterCol, request.CregFilterValues,
+                request.CregExtra3Col, request.CresExtra1Col);
+
+            await EnsureRule12IndexesAsync(request.ClientId, request.CregTable, request.QualTable, request.CresTable, cfg);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule12PrepSql(schema, request.CregTable, request.QualTable, request.CresTable, cfg);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var writer = new StreamWriter(outputStream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            var headerParts = new List<string> { cfg.CregStudentCol, cfg.CregQualCol, cfg.CregCourseCol };
+            if (cfg.HasCregExtra1) headerParts.Add(cfg.CregExtra1Col);
+            if (cfg.HasCregExtra2) headerParts.Add(cfg.CregExtra2Col);
+            if (cfg.HasCregFilter) headerParts.Add(cfg.CregFilterCol);
+            if (cfg.HasCregExtra3) headerParts.Add(cfg.CregExtra3Col);
+            headerParts.Add(cfg.QualJoinCol);
+            headerParts.Add(cfg.QualDescCol);
+            headerParts.Add(cfg.CresCourseCol);
+            headerParts.Add(cfg.CresStatusCol);
+            if (cfg.HasCresExtra1) headerParts.Add(cfg.CresExtra1Col);
+            headerParts.Add("Validation Result");
+            headerParts.Add("Validation Explanation");
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = @"SELECT v.* FROM rule12_validation v ORDER BY ""Extract_Number"";";
+
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var ordCreg007 = reader.GetOrdinal("CREG__007");
+            var ordCreg001 = reader.GetOrdinal("CREG__001");
+            var ordCreg030 = reader.GetOrdinal("CREG__030");
+            var ordCregExtra1 = cfg.HasCregExtra1 ? reader.GetOrdinal("CREG__EXTRA1") : -1;
+            var ordCregExtra2 = cfg.HasCregExtra2 ? reader.GetOrdinal("CREG__EXTRA2") : -1;
+            var ordCregFilter = cfg.HasCregFilter ? reader.GetOrdinal("CREG__FILTER") : -1;
+            var ordCregExtra3 = cfg.HasCregExtra3 ? reader.GetOrdinal("CREG__EXTRA3") : -1;
+            var ordQual001 = reader.GetOrdinal("QUAL__001");
+            var ordQual003 = reader.GetOrdinal("QUAL__003");
+            var ordCres030 = reader.GetOrdinal("CRES__030");
+            var ordCres031 = reader.GetOrdinal("CRES__031");
+            var ordCresExtra1 = cfg.HasCresExtra1 ? reader.GetOrdinal("CRES__EXTRA1") : -1;
+            var ordValidationResult = reader.GetOrdinal("Validation_Result");
+            var ordValidationReason = reader.GetOrdinal("Validation_Reason");
+
+            string GetVal(int ord) => ord < 0 || reader.IsDBNull(ord)
+                ? ""
+                : Convert.ToString(reader.GetValue(ord), CultureInfo.InvariantCulture) ?? "";
+
+            var rowValues = new List<string>(12);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                rowValues.Add(StreamCsvEscape(GetVal(ordCreg007)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCreg001)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCreg030)));
+                if (cfg.HasCregExtra1) rowValues.Add(StreamCsvEscape(GetVal(ordCregExtra1)));
+                if (cfg.HasCregExtra2) rowValues.Add(StreamCsvEscape(GetVal(ordCregExtra2)));
+                if (cfg.HasCregFilter) rowValues.Add(StreamCsvEscape(GetVal(ordCregFilter)));
+                if (cfg.HasCregExtra3) rowValues.Add(StreamCsvEscape(GetVal(ordCregExtra3)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordQual001)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordQual003)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCres030)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCres031)));
+                if (cfg.HasCresExtra1) rowValues.Add(StreamCsvEscape(GetVal(ordCresExtra1)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordValidationResult)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordValidationReason)));
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
         }
 
         public Task<Rule12ValidationSummary?> GetPendingValidationPreviewAsync(int clientId, string reviewerEmail)

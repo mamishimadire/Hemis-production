@@ -1,3 +1,4 @@
+using System.IO;
 using HemisAudit.ViewModels;
 
 namespace HemisAudit.Services
@@ -19,5 +20,11 @@ namespace HemisAudit.Services
         Task RemoveSignoffAsync(int runId, string reviewerEmail);
         Task<string> GenerateSqlAsync(Rule12ValidationRequest request);
         Task<Rule12ValidationSummary> GetExportSummaryAsync(Rule12ValidationRequest request);
+
+        // Writes CSV rows directly to outputStream as they're read from the database - no
+        // intermediate row list, no in-memory StringBuilder. Unlike GetExportSummaryAsync + the
+        // ExportService CSV writer, memory use stays roughly constant regardless of row count, so
+        // this is the reliable path for a full-population export on a large engagement.
+        Task StreamCsvExportAsync(Rule12ValidationRequest request, Stream outputStream);
     }
 }

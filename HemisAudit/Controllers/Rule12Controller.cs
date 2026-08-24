@@ -688,15 +688,71 @@ namespace HemisAudit.Controllers
         {
             try
             {
-                var summary = await ResolveExportSummaryAsync(request, forceFullPopulationScan: true);
-                var bytes = _export.ExportCsv(summary);
-                return File(bytes, "text/csv", $"Rule12_Course_Selection_{Ts()}.csv");
+                // Deliberately does NOT go through ResolveExportSummaryAsync/
+                // EnsureFullPopulationForExportAsync - that path calls GetExportSummaryAsync,
+                // which buffers every row in memory before returning, the exact behavior this
+                // rewrite exists to avoid. This does the same access check and table-config
+                // recovery those helpers do, but never loads a single result row itself - the
+                // streaming service method reads and writes rows one at a time directly against
+                // the response, so memory use stays roughly constant regardless of population size.
+                var exportRequest = await ResolveExportRequestConfigAsync(request);
+
+                Response.ContentType = "text/csv";
+                Response.Headers.ContentDisposition = $"attachment; filename=\"Rule12_Course_Selection_{Ts()}.csv\"";
+                await _rule12.StreamCsvExportAsync(exportRequest, Response.Body);
+                return new EmptyResult();
             }
             catch (Exception ex)
             {
-                Response.StatusCode = StatusCodes.Status400BadRequest;
-                return Json(new { error = ex.Message });
+                if (!Response.HasStarted)
+                {
+                    Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return Json(new { error = ex.Message });
+                }
+                // Streaming had already begun - headers are sent and can't be changed now. The
+                // client sees an incomplete download instead of a clean error, but the server
+                // itself doesn't crash.
+                return new EmptyResult();
             }
+        }
+
+        // Lightweight counterpart to ResolveExportSummaryAsync: resolves which tables/columns to
+        // export and confirms the caller can access this engagement, without ever loading a
+        // result row - see the comment on DownloadCsv for why that distinction matters here.
+        private async Task<Rule12ValidationRequest> ResolveExportRequestConfigAsync(Rule12ValidationRequest request)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+
+            if (request.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(request.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
+
+            if (!string.IsNullOrWhiteSpace(request.CregTable) &&
+                !string.IsNullOrWhiteSpace(request.QualTable) &&
+                !string.IsNullOrWhiteSpace(request.CresTable))
+            {
+                return request;
+            }
+
+            int? lookupRunId = request.RunId is int r && r > 0 ? r : null;
+            if (lookupRunId == null)
+            {
+                var ws = await _rule12.GetCurrentWorkspaceStateAsync(request.ClientId, user?.Email, includeSummary: false);
+                lookupRunId = ws?.RunId;
+            }
+
+            if (lookupRunId.HasValue)
+            {
+                var review = await _rule12.GetSavedRunAsync(lookupRunId.Value, user?.Email, includeFullResults: false);
+                if (review != null)
+                {
+                    var savedConfig = BuildSavedRunExportRequest(review);
+                    if (!string.IsNullOrWhiteSpace(savedConfig.CregTable))
+                        return savedConfig;
+                }
+            }
+
+            throw new InvalidOperationException("Run Rule 12 first before downloading results.");
         }
 
         [HttpPost]
