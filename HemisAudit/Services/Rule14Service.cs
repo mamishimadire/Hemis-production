@@ -191,6 +191,103 @@ namespace HemisAudit.Services
             return await AnalyseAsync(request, includeAllReviewRows: true);
         }
 
+        // Cheap population size check - runs the same server-side prep SQL as a full export but
+        // stops at a COUNT(*), no result rows loaded. Mirrors Rule12Service.GetPopulationCountAsync.
+        public async Task<int> GetPopulationCountAsync(Rule14ValidationRequest request)
+        {
+            ValidateRequest(request.StudTable, request.BridgeTable);
+            var crseApprovedCol = string.IsNullOrWhiteSpace(request.CrseApprovedCol) ? "_031" : request.CrseApprovedCol;
+            var crseApprovedVal = request.CrseApprovedVal ?? "A";
+            var crseLinkCol = string.IsNullOrWhiteSpace(request.CrseLinkCol) ? "_030" : request.CrseLinkCol;
+            var cregLinkCol = string.IsNullOrWhiteSpace(request.CregLinkCol) ? "_030" : request.CregLinkCol;
+
+            await EnsureRule14IndexesAsync(request.ClientId, request.StudTable, request.BridgeTable, crseApprovedCol, crseLinkCol, cregLinkCol);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            var crseTable = request.StudTable;
+            var cregTable = request.BridgeTable;
+            var crseColumns = new HashSet<string>(await _datasets.GetValidatedColumnsAsync(request.ClientId, crseTable), StringComparer.OrdinalIgnoreCase);
+            bool has(string col) => crseColumns.Contains(col);
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule14PrepSql(schema, crseTable, cregTable, crseApprovedCol, crseApprovedVal, crseLinkCol, cregLinkCol,
+                    has("_065"), has("_033"), has("_034"), has("_059"), has("_060"), has("_061"), has("_062"), has("_058"), has("_091"), has("_092") && has("_093"));
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var countCommand = connection.CreateCommand();
+            countCommand.CommandText = "SELECT COUNT(*) FROM rule14_result;";
+            return Convert.ToInt32(await countCommand.ExecuteScalarAsync());
+        }
+
+        // Bypasses AnalyseAsync/LoadControlRowsAsync entirely - those buffer every row as a full
+        // Dictionary<string,string?> before anything can be written out, unbounded for a full
+        // export (confirmed OutOfMemoryException risk on the same "450k+ row" scale as Rule 12/18
+        // before their fix). Reads and writes one row at a time, using the query's own column
+        // names directly rather than hand-listing them, so there's no risk of the export
+        // referencing a column that doesn't match what rule14_result actually produces. Mirrors
+        // Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule14ValidationRequest request, Stream outputStream)
+        {
+            ValidateRequest(request.StudTable, request.BridgeTable);
+            var crseApprovedCol = string.IsNullOrWhiteSpace(request.CrseApprovedCol) ? "_031" : request.CrseApprovedCol;
+            var crseApprovedVal = request.CrseApprovedVal ?? "A";
+            var crseLinkCol = string.IsNullOrWhiteSpace(request.CrseLinkCol) ? "_030" : request.CrseLinkCol;
+            var cregLinkCol = string.IsNullOrWhiteSpace(request.CregLinkCol) ? "_030" : request.CregLinkCol;
+
+            await EnsureRule14IndexesAsync(request.ClientId, request.StudTable, request.BridgeTable, crseApprovedCol, crseLinkCol, cregLinkCol);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            var crseTable = request.StudTable;
+            var cregTable = request.BridgeTable;
+            var crseColumns = new HashSet<string>(await _datasets.GetValidatedColumnsAsync(request.ClientId, crseTable), StringComparer.OrdinalIgnoreCase);
+            bool has(string col) => crseColumns.Contains(col);
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule14PrepSql(schema, crseTable, cregTable, crseApprovedCol, crseApprovedVal, crseLinkCol, cregLinkCol,
+                    has("_065"), has("_033"), has("_034"), has("_059"), has("_060"), has("_061"), has("_062"), has("_058"), has("_091"), has("_092") && has("_093"));
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT * FROM rule14_result ORDER BY course_code;";
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => ToPascalDisplayName(reader.GetName(i))).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
+        }
+
         public Task<Rule14ValidationSummary?> GetPendingValidationPreviewAsync(int clientId, string reviewerEmail)
         {
             var pending = _pendingValidationCache.GetPending<Rule14ValidationRequest, Rule14ValidationSummary>(14, clientId, reviewerEmail);

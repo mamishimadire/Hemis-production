@@ -595,20 +595,89 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule14_Course_Credentials_{runId}.sql");
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless - a hard format limit no memory increase
+        // changes. Matches Excel's own actual maximum now the Render service has 4GB (see
+        // Rule12Controller.ExcelExportRowSafetyLimit for the same reasoning).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule14ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportExcel(summary);
-            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule14_Course_Credentials_{Ts()}.xlsx");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                var populationCount = await _Rule14.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+                }
+
+                // Re-queried fresh via GetExportSummaryAsync rather than ResolveExportSummaryAsync's
+                // saved-run lookup, which deserializes the ENTIRE saved run's ResultsJSON - Rule 14
+                // persists its full, uncapped ReviewRows on every save (unlike Rule 12/18/22, which
+                // trim to fail rows), so that JSON blob is itself a memory risk on a large population
+                // independent of the count check above.
+                var resolved = await _Rule14.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportExcel(resolved);
+                return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule14_Course_Credentials_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        // Lets the browser decide up front whether Excel can be attempted, without trying (and
+        // failing) a full export first.
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule14ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _Rule14.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule14ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportCsv(summary);
-            return File(bytes, "text/csv", $"Rule14_Course_Credentials_{Ts()}.csv");
+            try
+            {
+                // Streams rows straight from the database, fresh, instead of exporting whatever
+                // (possibly enormous - see DownloadExcel's comment) ReviewRows the saved run's
+                // ResultsJSON happened to hold. See Rule14Service.StreamCsvExportAsync.
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                Response.ContentType = "text/csv";
+                Response.Headers.ContentDisposition = $"attachment; filename=\"Rule14_Course_Credentials_{Ts()}.csv\"";
+                await _Rule14.StreamCsvExportAsync(exportRequest, Response.Body);
+                return new EmptyResult();
+            }
+            catch (Exception ex)
+            {
+                if (!Response.HasStarted)
+                {
+                    Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return Json(new { error = ex.Message });
+                }
+                return new EmptyResult();
+            }
         }
 
         [HttpPost]
@@ -687,6 +756,33 @@ namespace HemisAudit.Controllers
                 return false;
 
             return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
+        }
+
+        // Lightweight counterpart to ResolveExportSummaryAsync: resolves the table/column config
+        // needed to query fresh and confirms the caller can access this engagement, without ever
+        // touching the saved run's ResultsJSON (which can itself be huge - see DownloadExcel's
+        // comment). The posted summary already carries every field needed to rebuild the request.
+        private async Task<Rule14ValidationRequest> ResolveExportRequestAsync(Rule14ValidationSummary summary)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
+
+            if (string.IsNullOrWhiteSpace(summary.StudTable) || string.IsNullOrWhiteSpace(summary.BridgeTable))
+                throw new InvalidOperationException("Run Rule 14 first before downloading results.");
+
+            return new Rule14ValidationRequest
+            {
+                ClientId = summary.ClientId,
+                StudTable = summary.StudTable,
+                BridgeTable = summary.BridgeTable,
+                CrseApprovedCol = summary.CrseApprovedCol,
+                CrseApprovedVal = summary.CrseApprovedVal,
+                CrseLinkCol = summary.CrseLinkCol,
+                CregLinkCol = summary.CregLinkCol
+            };
         }
 
         private async Task<Rule14ValidationSummary> ResolveExportSummaryAsync(Rule14ValidationSummary summary)
