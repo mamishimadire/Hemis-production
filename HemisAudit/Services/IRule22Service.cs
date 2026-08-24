@@ -17,5 +17,12 @@ namespace HemisAudit.Services
         Task RemoveSignoffAsync(int runId, string reviewerEmail);
         Task<string> GenerateSqlAsync(Rule22ValidationRequest request);
         Task<Rule22ValidationSummary> GetExportSummaryAsync(Rule22ValidationRequest request);
+
+        // Writes CSV rows directly to outputStream as they're read from the database - no cap,
+        // no intermediate row list. Mirrors IRule12Service.StreamCsvExportAsync.
+        Task StreamCsvExportAsync(Rule22ValidationRequest request, Stream outputStream);
+
+        // Cheap population size check - prep SQL plus a COUNT(*), no result rows loaded.
+        Task<int> GetPopulationCountAsync(Rule22ValidationRequest request);
     }
 }

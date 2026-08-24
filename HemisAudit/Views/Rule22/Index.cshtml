@@ -468,6 +468,30 @@
         });
     }
 
+    async function downloadCsvFile() {
+        if (!state.summary) throw new Error('Run Rule 22 first before downloading the CSV results.');
+        await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule22_Staff_Validation.csv');
+    }
+
+    async function downloadExcelFile() {
+        if (!state.summary) throw new Error('Run Rule 22 first before downloading the Excel results.');
+
+        const info = await postJson(`${apiBasePath}/GetExportInfo`, state.summary);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsvFile
+            );
+            return;
+        }
+
+        try {
+            await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule22_Staff_Validation.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+        }
+    }
+
     function updateControlDefinitionsBox() {
         var fv041 = (els.filterValue041?.value || 'PE').trim() || 'PE';
         var fv039 = (els.filterValue039?.value || '01').trim() || '01';
@@ -1155,13 +1179,13 @@
     els.saveWorkspaceBtn.addEventListener('click', saveWorkspace);
     els.signoffBtn.addEventListener('click', signoffWorkspace);
     els.removeSignoffBtn.addEventListener('click', removeWorkspaceSignoff);
-    document.getElementById('downloadExcelBtn').addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule22_Staff_Validation.xlsx'));
-    document.getElementById('downloadCsvBtn').addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule22_Staff_Validation.csv'));
+    document.getElementById('downloadExcelBtn').addEventListener('click', () => downloadExcelFile().catch(err => window.showAppToast?.(err.message, 'error')));
+    document.getElementById('downloadCsvBtn').addEventListener('click', () => downloadCsvFile().catch(err => window.showAppToast?.(err.message, 'error')));
     document.getElementById('downloadSqlBtn').addEventListener('click', () => downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule22.sql'));
     document.getElementById('downloadAllBtn').addEventListener('click', async () => {
         if (!state.summary) return;
-        if (document.getElementById('chkExcel').checked) await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule22_Staff_Validation.xlsx');
-        if (document.getElementById('chkCsv').checked) await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule22_Staff_Validation.csv');
+        if (document.getElementById('chkExcel').checked) await downloadExcelFile();
+        if (document.getElementById('chkCsv').checked) await downloadCsvFile();
         if (document.getElementById('chkSql').checked) await downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule22.sql');
     });
 

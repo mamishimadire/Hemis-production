@@ -646,22 +646,86 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule22_Staff_Validation_{runId}.sql");
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless - a hard format limit no memory increase
+        // changes. Matches Excel's own actual maximum now the Render service has 4GB (see
+        // Rule12Controller.ExcelExportRowSafetyLimit for the same reasoning).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule22ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var fileName = $"Rule22_Staff_Validation_{Ts()}.xlsx";
-            var bytes = _export.ExportExcel(summary);
-            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                var populationCount = await _rule22.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+                }
+
+                var resolved = await _rule22.GetExportSummaryAsync(exportRequest);
+                var fileName = $"Rule22_Staff_Validation_{Ts()}.xlsx";
+                var bytes = _export.ExportExcel(resolved);
+                return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        // Lets the browser decide up front whether Excel can be attempted, without trying (and
+        // failing) a full export first.
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule22ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule22.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule22ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var fileName = $"Rule22_Staff_Validation_{Ts()}.csv";
-            var bytes = _export.ExportCsv(summary);
-            return File(bytes, "text/csv", fileName);
+            try
+            {
+                // Streams rows straight from the database as they're read instead of the old
+                // ExportCsv(summary) path, which exported whatever ReviewRows the resolved
+                // summary carried - capped at MaxExportRowsPerControl per control. See
+                // Rule22Service.StreamCsvExportAsync.
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                Response.ContentType = "text/csv";
+                Response.Headers.ContentDisposition = $"attachment; filename=\"Rule22_Staff_Validation_{Ts()}.csv\"";
+                await _rule22.StreamCsvExportAsync(exportRequest, Response.Body);
+                return new EmptyResult();
+            }
+            catch (Exception ex)
+            {
+                if (!Response.HasStarted)
+                {
+                    Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return Json(new { error = ex.Message });
+                }
+                return new EmptyResult();
+            }
         }
 
         [HttpPost]
@@ -754,6 +818,62 @@ namespace HemisAudit.Controllers
             var engagementRole = await _systemDb.GetEngagementRoleAsync(clientId, user, role);
             return ValidationRunAccessPolicy.CanAssignedUserSignOff(engagementRole);
         }
+
+        // Lightweight counterpart to ResolveExportSummaryAsync: resolves the table/column config
+        // needed to query fresh and confirms the caller can access this engagement, without ever
+        // loading a result row itself. Same saved-run/workspace fallback chain and field mapping
+        // as ResolveExportSummaryAsync, just stopping short of calling GetExportSummaryAsync.
+        private async Task<Rule22ValidationRequest> ResolveExportRequestAsync(Rule22ValidationSummary summary)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
+
+            if (summary.SavedRunId is int savedRunId && savedRunId > 0)
+            {
+                var review = await _rule22.GetSavedRunAsync(savedRunId, user?.Email);
+                if (review?.Summary != null)
+                    return BuildRequestFromSummary(review.ClientId, review.RunId, review.Summary);
+            }
+
+            var workspace = await _rule22.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email, includeSummary: false);
+            if (workspace?.RunId is int workspaceRunId && workspaceRunId > 0)
+            {
+                var review = await _rule22.GetSavedRunAsync(workspaceRunId, user?.Email);
+                if (review?.Summary != null)
+                    return BuildRequestFromSummary(review.ClientId, review.RunId, review.Summary);
+            }
+
+            if (string.IsNullOrWhiteSpace(summary.ProfTable))
+                throw new InvalidOperationException("Run Rule 22 first before downloading results.");
+
+            return BuildRequestFromSummary(summary.ClientId, summary.SavedRunId, summary);
+        }
+
+        private static Rule22ValidationRequest BuildRequestFromSummary(int clientId, int? runId, Rule22ValidationSummary summary) => new()
+        {
+            ClientId = clientId,
+            RunId = runId,
+            ProfTable = summary.ProfTable,
+            Column037 = summary.Column037,
+            Column038 = summary.Column038,
+            Column011 = summary.Column011,
+            Column012 = summary.Column012,
+            Column013 = summary.Column013,
+            Column041 = summary.Column041,
+            Column039 = summary.Column039,
+            Column040 = summary.Column040,
+            Column042 = summary.Column042,
+            Column046 = summary.Column046,
+            Column048 = summary.Column048,
+            FilterValue041 = summary.FilterValue041,
+            FilterValue039 = summary.FilterValue039,
+            Control1SampleSize = summary.Control1SampleSize,
+            Control2SampleSize = summary.Control2SampleSize,
+            Control3SampleSize = summary.Control3SampleSize
+        };
 
         private async Task<Rule22ValidationSummary> ResolveExportSummaryAsync(Rule22ValidationSummary summary)
         {

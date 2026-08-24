@@ -20,7 +20,13 @@ namespace HemisAudit.Services
     public class Rule22Service : IRule22Service
     {
         private const int ReviewPreviewRowsPerControl = 100;
-        private const int MaxExportRowsPerControl = 5000;
+        // Applied per control (sample_number resets per control via PARTITION BY), so a client
+        // with a genuinely large single control was silently truncated at 5,000 regardless of its
+        // real size. CSV export now bypasses this entirely via StreamCsvExportAsync (true
+        // streaming, no cap). Raised for the Excel/interactive path now the Render service has
+        // 4GB - matches Excel's own 1,048,576-row-per-sheet format ceiling per control, same
+        // reasoning as Rule 12/18.
+        private const int MaxExportRowsPerControl = 1_048_576;
         private const int BrowserPreviewRowLimit = 10;
 
         private readonly IConfiguration _configuration;
@@ -159,6 +165,122 @@ namespace HemisAudit.Services
 
         public async Task<Rule22ValidationSummary> GetExportSummaryAsync(Rule22ValidationRequest request) =>
             await AnalyseAsync(request, includeAllReviewRows: true);
+
+        // Cheap population size check - runs the same server-side prep SQL as a full export but
+        // stops at a COUNT(*), no result rows loaded. Mirrors Rule12Service.GetPopulationCountAsync.
+        public async Task<int> GetPopulationCountAsync(Rule22ValidationRequest request)
+        {
+            var cfg = await ResolveColumnConfigAsync(request.ClientId, request.ProfTable, request);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule22PrepSql(schema, request.ProfTable, cfg);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            var counts = await GetControlCountsAsync(connection);
+            return counts.Values.Sum();
+        }
+
+        // Bypasses AnalyseAsync/LoadReviewRowsAsync entirely - those buffer every row into a full
+        // List<...> before anything can be written out, capped at MaxExportRowsPerControl per
+        // control besides. This reads and writes one row at a time directly from
+        // rule22_population, so memory use stays roughly constant and nothing is capped, no
+        // matter how large any one control's population is. Mirrors
+        // Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule22ValidationRequest request, Stream outputStream)
+        {
+            var cfg = await ResolveColumnConfigAsync(request.ClientId, request.ProfTable, request);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule22PrepSql(schema, request.ProfTable, cfg);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            var headerParts = new List<string>
+            {
+                "Control_Type", "Control_Definition", "Staff_Number", cfg.Column038, cfg.Column039, cfg.Column040,
+                cfg.Column011, cfg.Column012, cfg.Column013, cfg.Column014, cfg.Column041, cfg.Column042,
+                cfg.Column046, cfg.Column047, cfg.Column048, cfg.Column094, "Validation_Result"
+            };
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = @"
+SELECT control_type, control_definition, staff_number, year_038, col_039, col_040, col_011, col_012, col_013,
+       col_014, col_041, col_042, col_046, col_047, col_048, col_094
+FROM rule22_population
+ORDER BY
+    CASE control_type WHEN 'Control 1' THEN 1 WHEN 'Control 2' THEN 2 WHEN 'Control 3' THEN 3 ELSE 4 END,
+    sample_number;";
+
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var ordControlType = reader.GetOrdinal("control_type");
+            var ordControlDefinition = reader.GetOrdinal("control_definition");
+            var ordStaffNumber = reader.GetOrdinal("staff_number");
+            var ordYear038 = reader.GetOrdinal("year_038");
+            var ordCol039 = reader.GetOrdinal("col_039");
+            var ordCol040 = reader.GetOrdinal("col_040");
+            var ordCol011 = reader.GetOrdinal("col_011");
+            var ordCol012 = reader.GetOrdinal("col_012");
+            var ordCol013 = reader.GetOrdinal("col_013");
+            var ordCol014 = reader.GetOrdinal("col_014");
+            var ordCol041 = reader.GetOrdinal("col_041");
+            var ordCol042 = reader.GetOrdinal("col_042");
+            var ordCol046 = reader.GetOrdinal("col_046");
+            var ordCol047 = reader.GetOrdinal("col_047");
+            var ordCol048 = reader.GetOrdinal("col_048");
+            var ordCol094 = reader.GetOrdinal("col_094");
+
+            string GetVal(int ord) => ord < 0 || reader.IsDBNull(ord)
+                ? ""
+                : Convert.ToString(reader.GetValue(ord), CultureInfo.InvariantCulture) ?? "";
+
+            var rowValues = new List<string>(17);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                rowValues.Add(StreamCsvEscape(GetVal(ordControlType)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordControlDefinition)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordStaffNumber)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordYear038)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol039)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol040)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol011)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol012)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol013)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol014)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol041)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol042)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol046)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol047)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol048)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCol094)));
+                rowValues.Add(StreamCsvEscape("PASS"));
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
+        }
 
         public async Task<int?> GetClientIdForRunAsync(int runId) => await _systemDb.GetClientIdForRunAsync(runId);
 
