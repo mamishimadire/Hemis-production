@@ -332,7 +332,7 @@
         </div>
         <div class="tab-pane" data-tab-panel="downloads">
             <div class="alert alert--info" style="margin-bottom:16px">
-                Excel includes summary sheets and the full Rule 12 result population - for engagements too large for one Excel file, it automatically downloads as multiple part files so nothing is left out. CSV always includes the full population in a single file. SQL includes the full dbo_CREG/dbo_CRSE validation query.
+                Excel includes summary sheets and the full Rule 12 result population - for engagements too large for a single Excel file, you'll be prompted to download CSV instead. CSV always includes the full population, of any size, in a single file. SQL includes the full dbo_CREG/dbo_CRSE validation query.
             </div>
             <div class="action-bar" style="justify-content:flex-start;margin:0">
                 <button type="button" class="btn btn-info" id="downloadExcelBtn">Excel</button>
@@ -346,6 +346,17 @@
         <div class="spinner-box">
             <div class="spinner-ring"></div>
             <p id="spinnerMsg">Processing...</p>
+        </div>
+    </div>
+
+    <div id="excelTooLargeModal" class="spinner-overlay" style="display:none">
+        <div class="spinner-box" style="max-width:440px;text-align:left;padding:28px 32px">
+            <h3 style="margin:0 0 12px;color:var(--red-bright)">Too Large for a Single Excel File</h3>
+            <p id="excelTooLargeMessage" style="margin:0 0 22px;color:#333;line-height:1.5"></p>
+            <div style="display:flex;gap:10px;justify-content:flex-end">
+                <button type="button" class="btn btn-secondary" id="excelTooLargeCancelBtn">Cancel</button>
+                <button type="button" class="btn btn-success" id="excelTooLargeCsvBtn">Download CSV Instead</button>
+            </div>
         </div>
     </div>
 </div>
@@ -721,6 +732,21 @@ window.toggleAccordion = function (section) {
         };
     }
 
+    function showExcelTooLargeModal(message) {
+        document.getElementById('excelTooLargeMessage').textContent = message;
+        document.getElementById('excelTooLargeModal').style.display = 'flex';
+    }
+
+    function hideExcelTooLargeModal() {
+        document.getElementById('excelTooLargeModal').style.display = 'none';
+    }
+
+    document.getElementById('excelTooLargeCancelBtn')?.addEventListener('click', hideExcelTooLargeModal);
+    document.getElementById('excelTooLargeCsvBtn')?.addEventListener('click', () => {
+        hideExcelTooLargeModal();
+        downloadCsvFile().catch(err => setWorkspaceState(err.message, 'error'));
+    });
+
     async function downloadExcelFile() {
         if (!state.summary && !state.currentRunId) {
             setWorkspaceState('Run Rule 12 first before downloading the Excel results.', 'warning');
@@ -735,26 +761,10 @@ window.toggleAccordion = function (section) {
             return;
         }
 
-        const totalParts = info.totalParts;
         const totalRecords = (info.totalRecords || 0).toLocaleString();
-        setWorkspaceState(
-            `This engagement has ${totalRecords} records - too many for a single Excel file. Downloading the full population as ${totalParts} Excel files...`,
-            'info'
-        );
-
-        const stamp = fileStamp();
-        for (let part = 1; part <= totalParts; part++) {
-            setWorkspaceState(`Downloading Excel part ${part} of ${totalParts}...`, 'info', { suppressToast: true });
-            await downloadBlob(
-                `${apiBasePath}/DownloadExcelPart`,
-                { ...req, partNumber: part },
-                `Rule12_Course_Selection_Part${part}of${totalParts}_${stamp}.xlsx`
-            );
-        }
-
-        setWorkspaceState(
-            `All ${totalParts} Excel parts downloaded - full population of ${totalRecords} records complete.`,
-            'success'
+        showExcelTooLargeModal(
+            `This engagement has ${totalRecords} records - too many to include in a single Excel file. ` +
+            `Please download the CSV instead, which always includes the full population regardless of size.`
         );
     }
 
