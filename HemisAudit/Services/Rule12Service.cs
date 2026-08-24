@@ -17,6 +17,13 @@ namespace HemisAudit.Services
     public class Rule12Service : IRule12Service
     {
         private const int BrowserPreviewRowLimit = 10;
+        // Safety ceiling on the full (export) load only - not a preview limit. Each row is
+        // materialized as a full Dictionary<string,string?> of every column, which is a lot of
+        // per-row overhead; an institution's actual student/qualification counts should never come
+        // close to this, but with no ceiling at all a single unusually large dataset can exhaust
+        // this container's memory outright (a genuine OutOfMemoryException seen on Rule 12) and
+        // crash the whole app for every user, not just whoever ran the export.
+        private const int ExportRowSafetyLimit = 250_000;
         private readonly IConfiguration _configuration;
         private readonly IEngagementDatasetService _datasets;
         private readonly ISystemDatabaseService _systemDb;
@@ -522,13 +529,13 @@ FROM rule12_validation;";
             List<Rule12ValidationRowRecord> reviewRows;
             if (includeAllReviewRows && failRowsOnlyForFullLoad)
             {
-                reviewRows = await LoadControlRowsAsync(connection, null,
+                reviewRows = await LoadControlRowsAsync(connection, ExportRowSafetyLimit,
                     request.CregTable, request.QualTable, request.CresTable, cfg.CregQualCol, cfg.QualJoinCol, cfg.CresStatusCol, cfg.CresStatusFilter,
                     resultFilter: "FAIL");
             }
             else
             {
-                reviewRows = await LoadControlRowsAsync(connection, includeAllReviewRows ? (int?)null : BrowserPreviewRowLimit,
+                reviewRows = await LoadControlRowsAsync(connection, includeAllReviewRows ? ExportRowSafetyLimit : BrowserPreviewRowLimit,
                     request.CregTable, request.QualTable, request.CresTable, cfg.CregQualCol, cfg.QualJoinCol, cfg.CresStatusCol, cfg.CresStatusFilter);
             }
             reviewRows = NormalizeReviewRows(reviewRows);
