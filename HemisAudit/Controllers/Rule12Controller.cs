@@ -667,12 +667,30 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule12_Course_Selection_{runId}.sql");
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved - there is no
+        // streaming write path with this library - and .xlsx itself caps out at 1,048,576 rows
+        // per sheet regardless. A population above this ceiling has been confirmed to exhaust
+        // this container's memory outright (OutOfMemoryException, taking the whole app down with
+        // it), so it's checked and rejected up front with a clear message instead of attempting
+        // it. This is a conservative estimate, not a measured hard limit - tune down further if
+        // it still crashes near this size, or up if a real engagement comfortably clears it.
+        private const int ExcelExportRowSafetyLimit = 100_000;
+
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule12ValidationRequest request)
         {
             try
             {
-                var summary = await ResolveExportSummaryAsync(request, forceFullPopulationScan: true);
+                var exportRequest = await ResolveExportRequestConfigAsync(request);
+
+                var populationCount = await _rule12.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"This engagement has {populationCount:N0} records, too many to export as Excel safely. Please use the CSV download instead - it supports the full population regardless of size.");
+                }
+
+                var summary = await ResolveExportSummaryAsync(exportRequest, forceFullPopulationScan: true);
                 var bytes = _export.ExportExcel(summary);
                 return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule12_Course_Selection_{Ts()}.xlsx");
             }

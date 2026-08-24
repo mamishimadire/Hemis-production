@@ -176,6 +176,33 @@ namespace HemisAudit.Services
             return await AnalyseAsync(request, includeAllReviewRows: true);
         }
 
+        public async Task<int> GetPopulationCountAsync(Rule12ValidationRequest request)
+        {
+            ValidateRequest(request.CregTable, request.QualTable, request.CresTable);
+
+            var cfg = await ResolveColumnConfigAsync(
+                request.ClientId, request.CregTable, request.QualTable, request.CresTable,
+                request.CregStudentCol, request.CregQualCol, request.CregCourseCol,
+                request.QualJoinCol, request.QualDescCol,
+                request.CresCourseCol, request.CresStatusCol, request.CresStatusFilter,
+                request.CregExtra1Col, request.CregExtra2Col, request.CregFilterCol, request.CregFilterValues,
+                request.CregExtra3Col, request.CresExtra1Col);
+
+            await EnsureRule12IndexesAsync(request.ClientId, request.CregTable, request.QualTable, request.CresTable, cfg);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule12PrepSql(schema, request.CregTable, request.QualTable, request.CresTable, cfg);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            var (_, _, _, totalActiveStudents, _, _) = await GetCountsAsync(connection, schema, request.CregTable, request.QualTable);
+            return totalActiveStudents;
+        }
+
         // Bypasses AnalyseAsync/LoadControlRowsAsync entirely - those buffer every row as a full
         // Dictionary<string,string?> before anything can be written out, which is fine for the
         // ~10-row browser preview but exhausts this container's memory on a real, large engagement

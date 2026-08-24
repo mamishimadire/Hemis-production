@@ -21,6 +21,11 @@ namespace HemisAudit.Services
         Task<string> GenerateSqlAsync(Rule12ValidationRequest request);
         Task<Rule12ValidationSummary> GetExportSummaryAsync(Rule12ValidationRequest request);
 
+        // Cheap population size check - runs the same server-side prep SQL as a full export but
+        // stops at a COUNT(*), so the caller can decide whether a full in-memory load (Excel) is
+        // safe before attempting one, without ever materializing a single result row itself.
+        Task<int> GetPopulationCountAsync(Rule12ValidationRequest request);
+
         // Writes CSV rows directly to outputStream as they're read from the database - no
         // intermediate row list, no in-memory StringBuilder. Unlike GetExportSummaryAsync + the
         // ExportService CSV writer, memory use stays roughly constant regardless of row count, so
