@@ -669,14 +669,13 @@ namespace HemisAudit.Controllers
 
         // ClosedXML builds the whole workbook in memory before it can be saved - there is no
         // streaming write path with this library - and .xlsx itself caps out at 1,048,576 rows
-        // per sheet regardless. A population above this ceiling has been confirmed to exhaust
-        // this container's memory outright (OutOfMemoryException, taking the whole app down with
-        // it), so it's checked and rejected up front with a clear message instead of attempting
-        // it. Kept equal to ExcelExportPartSize (see its comment below) so a single-file download
-        // and one part are held to the same size. 50,000 confirmed working; re-testing 100,000
-        // (the earlier failure at that size may have been transient container pressure rather
-        // than a hard ceiling) - watch for a repeat OutOfMemoryException.
-        private const int ExcelExportRowSafetyLimit = 100_000;
+        // per sheet regardless, which is a hard format limit no amount of memory changes. On the
+        // old 512MB container, even 100,000 rows was unreliable, which is why this used to sit
+        // far below the format ceiling. The Render service was upgraded to 4GB specifically to
+        // support single-file exports, so this is now set to Excel's own actual maximum - a
+        // population above this genuinely cannot fit in one .xlsx file regardless of memory, at
+        // which point the part-download/CSV fallback still applies.
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
 
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule12ValidationRequest request)
@@ -748,10 +747,11 @@ namespace HemisAudit.Controllers
             }
         }
 
-        // An earlier attempt at 100,000 failed with OutOfMemoryException; 50,000 was then
-        // confirmed working. Re-testing 100,000 per explicit request - watch for a repeat
-        // OutOfMemoryException; if it fails again, drop back to 50,000 as the known-safe value.
-        private const int ExcelExportPartSize = 100_000;
+        // Only reached now if a population exceeds ExcelExportRowSafetyLimit - i.e. genuinely
+        // more than Excel's own 1,048,576-row-per-sheet format ceiling, which no memory increase
+        // can fix. Matches that same ceiling so each part is as large as a single sheet can ever
+        // legally be.
+        private const int ExcelExportPartSize = 1_048_576;
 
         [HttpPost]
         public async Task<IActionResult> DownloadExcelPart([FromBody] Rule12ExportPartRequest request)
