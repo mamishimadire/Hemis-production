@@ -709,7 +709,22 @@ namespace HemisAudit.Controllers
             try
             {
                 var exportRequest = await ResolveExportRequestConfigAsync(request);
-                var populationCount = await _rule12.GetPopulationCountAsync(exportRequest);
+
+                int populationCount;
+                try
+                {
+                    populationCount = await _rule12.GetPopulationCountAsync(exportRequest);
+                }
+                catch (Exception countEx)
+                {
+                    // Surfaces which phase actually failed instead of a bare "OutOfMemoryException
+                    // was thrown" - this check is meant to be the cheap path (a prep + COUNT(*),
+                    // no result rows loaded), so if it's the one failing that itself is important
+                    // diagnostic information, not just noise.
+                    throw new InvalidOperationException(
+                        $"Population count check failed ({countEx.GetType().Name}): {countEx.Message}", countEx);
+                }
+
                 var exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit;
                 var totalParts = exceedsExcelLimit
                     ? (int)Math.Ceiling(populationCount / (double)ExcelExportPartSize)
