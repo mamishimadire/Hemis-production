@@ -673,9 +673,10 @@ namespace HemisAudit.Controllers
         // this container's memory outright (OutOfMemoryException, taking the whole app down with
         // it), so it's checked and rejected up front with a clear message instead of attempting
         // it. Kept equal to ExcelExportPartSize (see its comment below) so a single-file download
-        // and one part are held to the same size. 100,000 was confirmed too large; this is being
-        // raised to 50,000 to test - not yet confirmed safe, watch for a repeat OutOfMemoryException.
-        private const int ExcelExportRowSafetyLimit = 50_000;
+        // and one part are held to the same size. 50,000 confirmed working; re-testing 100,000
+        // (the earlier failure at that size may have been transient container pressure rather
+        // than a hard ceiling) - watch for a repeat OutOfMemoryException.
+        private const int ExcelExportRowSafetyLimit = 100_000;
 
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule12ValidationRequest request)
@@ -747,12 +748,10 @@ namespace HemisAudit.Controllers
             }
         }
 
-        // 100,000 was confirmed to exhaust this container's memory building a single part
-        // (ClosedXML's per-cell/style object overhead is heavy enough that even ~22% of the
-        // population that originally crashed the unbounded export was still too much). Testing
-        // 50,000 next per explicit request - not yet confirmed safe, watch for a repeat
-        // OutOfMemoryException and drop further if so.
-        private const int ExcelExportPartSize = 50_000;
+        // An earlier attempt at 100,000 failed with OutOfMemoryException; 50,000 was then
+        // confirmed working. Re-testing 100,000 per explicit request - watch for a repeat
+        // OutOfMemoryException; if it fails again, drop back to 50,000 as the known-safe value.
+        private const int ExcelExportPartSize = 100_000;
 
         [HttpPost]
         public async Task<IActionResult> DownloadExcelPart([FromBody] Rule12ExportPartRequest request)
