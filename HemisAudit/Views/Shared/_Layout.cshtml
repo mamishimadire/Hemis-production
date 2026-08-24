@@ -435,6 +435,16 @@
 <button type="button" class="app-shell-overlay" id="appShellOverlay" aria-label="Close navigation"></button>
 <div id="appToastRegion" class="app-toast-region" aria-live="polite" aria-atomic="true"></div>
 <div id="appDownloadRegion" class="app-download-region" aria-live="polite" aria-atomic="false"></div>
+<div id="excelTooLargeModal" class="spinner-overlay" style="display:none">
+    <div class="spinner-box" style="max-width:440px;text-align:left;padding:28px 32px">
+        <h3 style="margin:0 0 12px;color:var(--red-bright)">Too Large for a Single Excel File</h3>
+        <p id="excelTooLargeMessage" style="margin:0 0 22px;color:#333;line-height:1.5"></p>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+            <button type="button" class="btn btn-secondary" id="excelTooLargeCancelBtn">Cancel</button>
+            <button type="button" class="btn btn-success" id="excelTooLargeCsvBtn">Download CSV Instead</button>
+        </div>
+    </div>
+</div>
 
 <script>
 (function(){
@@ -605,6 +615,36 @@
         });
         syncDocumentsGroup();
     }
+
+    // Shared "Excel too large" popup used by every rule's export flow - one modal, one style,
+    // instead of each Rule{N}/Index.cshtml duplicating this markup and wiring. onDownloadCsv is
+    // the calling page's own CSV download function, since that's rule-specific.
+    window.showExcelTooLargeModal = function (message, onDownloadCsv) {
+        var modal = document.getElementById('excelTooLargeModal');
+        if (!modal) return;
+        document.getElementById('excelTooLargeMessage').textContent = message || '';
+
+        var csvBtn = document.getElementById('excelTooLargeCsvBtn');
+        var cancelBtn = document.getElementById('excelTooLargeCancelBtn');
+        var hide = function () { modal.style.display = 'none'; };
+
+        var newCsvBtn = csvBtn.cloneNode(true);
+        csvBtn.parentNode.replaceChild(newCsvBtn, csvBtn);
+        newCsvBtn.addEventListener('click', function () {
+            hide();
+            if (typeof onDownloadCsv === 'function') {
+                Promise.resolve(onDownloadCsv()).catch(function (err) {
+                    window.showAppToast?.(err?.message || 'CSV download failed.', 'error');
+                });
+            }
+        });
+
+        var newCancelBtn = cancelBtn.cloneNode(true);
+        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+        newCancelBtn.addEventListener('click', hide);
+
+        modal.style.display = 'flex';
+    };
 
     window.showAppToast = function (message, type) {
         var region = document.getElementById('appToastRegion');

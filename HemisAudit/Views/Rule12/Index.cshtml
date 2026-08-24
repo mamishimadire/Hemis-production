@@ -348,17 +348,6 @@
             <p id="spinnerMsg">Processing...</p>
         </div>
     </div>
-
-    <div id="excelTooLargeModal" class="spinner-overlay" style="display:none">
-        <div class="spinner-box" style="max-width:440px;text-align:left;padding:28px 32px">
-            <h3 style="margin:0 0 12px;color:var(--red-bright)">Too Large for a Single Excel File</h3>
-            <p id="excelTooLargeMessage" style="margin:0 0 22px;color:#333;line-height:1.5"></p>
-            <div style="display:flex;gap:10px;justify-content:flex-end">
-                <button type="button" class="btn btn-secondary" id="excelTooLargeCancelBtn">Cancel</button>
-                <button type="button" class="btn btn-success" id="excelTooLargeCsvBtn">Download CSV Instead</button>
-            </div>
-        </div>
-    </div>
 </div>
 
 <form id="antiForgeryForm" method="post" style="display:none">
@@ -732,21 +721,6 @@ window.toggleAccordion = function (section) {
         };
     }
 
-    function showExcelTooLargeModal(message) {
-        document.getElementById('excelTooLargeMessage').textContent = message;
-        document.getElementById('excelTooLargeModal').style.display = 'flex';
-    }
-
-    function hideExcelTooLargeModal() {
-        document.getElementById('excelTooLargeModal').style.display = 'none';
-    }
-
-    document.getElementById('excelTooLargeCancelBtn')?.addEventListener('click', hideExcelTooLargeModal);
-    document.getElementById('excelTooLargeCsvBtn')?.addEventListener('click', () => {
-        hideExcelTooLargeModal();
-        downloadCsvFile().catch(err => setWorkspaceState(err.message, 'error'));
-    });
-
     async function downloadExcelFile() {
         if (!state.summary && !state.currentRunId) {
             setWorkspaceState('Run Rule 12 first before downloading the Excel results.', 'warning');
@@ -781,12 +755,13 @@ window.toggleAccordion = function (section) {
                 completedParts = part;
             }
         } catch (err) {
-            showExcelTooLargeModal(
+            window.showExcelTooLargeModal(
                 completedParts > 0
                     ? `Downloaded ${completedParts} of ${totalParts} Excel parts, then hit an error: ${err.message} ` +
                       `Please download the CSV instead, which reliably includes the full population of ${totalRecords} records.`
                     : `This engagement's Excel export failed: ${err.message} ` +
-                      `Please download the CSV instead, which reliably includes the full population of ${totalRecords} records.`
+                      `Please download the CSV instead, which reliably includes the full population of ${totalRecords} records.`,
+                downloadCsvFile
             );
             return;
         }
