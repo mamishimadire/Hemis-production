@@ -4,6 +4,13 @@ namespace HemisAudit.Services
 {
     public interface IRule18Service
     {
+        // Writes CSV rows directly to outputStream as they're read from the database - no
+        // intermediate row list, no in-memory StringBuilder. Memory use stays roughly constant
+        // regardless of row count. Mirrors IRule12Service.StreamCsvExportAsync.
+        Task StreamCsvExportAsync(Rule18ValidationRequest request, Stream outputStream);
+
+        // Cheap population size check - prep SQL plus a COUNT(*), no result rows loaded.
+        Task<int> GetPopulationCountAsync(Rule18ValidationRequest request);
         Task<Rule18TableDiscoveryResult> GetTablesAsync(int clientId);
         Task<ColumnListResult> GetColumnsAsync(int clientId, string tableName);
         Task<ColumnValuesResult> GetColumnValuesAsync(int clientId, string tableName, string columnName);

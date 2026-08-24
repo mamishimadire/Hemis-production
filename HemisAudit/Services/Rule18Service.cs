@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using HemisAudit.Helpers;
 using HemisAudit.Models;
 using HemisAudit.ViewModels;
@@ -225,6 +226,139 @@ LIMIT 200;";
         {
             ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
             return await AnalyseAsync(request, includeAllReviewRows: true);
+        }
+
+        // Cheap population size check - runs the same server-side prep SQL as a full export but
+        // stops at a COUNT(*), no result rows loaded - mirrors Rule12Service.GetPopulationCountAsync.
+        public async Task<int> GetPopulationCountAsync(Rule18ValidationRequest request)
+        {
+            ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
+
+            var cfg = await ResolveColumnConfigAsync(request.ClientId, request.StudTable, request.BridgeTable, request.CrseTable,
+                request.NsfasFilterCol, request.NsfasFilterValue, request.FoundationFilterCol, request.FoundationFilterValue,
+                request.DistanceFilterCol, request.DistanceFilterValue, request.CredJoinCol, request.CredCourseCol,
+                request.CrseCourseCol, request.CrseNameCol);
+
+            await EnsureRule18IndexesAsync(request.ClientId, request.StudTable, request.BridgeTable, request.CrseTable, cfg);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule18PrepSql(schema, request.StudTable, request.BridgeTable, request.CrseTable, cfg);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            var (_, c1, c2, c3) = await GetCountsAsync(connection, cfg.NsfasFilterValue);
+            return c1 + c2 + c3;
+        }
+
+        // Bypasses AnalyseAsync/LoadControlRowsAsync entirely - those buffer every row as a full
+        // Dictionary<string,string?> before anything can be written out. This reads and writes
+        // one row at a time directly from rule18_validation, so memory use stays roughly constant
+        // no matter how large the (UNION-ALL-of-3-controls) population is. Mirrors
+        // Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule18ValidationRequest request, Stream outputStream)
+        {
+            ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
+
+            var cfg = await ResolveColumnConfigAsync(request.ClientId, request.StudTable, request.BridgeTable, request.CrseTable,
+                request.NsfasFilterCol, request.NsfasFilterValue, request.FoundationFilterCol, request.FoundationFilterValue,
+                request.DistanceFilterCol, request.DistanceFilterValue, request.CredJoinCol, request.CredCourseCol,
+                request.CrseCourseCol, request.CrseNameCol);
+
+            await EnsureRule18IndexesAsync(request.ClientId, request.StudTable, request.BridgeTable, request.CrseTable, cfg);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule18PrepSql(schema, request.StudTable, request.BridgeTable, request.CrseTable, cfg);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var writer = new StreamWriter(outputStream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            var headerParts = new List<string>
+            {
+                "Control_Type", "Student_Number", "Student_Qualification_Code", "NSFAS_Status", "Attendance_Mode",
+                "Qualification_Fulfilled_Indicator", "CREG_Qualification_Code", "CREG_Course_Code", "CRSE_Course_Code",
+                "Foundation_Course_Indicator", "CRSE_058", "Validation_Result", "Validation Explanation"
+            };
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = @"
+SELECT ""Control_Type"", ""Student_Number"", ""Student_Qualification_Code"", ""NSFAS_Status"", ""Attendance_Mode"",
+       ""Qualification_Fulfilled_Indicator"", ""CREG_Qualification_Code"", ""CREG_Course_Code"", ""CRSE_Course_Code"",
+       ""Foundation_Course_Indicator"", ""CRSE_058"", ""Validation_Result""
+FROM rule18_validation
+ORDER BY ""Extract_Number"";";
+
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var ordControlType = reader.GetOrdinal("Control_Type");
+            var ordStudentNumber = reader.GetOrdinal("Student_Number");
+            var ordStudentQualCode = reader.GetOrdinal("Student_Qualification_Code");
+            var ordNsfasStatus = reader.GetOrdinal("NSFAS_Status");
+            var ordAttendanceMode = reader.GetOrdinal("Attendance_Mode");
+            var ordQualFulfilled = reader.GetOrdinal("Qualification_Fulfilled_Indicator");
+            var ordCregQualCode = reader.GetOrdinal("CREG_Qualification_Code");
+            var ordCregCourseCode = reader.GetOrdinal("CREG_Course_Code");
+            var ordCrseCourseCode = reader.GetOrdinal("CRSE_Course_Code");
+            var ordFoundationIndicator = reader.GetOrdinal("Foundation_Course_Indicator");
+            var ordCrse058 = reader.GetOrdinal("CRSE_058");
+            var ordValidationResult = reader.GetOrdinal("Validation_Result");
+
+            string GetVal(int ord) => ord < 0 || reader.IsDBNull(ord)
+                ? ""
+                : Convert.ToString(reader.GetValue(ord), CultureInfo.InvariantCulture) ?? "";
+
+            var rowValues = new List<string>(13);
+            while (await reader.ReadAsync())
+            {
+                var controlType = GetVal(ordControlType);
+                var nsfasStatus = FormatRule18ColumnValue(GetVal(ordNsfasStatus));
+                var foundationIndicator = FormatRule18ColumnValue(GetVal(ordFoundationIndicator));
+                var attendanceMode = FormatRule18ColumnValue(GetVal(ordAttendanceMode));
+
+                var validationExplanation = controlType switch
+                {
+                    "Control_1" => $"NSFAS student (NSFAS_Status='{nsfasStatus}') enrolled in a Foundation course (Foundation_Course_Indicator='{foundationIndicator}').",
+                    "Control_2" => $"NSFAS student in a Foundation course studying via Distance (Attendance_Mode='{attendanceMode}').",
+                    "Control_3" => $"NSFAS student NOT in a Foundation course and NOT studying via Distance (Foundation='{foundationIndicator}', Attendance_Mode='{attendanceMode}').",
+                    _ => ""
+                };
+
+                rowValues.Clear();
+                rowValues.Add(StreamCsvEscape(controlType));
+                rowValues.Add(StreamCsvEscape(GetVal(ordStudentNumber)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordStudentQualCode)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordNsfasStatus)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordAttendanceMode)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordQualFulfilled)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCregQualCode)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCregCourseCode)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCrseCourseCode)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordFoundationIndicator)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCrse058)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordValidationResult)));
+                rowValues.Add(StreamCsvEscape(validationExplanation));
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
         }
 
         public Task<Rule18ValidationSummary?> GetPendingValidationPreviewAsync(int clientId, string reviewerEmail)
@@ -540,12 +674,11 @@ FROM rule18_validation;";
         // Rule 18's population is a UNION ALL of three overlapping controls (the same
         // registration row can appear in Control_1, Control_2, and Control_3 at once), so on a
         // real institution's data the row count can be several times the size of the raw CREG
-        // table — large enough to exhaust process memory if ever materialized into C# objects in
-        // one shot (confirmed: a Run Validation on real data threw OutOfMemoryException once this
-        // "load everything" path became reachable from the interactive Run button). This cap
-        // applies to every "full" load, not just the browser preview, so there is no path — Run,
-        // workspace reload, or export — that can try to hold an unbounded row count in memory.
-        private const int MaxSafeReviewRows = 5000;
+        // table. CSV export bypasses this entirely via StreamCsvExportAsync (true streaming, no
+        // cap). This remains as the ceiling for the interactive Run/workspace-reload path and for
+        // the buffered Excel export, now the Render service has been upgraded to 4GB - matches
+        // Excel's own 1,048,576-row-per-sheet format ceiling, same reasoning as Rule 12.
+        private const int MaxSafeReviewRows = 1_048_576;
 
         private async Task<Rule18ValidationSummary> AnalyseAsync(Rule18ValidationRequest request, bool includeAllReviewRows)
         {
@@ -572,7 +705,7 @@ FROM rule18_validation;";
             var (nsfasCount, c1, c2, c3) = await GetCountsAsync(connection, cfg.NsfasFilterValue);
 
             var reviewRowCap = includeAllReviewRows ? MaxSafeReviewRows : BrowserPreviewRowLimit;
-            var reviewRows = await LoadControlRowsAsync(connection, reviewRowCap);
+            var reviewRows = await LoadControlRowsAsync(connection, reviewRowCap, perControlLimit: !includeAllReviewRows);
             reviewRows = NormalizeReviewRows(reviewRows);
 
             var controlSummaries = BuildControlSummaries(c1, c2, c3,
@@ -820,11 +953,17 @@ FROM rule18_validation;";
             return (0, 0, 0, 0);
         }
 
-        private async Task<List<Rule18ValidationRowRecord>> LoadControlRowsAsync(NpgsqlConnection connection, int? maxRows)
+        // perControlLimit=true divides maxRows evenly across the 3 controls - only appropriate
+        // for a small, deliberately-balanced browser preview. It must NOT be used for a real
+        // export: a control with a genuinely larger population than the others would be silently
+        // truncated below its real count while a smaller control's rows are padded out to the
+        // same share. Full/export loads instead apply maxRows as one overall ceiling.
+        private async Task<List<Rule18ValidationRowRecord>> LoadControlRowsAsync(NpgsqlConnection connection, int? maxRows, bool perControlLimit = true)
         {
-            var perControlLimit = maxRows.HasValue && maxRows.Value > 0 ? Math.Max(maxRows.Value / 3, 1) : 0;
+            var perControlCap = perControlLimit && maxRows.HasValue && maxRows.Value > 0 ? Math.Max(maxRows.Value / 3, 1) : 0;
+            var overallCap = !perControlLimit && maxRows.HasValue && maxRows.Value > 0 ? maxRows.Value : 0;
 
-            var sql = perControlLimit > 0
+            var sql = perControlCap > 0
                 ? $@"
 SELECT ""Control_Type"", ""Student_Number"", ""Student_Qualification_Code"", ""NSFAS_Status"", ""Attendance_Mode"",
        ""Qualification_Fulfilled_Indicator"", ""CREG_Qualification_Code"", ""CREG_Course_Code"", ""CRSE_Course_Code"",
@@ -833,8 +972,16 @@ FROM (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY ""Control_Type"" ORDER BY ""Student_Number"", ""CREG_Course_Code"") AS preview_row_num
     FROM rule18_validation
 ) x
-WHERE preview_row_num <= {perControlLimit}
+WHERE preview_row_num <= {perControlCap}
 ORDER BY ""Control_Type"", ""Student_Number"", ""CREG_Course_Code"";"
+                : overallCap > 0
+                ? $@"
+SELECT ""Control_Type"", ""Student_Number"", ""Student_Qualification_Code"", ""NSFAS_Status"", ""Attendance_Mode"",
+       ""Qualification_Fulfilled_Indicator"", ""CREG_Qualification_Code"", ""CREG_Course_Code"", ""CRSE_Course_Code"",
+       ""Foundation_Course_Indicator"", ""CRSE_058"", ""Validation_Result""
+FROM rule18_validation
+ORDER BY ""Extract_Number""
+LIMIT {overallCap};"
                 : @"
 SELECT ""Control_Type"", ""Student_Number"", ""Student_Qualification_Code"", ""NSFAS_Status"", ""Attendance_Mode"",
        ""Qualification_Fulfilled_Indicator"", ""CREG_Qualification_Code"", ""CREG_Course_Code"", ""CRSE_Course_Code"",

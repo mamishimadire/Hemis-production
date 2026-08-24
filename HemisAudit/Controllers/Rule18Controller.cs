@@ -607,20 +607,123 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule18_NSFAS_Population_{runId}.sql");
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless - a hard format limit no memory increase
+        // changes. The Render service was upgraded to 4GB, so this matches Excel's own actual
+        // maximum (see Rule12Controller.ExcelExportRowSafetyLimit for the same reasoning).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule18ValidationSummary summary)
         {
-            var resolved = await ResolveExportInfoAsync(summary);
-            var bytes = _export.ExportExcel(resolved);
-            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule18_NSFAS_Population_{Ts()}.xlsx");
+            try
+            {
+                var exportRequest = await ResolveExportRequestConfigAsync(summary);
+
+                var populationCount = await _rule18.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+                }
+
+                var resolved = await ResolveExportInfoAsync(summary);
+                var bytes = _export.ExportExcel(resolved);
+                return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule18_NSFAS_Population_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        // Lets the browser decide up front whether Excel can be attempted, without trying (and
+        // failing) a full export first.
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule18ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestConfigAsync(summary);
+                var populationCount = await _rule18.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule18ValidationSummary summary)
         {
-            var resolved = await ResolveExportInfoAsync(summary);
-            var bytes = _export.ExportCsv(resolved);
-            return File(bytes, "text/csv", $"Rule18_NSFAS_Population_{Ts()}.csv");
+            try
+            {
+                // Streams rows straight from the database as they're read instead of exporting
+                // whatever ReviewRows happened to already be loaded/capped in the posted summary
+                // (see ResolveExportRequestConfigAsync) - see Rule18Service.StreamCsvExportAsync.
+                var exportRequest = await ResolveExportRequestConfigAsync(summary);
+
+                Response.ContentType = "text/csv";
+                Response.Headers.ContentDisposition = $"attachment; filename=\"Rule18_NSFAS_Population_{Ts()}.csv\"";
+                await _rule18.StreamCsvExportAsync(exportRequest, Response.Body);
+                return new EmptyResult();
+            }
+            catch (Exception ex)
+            {
+                if (!Response.HasStarted)
+                {
+                    Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return Json(new { error = ex.Message });
+                }
+                return new EmptyResult();
+            }
+        }
+
+        // Lightweight counterpart to ResolveExportInfoAsync: resolves the table/column config to
+        // query fresh and confirms the caller can access this engagement, without ever loading a
+        // result row itself - unlike ResolveExportInfoAsync, which re-fetches a saved run's
+        // already-capped ReviewRows. The posted summary already carries every field needed to
+        // rebuild the request (same fields DownloadSavedSql uses for a saved run).
+        private async Task<Rule18ValidationRequest> ResolveExportRequestConfigAsync(Rule18ValidationSummary summary)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
+
+            if (!string.IsNullOrWhiteSpace(summary.StudTable) &&
+                !string.IsNullOrWhiteSpace(summary.BridgeTable) &&
+                !string.IsNullOrWhiteSpace(summary.CrseTable))
+            {
+                return new Rule18ValidationRequest
+                {
+                    ClientId = summary.ClientId,
+                    StudTable = summary.StudTable,
+                    BridgeTable = summary.BridgeTable,
+                    CrseTable = summary.CrseTable,
+                    NsfasFilterCol = summary.NsfasFilterCol,
+                    NsfasFilterValue = summary.NsfasFilterValue,
+                    FoundationFilterCol = summary.FoundationFilterCol,
+                    FoundationFilterValue = summary.FoundationFilterValue,
+                    DistanceFilterCol = summary.DistanceFilterCol,
+                    DistanceFilterValue = summary.DistanceFilterValue,
+                    CredJoinCol = summary.CredJoinCol,
+                    CredCourseCol = summary.CredCourseCol,
+                    CrseCourseCol = summary.CrseCourseCol,
+                    CrseNameCol = summary.CrseNameCol
+                };
+            }
+
+            throw new InvalidOperationException("Run Rule 18 first before downloading results.");
         }
 
         [HttpPost]
