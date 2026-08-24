@@ -673,8 +673,9 @@ namespace HemisAudit.Controllers
         // this container's memory outright (OutOfMemoryException, taking the whole app down with
         // it), so it's checked and rejected up front with a clear message instead of attempting
         // it. Kept equal to ExcelExportPartSize (see its comment below) so a single-file download
-        // and one part are held to the same proven-safe size.
-        private const int ExcelExportRowSafetyLimit = 10_000;
+        // and one part are held to the same size. 100,000 was confirmed too large; this is being
+        // raised to 50,000 to test - not yet confirmed safe, watch for a repeat OutOfMemoryException.
+        private const int ExcelExportRowSafetyLimit = 50_000;
 
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule12ValidationRequest request)
@@ -746,12 +747,12 @@ namespace HemisAudit.Controllers
             }
         }
 
-        // Lowered from an initial 100,000 - that was still confirmed to exhaust this container's
-        // memory building a single part (ClosedXML's per-cell/style object overhead is heavy
-        // enough that even ~22% of the population that originally crashed the unbounded export
-        // was still too much). This is deliberately conservative; raise it only after a real
-        // engagement comfortably clears it at this size.
-        private const int ExcelExportPartSize = 10_000;
+        // 100,000 was confirmed to exhaust this container's memory building a single part
+        // (ClosedXML's per-cell/style object overhead is heavy enough that even ~22% of the
+        // population that originally crashed the unbounded export was still too much). Testing
+        // 50,000 next per explicit request - not yet confirmed safe, watch for a repeat
+        // OutOfMemoryException and drop further if so.
+        private const int ExcelExportPartSize = 50_000;
 
         [HttpPost]
         public async Task<IActionResult> DownloadExcelPart([FromBody] Rule12ExportPartRequest request)

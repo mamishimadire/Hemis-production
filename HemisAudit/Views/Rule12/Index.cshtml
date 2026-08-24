@@ -332,7 +332,7 @@
         </div>
         <div class="tab-pane" data-tab-panel="downloads">
             <div class="alert alert--info" style="margin-bottom:16px">
-                Excel includes summary sheets and the full Rule 12 result population - for engagements too large for a single Excel file, you'll be prompted to download CSV instead. CSV always includes the full population, of any size, in a single file. SQL includes the full dbo_CREG/dbo_CRSE validation query.
+                Excel includes summary sheets and the full Rule 12 result population - for engagements too large for a single Excel file, it automatically downloads as multiple part files; if that fails, you'll be prompted to use CSV instead. CSV always includes the full population, of any size, in a single file. SQL includes the full dbo_CREG/dbo_CRSE validation query.
             </div>
             <div class="action-bar" style="justify-content:flex-start;margin:0">
                 <button type="button" class="btn btn-info" id="downloadExcelBtn">Excel</button>
@@ -761,10 +761,39 @@ window.toggleAccordion = function (section) {
             return;
         }
 
+        const totalParts = info.totalParts;
         const totalRecords = (info.totalRecords || 0).toLocaleString();
-        showExcelTooLargeModal(
-            `This engagement has ${totalRecords} records - too many to include in a single Excel file. ` +
-            `Please download the CSV instead, which always includes the full population regardless of size.`
+        setWorkspaceState(
+            `This engagement has ${totalRecords} records - too many for a single Excel file. Downloading the full population as ${totalParts} Excel files...`,
+            'info'
+        );
+
+        const stamp = fileStamp();
+        let completedParts = 0;
+        try {
+            for (let part = 1; part <= totalParts; part++) {
+                setWorkspaceState(`Downloading Excel part ${part} of ${totalParts}...`, 'info', { suppressToast: true });
+                await downloadBlob(
+                    `${apiBasePath}/DownloadExcelPart`,
+                    { ...req, partNumber: part },
+                    `Rule12_Course_Selection_Part${part}of${totalParts}_${stamp}.xlsx`
+                );
+                completedParts = part;
+            }
+        } catch (err) {
+            showExcelTooLargeModal(
+                completedParts > 0
+                    ? `Downloaded ${completedParts} of ${totalParts} Excel parts, then hit an error: ${err.message} ` +
+                      `Please download the CSV instead, which reliably includes the full population of ${totalRecords} records.`
+                    : `This engagement's Excel export failed: ${err.message} ` +
+                      `Please download the CSV instead, which reliably includes the full population of ${totalRecords} records.`
+            );
+            return;
+        }
+
+        setWorkspaceState(
+            `All ${totalParts} Excel parts downloaded - full population of ${totalRecords} records complete.`,
+            'success'
         );
     }
 
