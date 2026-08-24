@@ -432,6 +432,30 @@ window.toggleAccordion = function (section) {
         });
     }
 
+    async function downloadCsvFile() {
+        if (!state.summary) throw new Error('Run Rule 16 first before downloading the CSV results.');
+        await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule16_Student_Population.csv');
+    }
+
+    async function downloadExcelFile() {
+        if (!state.summary) throw new Error('Run Rule 16 first before downloading the Excel results.');
+
+        const info = await postJson(`${apiBasePath}/GetExportInfo`, state.summary);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsvFile
+            );
+            return;
+        }
+
+        try {
+            await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule16_Student_Population.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+        }
+    }
+
     function populateSelect(select, values, selected) {
         if (!select) return;
         select.innerHTML = '<option value="">Select table</option>';
@@ -1223,8 +1247,8 @@ window.toggleAccordion = function (section) {
         els.downloadAllBtn?.addEventListener('click', async () => {
             try {
                 if (!state.summary) throw new Error('Run Rule 16 first.');
-                if (document.getElementById('chkExcel')?.checked) await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule16_Student_Population.xlsx');
-                if (document.getElementById('chkCsv')?.checked) await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule16_Student_Population.csv');
+                if (document.getElementById('chkExcel')?.checked) await downloadExcelFile();
+                if (document.getElementById('chkCsv')?.checked) await downloadCsvFile();
                 if (document.getElementById('chkSql')?.checked) await downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule16_Student_Population.sql');
             } catch (err) {
                 setWorkspaceState(err.message || 'Download failed.', 'error');
@@ -1240,8 +1264,8 @@ window.toggleAccordion = function (section) {
         hideSpinner();
         setWorkspaceState(err.message, 'error');
     }));
-    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule16_Student_Population.xlsx').catch(err => setWorkspaceState(err.message, 'error')));
-    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule16_Student_Population.csv').catch(err => setWorkspaceState(err.message, 'error')));
+    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => downloadExcelFile().catch(err => setWorkspaceState(err.message, 'error')));
+    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => downloadCsvFile().catch(err => setWorkspaceState(err.message, 'error')));
     document.getElementById('downloadSqlBtn')?.addEventListener('click', () => downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule16_Student_Population.sql').catch(err => setWorkspaceState(err.message, 'error')));
     els.clientId?.addEventListener('change', () => loadWorkspace().catch(err => setWorkspaceState(err.message, 'error')));
     ['unfulfilledCol','unfulfilledVal','foundationCol','foundationVal','distanceCol','distanceVal'].forEach(id => {

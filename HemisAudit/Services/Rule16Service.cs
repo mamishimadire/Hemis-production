@@ -192,6 +192,96 @@ namespace HemisAudit.Services
             return await AnalyseAsync(request, includeAllReviewRows: true);
         }
 
+        // Cheap population size check - runs the same server-side prep SQL as a full export but
+        // stops at a COUNT(*), no result rows loaded. Mirrors Rule12Service.GetPopulationCountAsync.
+        public async Task<int> GetPopulationCountAsync(Rule16ValidationRequest request)
+        {
+            ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
+            await EnsureRule16IndexesAsync(request.ClientId, request.StudTable, request.BridgeTable, request.CrseTable);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            var unfulfilledCol = string.IsNullOrWhiteSpace(request.UnfulfilledCol) ? "_025" : request.UnfulfilledCol;
+            var foundationCol = string.IsNullOrWhiteSpace(request.FoundationCol) ? "_091" : request.FoundationCol;
+            var distanceCol = string.IsNullOrWhiteSpace(request.DistanceCol) ? "_024" : request.DistanceCol;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule16PrepSql(schema, request.StudTable, request.BridgeTable, request.CrseTable,
+                    unfulfilledCol, request.UnfulfilledVal, foundationCol, request.FoundationVal, distanceCol, request.DistanceVal);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var countCommand = connection.CreateCommand();
+            countCommand.CommandText = "SELECT COUNT(*) FROM rule16_results;";
+            return Convert.ToInt32(await countCommand.ExecuteScalarAsync());
+        }
+
+        // Bypasses AnalyseAsync/LoadControlRowsFromTempAsync entirely - those buffer every row as
+        // a full Dictionary<string,string?> before anything can be written out, unbounded for a
+        // full export (same "450k+ row" OOM risk as Rule 12/14 before their fix). Reads and
+        // writes one row at a time, using the query's own column names directly. Mirrors
+        // Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule16ValidationRequest request, Stream outputStream)
+        {
+            ValidateRequest(request.StudTable, request.BridgeTable, request.CrseTable);
+            await EnsureRule16IndexesAsync(request.ClientId, request.StudTable, request.BridgeTable, request.CrseTable);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            var unfulfilledCol = string.IsNullOrWhiteSpace(request.UnfulfilledCol) ? "_025" : request.UnfulfilledCol;
+            var foundationCol = string.IsNullOrWhiteSpace(request.FoundationCol) ? "_091" : request.FoundationCol;
+            var distanceCol = string.IsNullOrWhiteSpace(request.DistanceCol) ? "_024" : request.DistanceCol;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule16PrepSql(schema, request.StudTable, request.BridgeTable, request.CrseTable,
+                    unfulfilledCol, request.UnfulfilledVal, foundationCol, request.FoundationVal, distanceCol, request.DistanceVal);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = @"
+SELECT
+    extract_number, 'Control_1' AS control_type, 'PASS' AS validation_result, student_number,
+    student_qualification_code, qualification_fulfilled_indicator, attendance_mode,
+    creg_qualification_code, creg_student_number, creg_course_code, crse_course_code,
+    foundation_course_indicator, crse_058, control_check
+FROM rule16_results
+ORDER BY extract_number;";
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => ToPascalDisplayName(reader.GetName(i))).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
+        }
+
         public Task<Rule16ValidationSummary?> GetPendingValidationPreviewAsync(int clientId, string reviewerEmail)
         {
             var pending = _pendingValidationCache.GetPending<Rule16ValidationRequest, Rule16ValidationSummary>(16, clientId, reviewerEmail);
