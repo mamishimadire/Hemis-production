@@ -672,9 +672,9 @@ namespace HemisAudit.Controllers
         // per sheet regardless. A population above this ceiling has been confirmed to exhaust
         // this container's memory outright (OutOfMemoryException, taking the whole app down with
         // it), so it's checked and rejected up front with a clear message instead of attempting
-        // it. This is a conservative estimate, not a measured hard limit - tune down further if
-        // it still crashes near this size, or up if a real engagement comfortably clears it.
-        private const int ExcelExportRowSafetyLimit = 100_000;
+        // it. Kept equal to ExcelExportPartSize (see its comment below) so a single-file download
+        // and one part are held to the same proven-safe size.
+        private const int ExcelExportRowSafetyLimit = 10_000;
 
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule12ValidationRequest request)
@@ -746,7 +746,12 @@ namespace HemisAudit.Controllers
             }
         }
 
-        private const int ExcelExportPartSize = 100_000;
+        // Lowered from an initial 100,000 - that was still confirmed to exhaust this container's
+        // memory building a single part (ClosedXML's per-cell/style object overhead is heavy
+        // enough that even ~22% of the population that originally crashed the unbounded export
+        // was still too much). This is deliberately conservative; raise it only after a real
+        // engagement comfortably clears it at this size.
+        private const int ExcelExportPartSize = 10_000;
 
         [HttpPost]
         public async Task<IActionResult> DownloadExcelPart([FromBody] Rule12ExportPartRequest request)
@@ -754,8 +759,29 @@ namespace HemisAudit.Controllers
             try
             {
                 var exportRequest = await ResolveExportRequestConfigAsync(request);
-                var part = await _rule12.GetExportPartAsync(exportRequest, request.PartNumber, ExcelExportPartSize);
-                var bytes = _export.ExportExcel(part.Summary);
+
+                Rule12ExportPartResult part;
+                try
+                {
+                    part = await _rule12.GetExportPartAsync(exportRequest, request.PartNumber, ExcelExportPartSize);
+                }
+                catch (Exception loadEx)
+                {
+                    throw new InvalidOperationException(
+                        $"Loading part {request.PartNumber} failed ({loadEx.GetType().Name}): {loadEx.Message}", loadEx);
+                }
+
+                byte[] bytes;
+                try
+                {
+                    bytes = _export.ExportExcel(part.Summary);
+                }
+                catch (Exception buildEx)
+                {
+                    throw new InvalidOperationException(
+                        $"Building the Excel file for part {request.PartNumber} failed ({buildEx.GetType().Name}): {buildEx.Message}", buildEx);
+                }
+
                 return File(
                     bytes,
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
