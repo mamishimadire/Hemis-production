@@ -207,6 +207,12 @@ namespace HemisAudit.Services
 
             await using var writer = new StreamWriter(outputStream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
 
+            // Column order here must track rule12_validation's actual output columns (see
+            // BuildRule12PrepSql) - Course_Code is the already-matched CREG/CRES course code
+            // (there's no separate raw CRES-side course code once joined), and CresStatusCol/
+            // CresExtra1Col map to Course_Approval_Status/Course_Name respectively.
+            var (extra1Alias, extra2Alias, filterAlias, extra3Alias) = ComputeRule12Aliases(cfg);
+
             var headerParts = new List<string> { cfg.CregStudentCol, cfg.CregQualCol, cfg.CregCourseCol };
             if (cfg.HasCregExtra1) headerParts.Add(cfg.CregExtra1Col);
             if (cfg.HasCregExtra2) headerParts.Add(cfg.CregExtra2Col);
@@ -214,7 +220,6 @@ namespace HemisAudit.Services
             if (cfg.HasCregExtra3) headerParts.Add(cfg.CregExtra3Col);
             headerParts.Add(cfg.QualJoinCol);
             headerParts.Add(cfg.QualDescCol);
-            headerParts.Add(cfg.CresCourseCol);
             headerParts.Add(cfg.CresStatusCol);
             if (cfg.HasCresExtra1) headerParts.Add(cfg.CresExtra1Col);
             headerParts.Add("Validation Result");
@@ -226,18 +231,17 @@ namespace HemisAudit.Services
 
             await using var reader = await command.ExecuteReaderAsync();
 
-            var ordCreg007 = reader.GetOrdinal("CREG__007");
-            var ordCreg001 = reader.GetOrdinal("CREG__001");
-            var ordCreg030 = reader.GetOrdinal("CREG__030");
-            var ordCregExtra1 = cfg.HasCregExtra1 ? reader.GetOrdinal("CREG__EXTRA1") : -1;
-            var ordCregExtra2 = cfg.HasCregExtra2 ? reader.GetOrdinal("CREG__EXTRA2") : -1;
-            var ordCregFilter = cfg.HasCregFilter ? reader.GetOrdinal("CREG__FILTER") : -1;
-            var ordCregExtra3 = cfg.HasCregExtra3 ? reader.GetOrdinal("CREG__EXTRA3") : -1;
-            var ordQual001 = reader.GetOrdinal("QUAL__001");
-            var ordQual003 = reader.GetOrdinal("QUAL__003");
-            var ordCres030 = reader.GetOrdinal("CRES__030");
-            var ordCres031 = reader.GetOrdinal("CRES__031");
-            var ordCresExtra1 = cfg.HasCresExtra1 ? reader.GetOrdinal("CRES__EXTRA1") : -1;
+            var ordStudentNumber = reader.GetOrdinal("Student_Number");
+            var ordQualificationCode = reader.GetOrdinal("Qualification_Code");
+            var ordCourseCode = reader.GetOrdinal("Course_Code");
+            var ordCregExtra1 = cfg.HasCregExtra1 ? reader.GetOrdinal(extra1Alias) : -1;
+            var ordCregExtra2 = cfg.HasCregExtra2 ? reader.GetOrdinal(extra2Alias) : -1;
+            var ordCregFilter = cfg.HasCregFilter ? reader.GetOrdinal(filterAlias) : -1;
+            var ordCregExtra3 = cfg.HasCregExtra3 ? reader.GetOrdinal(extra3Alias) : -1;
+            var ordQualCode = reader.GetOrdinal("QUAL_Qualification_Code");
+            var ordQualName = reader.GetOrdinal("QUAL_Qualification_Name");
+            var ordCourseApprovalStatus = reader.GetOrdinal("Course_Approval_Status");
+            var ordCresExtra1 = cfg.HasCresExtra1 ? reader.GetOrdinal("Course_Name") : -1;
             var ordValidationResult = reader.GetOrdinal("Validation_Result");
             var ordValidationReason = reader.GetOrdinal("Validation_Reason");
 
@@ -249,17 +253,16 @@ namespace HemisAudit.Services
             while (await reader.ReadAsync())
             {
                 rowValues.Clear();
-                rowValues.Add(StreamCsvEscape(GetVal(ordCreg007)));
-                rowValues.Add(StreamCsvEscape(GetVal(ordCreg001)));
-                rowValues.Add(StreamCsvEscape(GetVal(ordCreg030)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordStudentNumber)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordQualificationCode)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCourseCode)));
                 if (cfg.HasCregExtra1) rowValues.Add(StreamCsvEscape(GetVal(ordCregExtra1)));
                 if (cfg.HasCregExtra2) rowValues.Add(StreamCsvEscape(GetVal(ordCregExtra2)));
                 if (cfg.HasCregFilter) rowValues.Add(StreamCsvEscape(GetVal(ordCregFilter)));
                 if (cfg.HasCregExtra3) rowValues.Add(StreamCsvEscape(GetVal(ordCregExtra3)));
-                rowValues.Add(StreamCsvEscape(GetVal(ordQual001)));
-                rowValues.Add(StreamCsvEscape(GetVal(ordQual003)));
-                rowValues.Add(StreamCsvEscape(GetVal(ordCres030)));
-                rowValues.Add(StreamCsvEscape(GetVal(ordCres031)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordQualCode)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordQualName)));
+                rowValues.Add(StreamCsvEscape(GetVal(ordCourseApprovalStatus)));
                 if (cfg.HasCresExtra1) rowValues.Add(StreamCsvEscape(GetVal(ordCresExtra1)));
                 rowValues.Add(StreamCsvEscape(GetVal(ordValidationResult)));
                 rowValues.Add(StreamCsvEscape(GetVal(ordValidationReason)));
@@ -825,6 +828,15 @@ FROM rule12_validation;";
 
         // ── SQL builders (Postgres) ─────────────────────────────────────────────────────
 
+        // Shared by BuildRule12PrepSql (which creates these columns) and StreamCsvExportAsync
+        // (which reads them back by name) - computed once so the two can never drift apart.
+        private static (string Extra1Alias, string Extra2Alias, string FilterAlias, string Extra3Alias) ComputeRule12Aliases(Rule12ColumnConfig cfg) => (
+            cfg.HasCregExtra1 ? $"CREG_{cfg.CregExtra1Col.TrimStart('_')}" : "CREG__EXTRA1",
+            cfg.HasCregExtra2 ? $"CREG_{cfg.CregExtra2Col.TrimStart('_')}" : "CREG__EXTRA2",
+            cfg.HasCregFilter ? $"CREG_{cfg.CregFilterCol.TrimStart('_')}" : "CREG__FILTER",
+            cfg.HasCregExtra3 ? $"CREG_{cfg.CregExtra3Col.TrimStart('_')}" : "CREG__EXTRA3"
+        );
+
         private static string BuildRule12PrepSql(string schema, string cregTable, string qualTable, string cresTable, Rule12ColumnConfig cfg)
         {
             var statusFilter = EscapeSqlString(cfg.CresStatusFilter.ToUpperInvariant());
@@ -834,10 +846,7 @@ FROM rule12_validation;";
             var extra3Sql = cfg.HasCregExtra3 ? $@"CAST(cr.""{cfg.CregExtra3Col}"" AS text)" : "NULL::text";
             var courseNameSql = cfg.HasCresExtra1 ? $@"CAST(cres.""{cfg.CresExtra1Col}"" AS text)" : "NULL::text";
 
-            var extra1Alias = cfg.HasCregExtra1 ? $"CREG_{cfg.CregExtra1Col.TrimStart('_')}" : "CREG__EXTRA1";
-            var extra2Alias = cfg.HasCregExtra2 ? $"CREG_{cfg.CregExtra2Col.TrimStart('_')}" : "CREG__EXTRA2";
-            var filterAlias = cfg.HasCregFilter ? $"CREG_{cfg.CregFilterCol.TrimStart('_')}" : "CREG__FILTER";
-            var extra3Alias = cfg.HasCregExtra3 ? $"CREG_{cfg.CregExtra3Col.TrimStart('_')}" : "CREG__EXTRA3";
+            var (extra1Alias, extra2Alias, filterAlias, extra3Alias) = ComputeRule12Aliases(cfg);
 
             var filterWhere = BuildFilterWhereClause(cfg.HasCregFilter ? cfg.CregFilterCol : "", cfg.CregFilterValues);
 
