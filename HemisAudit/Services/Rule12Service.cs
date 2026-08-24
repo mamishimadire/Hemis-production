@@ -203,6 +203,107 @@ namespace HemisAudit.Services
             return totalActiveStudents;
         }
 
+        public async Task<Rule12ExportPartResult> GetExportPartAsync(Rule12ValidationRequest request, int partNumber, int partSize)
+        {
+            ValidateRequest(request.CregTable, request.QualTable, request.CresTable);
+            if (partNumber < 1)
+                throw new InvalidOperationException("Part number must be 1 or greater.");
+            if (partSize < 1)
+                throw new InvalidOperationException("Part size must be greater than zero.");
+
+            var cfg = await ResolveColumnConfigAsync(
+                request.ClientId, request.CregTable, request.QualTable, request.CresTable,
+                request.CregStudentCol, request.CregQualCol, request.CregCourseCol,
+                request.QualJoinCol, request.QualDescCol,
+                request.CresCourseCol, request.CresStatusCol, request.CresStatusFilter,
+                request.CregExtra1Col, request.CregExtra2Col, request.CregFilterCol, request.CregFilterValues,
+                request.CregExtra3Col, request.CresExtra1Col);
+
+            await EnsureRule12IndexesAsync(request.ClientId, request.CregTable, request.QualTable, request.CresTable, cfg);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule12PrepSql(schema, request.CregTable, request.QualTable, request.CresTable, cfg);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            var (cregCount, qualCount, cresActiveCount, totalActiveStudents, matchedQuals, missingQuals) =
+                await GetCountsAsync(connection, schema, request.CregTable, request.QualTable);
+
+            var totalParts = totalActiveStudents == 0 ? 1 : (int)Math.Ceiling(totalActiveStudents / (double)partSize);
+            if (partNumber > totalParts)
+                throw new InvalidOperationException($"Part {partNumber} does not exist - this export only has {totalParts} part(s).");
+
+            var offset = (partNumber - 1) * partSize;
+            var reviewRows = await LoadControlRowsAsync(connection, partSize,
+                request.CregTable, request.QualTable, request.CresTable, cfg.CregQualCol, cfg.QualJoinCol, cfg.CresStatusCol, cfg.CresStatusFilter,
+                offset: offset);
+            reviewRows = NormalizeReviewRows(reviewRows);
+
+            var rangeStart = totalActiveStudents == 0 ? 0 : offset + 1;
+            var rangeEnd = offset + reviewRows.Count;
+
+            var controlSummaries = BuildControlSummaries(totalActiveStudents, matchedQuals, request.CregTable, request.QualTable, request.CresTable, cfg.CregQualCol, cfg.QualJoinCol, cfg.CresStatusCol, cfg.CresStatusFilter);
+            var totalValidated = controlSummaries.Sum(x => x.TotalCount);
+            var passCount = controlSummaries.Sum(x => x.PassCount);
+            var failCount = controlSummaries.Sum(x => x.FailCount);
+
+            var summary = new Rule12ValidationSummary
+            {
+                Success = true,
+                CregRecordCount = cregCount,
+                QualRecordCount = qualCount,
+                CresActiveCount = cresActiveCount,
+                TotalRequested = totalValidated,
+                TotalValidated = totalValidated,
+                DisplayedCount = reviewRows.Count,
+                IsPreviewOnly = false,
+                PreviewLimit = 0,
+                PassCount = passCount,
+                FailCount = failCount,
+                ExceptionRate = totalValidated == 0 ? 0m : Math.Round(failCount * 100m / totalValidated, 2),
+                Status = failCount == 0 ? "PASS" : "FAIL",
+                Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                CregTable = request.CregTable,
+                QualTable = request.QualTable,
+                CresTable = request.CresTable,
+                CregStudentCol = cfg.CregStudentCol,
+                CregQualCol = cfg.CregQualCol,
+                CregCourseCol = cfg.CregCourseCol,
+                QualJoinCol = cfg.QualJoinCol,
+                QualDescCol = cfg.QualDescCol,
+                CresCourseCol = cfg.CresCourseCol,
+                CresStatusCol = cfg.CresStatusCol,
+                CresStatusFilter = cfg.CresStatusFilter,
+                CregExtra1Col = cfg.HasCregExtra1 ? cfg.CregExtra1Col : "",
+                CregExtra2Col = cfg.HasCregExtra2 ? cfg.CregExtra2Col : "",
+                CregFilterCol = cfg.HasCregFilter ? cfg.CregFilterCol : "",
+                CregFilterValues = cfg.CregFilterValues,
+                CregExtra3Col = cfg.HasCregExtra3 ? cfg.CregExtra3Col : "",
+                CresExtra1Col = cfg.HasCresExtra1 ? cfg.CresExtra1Col : "",
+                TableLinkageText = $"{request.CregTable}.{cfg.CregQualCol} = {request.QualTable}.{cfg.QualJoinCol} | {request.CregTable}.{cfg.CregCourseCol} = {request.CresTable}.{cfg.CresCourseCol} WHERE {request.CresTable}.{cfg.CresStatusCol} = '{cfg.CresStatusFilter}'",
+                RuleModeText = $"Active students from {request.CregTable} (CRES.{cfg.CresStatusCol}='{cfg.CresStatusFilter}') qualification codes tested against {request.QualTable}.{cfg.QualJoinCol}",
+                ProcedureSteps = BuildProcedureSteps(request.CregTable, request.QualTable, request.CresTable, cfg.CresStatusCol, cfg.CresStatusFilter),
+                ClientId = request.ClientId,
+                ControlSummaries = controlSummaries,
+                ReviewRows = reviewRows,
+                Warning = $"Part {partNumber} of {totalParts} — records {rangeStart:N0}-{rangeEnd:N0} of {totalActiveStudents:N0} total. Download all parts for the complete population."
+            };
+
+            return new Rule12ExportPartResult
+            {
+                Summary = summary,
+                PartNumber = partNumber,
+                TotalParts = totalParts,
+                TotalRecords = totalActiveStudents,
+                RangeStart = rangeStart,
+                RangeEnd = rangeEnd
+            };
+        }
+
         // Bypasses AnalyseAsync/LoadControlRowsAsync entirely - those buffer every row as a full
         // Dictionary<string,string?> before anything can be written out, which is fine for the
         // ~10-row browser preview but exhausts this container's memory on a real, large engagement
@@ -1006,9 +1107,10 @@ SELECT
             NpgsqlConnection connection, int? maxRows,
             string cregTable, string qualTable, string cresTable,
             string cregQualCol, string qualJoinCol, string cresStatusCol, string cresStatusFilter,
-            string? resultFilter = null)
+            string? resultFilter = null, int offset = 0)
         {
             var limitClause = maxRows.HasValue && maxRows.Value > 0 ? $"LIMIT {maxRows.Value}" : "";
+            var offsetClause = offset > 0 ? $"OFFSET {offset}" : "";
             var whereClause = resultFilter == "FAIL" ? @"WHERE v.""Validation_Result"" = 'FAIL'" : "";
             var controlLabel = EscapeSqlString($"CONTROL 1: {cregTable}.{cregQualCol} = {qualTable}.{qualJoinCol} WHERE {cresTable}.{cresStatusCol} = '{cresStatusFilter}'");
 
@@ -1021,7 +1123,8 @@ SELECT
 FROM rule12_validation v
 {whereClause}
 ORDER BY ""Extract_Number""
-{limitClause};";
+{limitClause}
+{offsetClause};";
 
             await using var reader = await command.ExecuteReaderAsync();
             var rows = new List<Rule12ValidationRowRecord>();

@@ -167,6 +167,11 @@ namespace HemisAudit.ViewModels
         }
     }
 
+    public class Rule12ExportPartRequest : Rule12ValidationRequest
+    {
+        public int PartNumber { get; set; } = 1;
+    }
+
     public class Rule12ControlSummaryItemViewModel
     {
         public string ControlType { get; set; } = "";
@@ -396,5 +401,18 @@ namespace HemisAudit.ViewModels
         public bool Success { get; set; }
         public string Sql { get; set; } = "";
         public string? Error { get; set; }
+    }
+
+    // One slice of a population too large for a single Excel file - Summary/Control Summary
+    // sheets describe the whole engagement so every part agrees, while Dashboard Results holds
+    // only this part's rows (see the Warning text baked into Summary for the exact range).
+    public class Rule12ExportPartResult
+    {
+        public Rule12ValidationSummary Summary { get; set; } = new();
+        public int PartNumber { get; set; }
+        public int TotalParts { get; set; }
+        public int TotalRecords { get; set; }
+        public int RangeStart { get; set; }
+        public int RangeEnd { get; set; }
     }
 }

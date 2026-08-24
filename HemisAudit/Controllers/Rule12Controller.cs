@@ -687,12 +687,64 @@ namespace HemisAudit.Controllers
                 if (populationCount > ExcelExportRowSafetyLimit)
                 {
                     throw new InvalidOperationException(
-                        $"This engagement has {populationCount:N0} records, too many to export as Excel safely. Please use the CSV download instead - it supports the full population regardless of size.");
+                        $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use \"Download in parts\" to get the full population as multiple Excel files, or download CSV instead.");
                 }
 
                 var summary = await ResolveExportSummaryAsync(exportRequest, forceFullPopulationScan: true);
                 var bytes = _export.ExportExcel(summary);
                 return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule12_Course_Selection_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        // Lets the browser decide up front whether to show plain "Download Excel" or a
+        // "Download in N parts" flow, without attempting (and failing) a full export first.
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule12ValidationRequest request)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestConfigAsync(request);
+                var populationCount = await _rule12.GetPopulationCountAsync(exportRequest);
+                var exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit;
+                var totalParts = exceedsExcelLimit
+                    ? (int)Math.Ceiling(populationCount / (double)ExcelExportPartSize)
+                    : 1;
+
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit,
+                    excelLimit = ExcelExportRowSafetyLimit,
+                    partSize = ExcelExportPartSize,
+                    totalParts
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        private const int ExcelExportPartSize = 100_000;
+
+        [HttpPost]
+        public async Task<IActionResult> DownloadExcelPart([FromBody] Rule12ExportPartRequest request)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestConfigAsync(request);
+                var part = await _rule12.GetExportPartAsync(exportRequest, request.PartNumber, ExcelExportPartSize);
+                var bytes = _export.ExportExcel(part.Summary);
+                return File(
+                    bytes,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    $"Rule12_Course_Selection_Part{part.PartNumber}of{part.TotalParts}_{Ts()}.xlsx");
             }
             catch (Exception ex)
             {

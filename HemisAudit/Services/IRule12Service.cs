@@ -26,6 +26,11 @@ namespace HemisAudit.Services
         // safe before attempting one, without ever materializing a single result row itself.
         Task<int> GetPopulationCountAsync(Rule12ValidationRequest request);
 
+        // Loads and builds just one page of the population (partNumber is 1-based) so a large
+        // engagement can be exported as multiple safely-sized Excel files instead of one that
+        // would exhaust memory - see Rule12ExportPartResult for what each part contains.
+        Task<Rule12ExportPartResult> GetExportPartAsync(Rule12ValidationRequest request, int partNumber, int partSize);
+
         // Writes CSV rows directly to outputStream as they're read from the database - no
         // intermediate row list, no in-memory StringBuilder. Unlike GetExportSummaryAsync + the
         // ExportService CSV writer, memory use stays roughly constant regardless of row count, so
