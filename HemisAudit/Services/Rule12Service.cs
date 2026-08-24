@@ -17,13 +17,16 @@ namespace HemisAudit.Services
     public class Rule12Service : IRule12Service
     {
         private const int BrowserPreviewRowLimit = 10;
-        // Safety ceiling on the full (export) load only - not a preview limit. Each row is
-        // materialized as a full Dictionary<string,string?> of every column, which is a lot of
-        // per-row overhead; an institution's actual student/qualification counts should never come
-        // close to this, but with no ceiling at all a single unusually large dataset can exhaust
-        // this container's memory outright (a genuine OutOfMemoryException seen on Rule 12) and
-        // crash the whole app for every user, not just whoever ran the export.
-        private const int ExportRowSafetyLimit = 250_000;
+        // Safety ceiling on the full (export) load only - not a preview limit. Set to Excel's own
+        // hard per-worksheet row limit (2^20), so nothing is ever artificially truncated below what
+        // an .xlsx file could hold anyway. This does NOT fix the underlying issue: rows are still
+        // buffered fully in memory (each as a Dictionary<string,string?> of every column) before
+        // being written out, so a dataset anywhere close to this ceiling can still exhaust this
+        // container's memory and crash the app for every user, not just whoever ran the export -
+        // exactly what caused the original OutOfMemoryException, just at a higher threshold now.
+        // The real fix is streaming rows directly into the output file as they're read from the
+        // database instead of buffering them first; deferred for now in favor of raising this cap.
+        private const int ExportRowSafetyLimit = 1_048_576;
         private readonly IConfiguration _configuration;
         private readonly IEngagementDatasetService _datasets;
         private readonly ISystemDatabaseService _systemDb;
