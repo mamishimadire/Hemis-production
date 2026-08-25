@@ -625,22 +625,80 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule19_Masters_PhD_Population_{runId}.sql");
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule19ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportExcel(summary);
-            return File(bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"Rule19_Masters_PhD_Population_{Ts()}.xlsx");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                var populationCount = await _rule19.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+                }
+
+                var resolved = await _rule19.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportExcel(resolved);
+                return File(bytes,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    $"Rule19_Masters_PhD_Population_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule19ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule19.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule19ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportCsv(summary);
-            return File(bytes, "text/csv", $"Rule19_Masters_PhD_Population_{Ts()}.csv");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                Response.ContentType = "text/csv";
+                Response.Headers.ContentDisposition = $"attachment; filename=\"Rule19_Masters_PhD_Population_{Ts()}.csv\"";
+                await _rule19.StreamCsvExportAsync(exportRequest, Response.Body);
+                return new EmptyResult();
+            }
+            catch (Exception ex)
+            {
+                if (!Response.HasStarted)
+                {
+                    Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return Json(new { error = ex.Message });
+                }
+                return new EmptyResult();
+            }
         }
 
         [HttpPost]
@@ -719,6 +777,43 @@ namespace HemisAudit.Controllers
                 return false;
 
             return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
+        }
+
+        // Lightweight counterpart to ResolveExportSummaryAsync: resolves the table/column config
+        // needed to query fresh and confirms the caller can access this engagement, without ever
+        // loading a result row itself.
+        private async Task<Rule19ValidationRequest> ResolveExportRequestAsync(Rule19ValidationSummary summary)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
+
+            if (string.IsNullOrWhiteSpace(summary.StudTable) || string.IsNullOrWhiteSpace(summary.QualTable))
+                throw new InvalidOperationException("Run Rule 19 first before downloading results.");
+
+            return new Rule19ValidationRequest
+            {
+                ClientId = summary.ClientId,
+                StudTable = summary.StudTable,
+                QualTable = summary.QualTable,
+                QualCodeColumn = summary.QualCodeColumn,
+                FulfilledColumn = summary.FulfilledColumn,
+                FulfilledValue = summary.FulfilledValue,
+                QualTypeColumn = summary.QualTypeColumn,
+                MdTypesText = summary.MdTypesText,
+                QualNameColumn = summary.QualNameColumn,
+                ShowAllRecords = summary.ShowAllRecords,
+                PqmTable = summary.PqmTable,
+                PqmQualNameColumn = summary.PqmQualNameColumn,
+                PqmQualTypeColumn = summary.PqmQualTypeColumn,
+                CredTable = summary.CredTable,
+                CredJoinCol = summary.CredJoinCol,
+                CredCourseCol = summary.CredCourseCol,
+                CrseTable = summary.CrseTable,
+                CrseCourseCol = summary.CrseCourseCol
+            };
         }
 
         private async Task<Rule19ValidationSummary> ResolveExportSummaryAsync(Rule19ValidationSummary summary)

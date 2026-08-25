@@ -139,6 +139,16 @@ namespace HemisAudit.Services
             }
         }
 
+        // Re-runs the same analysis a fresh "Run Validation" would, without the save-run side
+        // effect - used by the export path so a download always reflects the current live data
+        // rather than whatever was last saved. AnalyseAsync already loads the full, unbounded
+        // population (no preview/full distinction exists for this rule).
+        public async Task<Rule19ValidationSummary> GetExportSummaryAsync(Rule19ValidationRequest request)
+        {
+            ValidateRequest(request.StudTable, request.QualTable, request.FulfilledValue);
+            return await AnalyseAsync(request);
+        }
+
         public async Task<Rule19ValidationSummary> RunValidationAsync(Rule19ValidationRequest request, string? userEmail = null, string? userName = null)
         {
             try
@@ -510,6 +520,85 @@ ORDER BY COUNT(*) DESC, ""Qualification_Type"" ASC;";
                 Breakdown = breakdown,
                 MatchingRows = rows
             };
+        }
+
+        // Cheap population size check - runs the same server-side prep SQL as a full export but
+        // stops at a COUNT(*), no result rows loaded. Mirrors Rule12Service.GetPopulationCountAsync.
+        public async Task<int> GetPopulationCountAsync(Rule19ValidationRequest request)
+        {
+            ValidateRequest(request.StudTable, request.QualTable, request.FulfilledValue);
+            var cfg = await ResolveColumnConfigAsync(request);
+            await EnsureRule19IndexesAsync(request.ClientId, request, cfg);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            var studColumns = new HashSet<string>(await _datasets.GetValidatedColumnsAsync(request.ClientId, request.StudTable), StringComparer.OrdinalIgnoreCase);
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule19PrepSql(schema, request.StudTable, request.QualTable, request.CredTable, request.CrseTable, request.PqmTable, cfg, studColumns);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var countCommand = connection.CreateCommand();
+            countCommand.CommandText = "SELECT COUNT(*) FROM rule19_population;";
+            return Convert.ToInt32(await countCommand.ExecuteScalarAsync());
+        }
+
+        // Bypasses AnalyseAsync/LoadPopulationRowsAsync entirely - those buffer every row as a
+        // full Dictionary<string,string?> before anything can be written out, unbounded even for
+        // the interactive Run (same "450k+ row" OOM risk as Rule 12/14/16 before their fix).
+        // Reads and writes one row at a time, using the query's own column names directly.
+        // Mirrors Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule19ValidationRequest request, Stream outputStream)
+        {
+            ValidateRequest(request.StudTable, request.QualTable, request.FulfilledValue);
+            var cfg = await ResolveColumnConfigAsync(request);
+            await EnsureRule19IndexesAsync(request.ClientId, request, cfg);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            var studColumns = new HashSet<string>(await _datasets.GetValidatedColumnsAsync(request.ClientId, request.StudTable), StringComparer.OrdinalIgnoreCase);
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule19PrepSql(schema, request.StudTable, request.QualTable, request.CredTable, request.CrseTable, request.PqmTable, cfg, studColumns);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT * FROM rule19_population ORDER BY sample_number;";
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetName(i)).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
         }
 
         private async Task<int> SaveValidationRunAsync(Rule19ValidationRequest request, Rule19ValidationSummary summary, string? userEmail, string? userName)

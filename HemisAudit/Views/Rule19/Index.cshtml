@@ -516,6 +516,30 @@
         });
     }
 
+    async function downloadCsvFile() {
+        if (!state.summary) throw new Error('Run Rule 19 first before downloading the CSV results.');
+        await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule19_Masters_PhD_Population.csv');
+    }
+
+    async function downloadExcelFile() {
+        if (!state.summary) throw new Error('Run Rule 19 first before downloading the Excel results.');
+
+        const info = await postJson(`${apiBasePath}/GetExportInfo`, state.summary);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsvFile
+            );
+            return;
+        }
+
+        try {
+            await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule19_Masters_PhD_Population.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+        }
+    }
+
     function getRequest() {
         return {
             clientId: parseInt(els.clientId.value || '0', 10) || 0,
@@ -1387,8 +1411,8 @@
         hideSpinner();
         setWorkspaceInfo('error', err.message || 'Could not remove signoff.');
     }));
-    document.getElementById('downloadExcelBtn').addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule19_Masters_PhD_Population.xlsx').catch(err => setWorkspaceInfo('error', err.message || 'Download failed.')));
-    document.getElementById('downloadCsvBtn').addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule19_Masters_PhD_Population.csv').catch(err => setWorkspaceInfo('error', err.message || 'Download failed.')));
+    document.getElementById('downloadExcelBtn').addEventListener('click', () => downloadExcelFile().catch(err => setWorkspaceInfo('error', err.message || 'Download failed.')));
+    document.getElementById('downloadCsvBtn').addEventListener('click', () => downloadCsvFile().catch(err => setWorkspaceInfo('error', err.message || 'Download failed.')));
     document.getElementById('downloadSqlBtn').addEventListener('click', () => downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule19_Masters_PhD_Population.sql').catch(err => setWorkspaceInfo('error', err.message || 'Download failed.')));
     document.getElementById('downloadAllBtn').addEventListener('click', async () => {
         try {
@@ -1396,10 +1420,10 @@
                 throw new Error('Run Rule 19 first.');
             }
             if (els.chkExcel.checked) {
-                await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule19_Masters_PhD_Population.xlsx');
+                await downloadExcelFile();
             }
             if (els.chkCsv.checked) {
-                await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule19_Masters_PhD_Population.csv');
+                await downloadCsvFile();
             }
             if (els.chkSql.checked) {
                 await downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule19_Masters_PhD_Population.sql');
