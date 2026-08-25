@@ -454,6 +454,78 @@ DROP TABLE rule36_validation_results;
 ";
         }
 
+        // Re-runs the same analysis a fresh "Run Validation" would, without the save-run side
+        // effect - used by the Excel export path.
+        public async Task<Rule36ValidationSummary> GetExportSummaryAsync(Rule36ValidationRequest request) =>
+            await AnalyseAsync(request);
+
+        // Cheap population size check - stops at a COUNT(*), no result rows loaded.
+        public async Task<int> GetPopulationCountAsync(Rule36ValidationRequest request)
+        {
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+            return await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.StudTable}\";");
+        }
+
+        // Bypasses AnalyseAsync entirely - that buffers every student row into a list capped at
+        // RowLimit (5,000) regardless of the real row count. Reads and writes one row at a time.
+        // Mirrors Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule36ValidationRequest request, bool onlyExceptions, Stream outputStream)
+        {
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+            await writer.WriteLineAsync(string.Join(",", new[] { "Validation_Number", "Validation_Result", "Exception_Reason", "Student_Id" }.Select(StreamCsvEscape)));
+
+            var exceptionsFilter = onlyExceptions ? @"WHERE validation_result = 'FAIL'" : "";
+            await using var command = connection.CreateCommand();
+            command.CommandText = $@"
+WITH deceased_keys AS
+(
+    SELECT DISTINCT TRIM(CAST(d.""{request.DeceasedColumn}"" AS text)) AS deceased_key
+    FROM ""{schema}"".""{request.DeceasedTable}"" d
+    WHERE d.""{request.DeceasedColumn}"" IS NOT NULL
+),
+classified AS
+(
+    SELECT
+        ROW_NUMBER() OVER (ORDER BY s.""{request.StudColumn}"") AS validation_number,
+        CASE WHEN dk.deceased_key IS NOT NULL THEN 'FAIL' ELSE 'PASS' END AS validation_result,
+        CASE WHEN dk.deceased_key IS NOT NULL THEN 'Student marked as deceased' ELSE NULL END AS exception_reason,
+        TRIM(CAST(s.""{request.StudColumn}"" AS text)) AS stud_column_value
+    FROM ""{schema}"".""{request.StudTable}"" s
+    LEFT JOIN deceased_keys dk ON dk.deceased_key = TRIM(CAST(s.""{request.StudColumn}"" AS text))
+)
+SELECT * FROM classified
+{exceptionsFilter}
+ORDER BY validation_number;";
+            await using var reader = await command.ExecuteReaderAsync();
+
+            while (await reader.ReadAsync())
+            {
+                var rowValues = new[]
+                {
+                    Convert.ToString(reader.GetInt64(0), CultureInfo.InvariantCulture) ?? "",
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? "" : reader.GetString(2),
+                    reader.IsDBNull(3) ? "" : reader.GetString(3)
+                };
+                await writer.WriteLineAsync(string.Join(",", rowValues.Select(StreamCsvEscape)));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
+        }
+
         // ── Analysis ─────────────────────────────────────────────────────────────────────
 
         private async Task<Rule36ValidationSummary> AnalyseAsync(Rule36ValidationRequest request)

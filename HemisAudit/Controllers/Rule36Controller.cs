@@ -644,6 +644,11 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = redirectRunId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
@@ -651,7 +656,16 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportRule36Excel(review.Summary);
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            var populationCount = await _rule36.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+
+            var resolved = await _rule36.GetExportSummaryAsync(exportRequest);
+            var bytes = _export.ExportRule36Excel(resolved);
             return File(bytes,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule36_Deceased_Validation_Run_{runId}.xlsx");
@@ -664,8 +678,11 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportRule36Csv(review.Summary, false);
-            return File(bytes, "text/csv", $"Rule36_Validation_Results_Run_{runId}.csv");
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            Response.ContentType = "text/csv";
+            Response.Headers.ContentDisposition = $"attachment; filename=\"Rule36_Validation_Results_Run_{runId}.csv\"";
+            await _rule36.StreamCsvExportAsync(exportRequest, onlyExceptions: false, Response.Body);
+            return new EmptyResult();
         }
 
         [HttpGet]
@@ -675,9 +692,21 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportRule36Csv(review.Summary, true);
-            return File(bytes, "text/csv", $"Rule36_Deceased_Exceptions_Run_{runId}.csv");
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            Response.ContentType = "text/csv";
+            Response.Headers.ContentDisposition = $"attachment; filename=\"Rule36_Deceased_Exceptions_Run_{runId}.csv\"";
+            await _rule36.StreamCsvExportAsync(exportRequest, onlyExceptions: true, Response.Body);
+            return new EmptyResult();
         }
+
+        private static Rule36ValidationRequest BuildRequestFromSummary(int clientId, Rule36ValidationSummary summary) => new()
+        {
+            ClientId = clientId,
+            StudTable = summary.StudTable,
+            DeceasedTable = summary.DeceasedTable,
+            StudColumn = summary.StudColumn,
+            DeceasedColumn = summary.DeceasedColumn
+        };
 
         [HttpGet]
         public async Task<IActionResult> DownloadSavedSql(int runId)
@@ -701,29 +730,95 @@ namespace HemisAudit.Controllers
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule36ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportRule36Excel(summary);
-            return File(bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"Rule36_Deceased_Validation_{Ts()}.xlsx");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                var populationCount = await _rule36.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+                }
+
+                var resolved = await _rule36.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportRule36Excel(resolved);
+                return File(bytes,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    $"Rule36_Deceased_Validation_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule36ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule36.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule36ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var fileName = $"Rule36_Validation_Results_{Ts()}.csv";
-            var bytes = _export.ExportRule36Csv(summary, false);
-            return File(bytes, "text/csv", fileName);
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                Response.ContentType = "text/csv";
+                Response.Headers.ContentDisposition = $"attachment; filename=\"Rule36_Validation_Results_{Ts()}.csv\"";
+                await _rule36.StreamCsvExportAsync(exportRequest, onlyExceptions: false, Response.Body);
+                return new EmptyResult();
+            }
+            catch (Exception ex)
+            {
+                if (!Response.HasStarted)
+                {
+                    Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return Json(new { error = ex.Message });
+                }
+                return new EmptyResult();
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadExceptionsCsv([FromBody] Rule36ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var fileName = $"Rule36_Deceased_Exceptions_{Ts()}.csv";
-            var bytes = _export.ExportRule36Csv(summary, true);
-            return File(bytes, "text/csv", fileName);
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                Response.ContentType = "text/csv";
+                Response.Headers.ContentDisposition = $"attachment; filename=\"Rule36_Deceased_Exceptions_{Ts()}.csv\"";
+                await _rule36.StreamCsvExportAsync(exportRequest, onlyExceptions: true, Response.Body);
+                return new EmptyResult();
+            }
+            catch (Exception ex)
+            {
+                if (!Response.HasStarted)
+                {
+                    Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return Json(new { error = ex.Message });
+                }
+                return new EmptyResult();
+            }
         }
 
         [HttpPost]
@@ -845,6 +940,20 @@ namespace HemisAudit.Controllers
                 return false;
 
             return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
+        }
+
+        private async Task<Rule36ValidationRequest> ResolveExportRequestAsync(Rule36ValidationSummary summary)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
+
+            if (string.IsNullOrWhiteSpace(summary.StudTable) || string.IsNullOrWhiteSpace(summary.DeceasedTable))
+                throw new InvalidOperationException("Run Rule 36 first before downloading results.");
+
+            return BuildRequestFromSummary(summary.ClientId, summary);
         }
 
         private async Task<Rule36ValidationSummary> ResolveExportSummaryAsync(Rule36ValidationSummary summary)
