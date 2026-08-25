@@ -368,6 +368,91 @@ ORDER BY issue_count DESC;";
             return sql.Trim();
         }
 
+        // Re-runs the same analysis a fresh "Run Validation" would, without the save-run side
+        // effect - used by the Excel export path.
+        public async Task<Rule23ValidationSummary> GetExportSummaryAsync(Rule23ValidationRequest request) =>
+            await AnalyseAsync(request);
+
+        // Cheap population size check - runs the same server-side prep SQL as a full export but
+        // stops at a COUNT(*), no result rows loaded. Reports the mismatch (FAIL) count plus the
+        // deliberately-capped match sample, since that's what a CSV/Excel download will actually
+        // contain. Mirrors Rule12Service.GetPopulationCountAsync.
+        public async Task<int> GetPopulationCountAsync(Rule23ValidationRequest request)
+        {
+            await EnsureColumnsExistAsync(request.ClientId, ToVerifyRequest(request));
+            await EnsureRule23IndexesAsync(request);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule23PrepSql(schema, request.StudTable, request.AuditTable, request.H16Table, request);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            var statusCounts = await GetStatusCountsAsync(connection);
+            var totalValidated = statusCounts.Values.Sum();
+            var matches = statusCounts.GetValueOrDefault("MATCH");
+            var mismatches = totalValidated - matches;
+            return mismatches + Math.Min(matches, PassSampleLimit);
+        }
+
+        // Bypasses AnalyseAsync/LoadRowsAsync entirely for the mismatch side - that's the
+        // audit-relevant exception population and was previously capped at FailRowLimit (5,000)
+        // regardless of the real count. Reads and writes mismatch rows one at a time with no cap;
+        // the MATCH side stays a deliberate fixed-size sample (PassSampleLimit), same as before.
+        // Mirrors Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule23ValidationRequest request, Stream outputStream)
+        {
+            await EnsureColumnsExistAsync(request.ClientId, ToVerifyRequest(request));
+            await EnsureRule23IndexesAsync(request);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule23PrepSql(schema, request.StudTable, request.AuditTable, request.H16Table, request);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = $@"
+SELECT * FROM ( SELECT * FROM rule23_population WHERE reconciliation_status <> 'MATCH' ORDER BY row_number ) mismatches
+UNION ALL
+SELECT * FROM ( SELECT * FROM rule23_population WHERE reconciliation_status = 'MATCH' ORDER BY row_number LIMIT {PassSampleLimit} ) match_sample;";
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetName(i)).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
+        }
+
         // ── Analysis ─────────────────────────────────────────────────────────────────────
 
         private async Task<Rule23ValidationSummary> AnalyseAsync(Rule23ValidationRequest request)
