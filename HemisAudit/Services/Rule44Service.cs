@@ -1,4 +1,5 @@
 using Newtonsoft.Json;
+using System.Globalization;
 using HemisAudit.Helpers;
 using HemisAudit.Models;
 using HemisAudit.ViewModels;
@@ -144,6 +145,78 @@ WHERE {(string.IsNullOrWhiteSpace(pgSql) ? "1=0" : $"TRIM(CAST(Q.\"{m.QualTypeCo
                 return ApplyUiSample(summary);
             }
             catch (Exception ex) { return new Rule44ValidationSummary { Success = false, Error = ex.Message }; }
+        }
+
+        // Re-runs the same analysis a fresh "Run Validation" would, without the save-run side
+        // effect - used by the Excel export path.
+        public async Task<Rule44ValidationSummary> GetExportSummaryAsync(Rule44ValidationRequest request)
+        {
+            NormalizeRequest(request.StudTable, request.QualTable, request.PqmTable, request.ColumnMapping, out var st, out var qt, out var pt, out var m);
+            request.StudTable = st; request.QualTable = qt; request.PqmTable = pt;
+            return await AnalyseAsync(request, m);
+        }
+
+        // Cheap population size check - stops at a COUNT(*), no result rows loaded.
+        public async Task<int> GetPopulationCountAsync(Rule44ValidationRequest request)
+        {
+            NormalizeRequest(request.StudTable, request.QualTable, request.PqmTable, request.ColumnMapping, out var st, out var qt, out var pt, out var m);
+            var pgList = ParsePgTypes(request.PgTypesText);
+            if (pgList.Count == 0) return 0;
+            var pgSql = BuildPgInList(pgList);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+            var (bodySql, _) = BuildValidationSqlParts(schema, st, qt, pt, m, pgSql);
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = $@"WITH validation AS ({bodySql}) SELECT COUNT(*) FROM validation;";
+            return Convert.ToInt32(await command.ExecuteScalarAsync());
+        }
+
+        // Bypasses AnalyseAsync entirely - that buffers every row into PASS/FAIL lists capped at
+        // RowLimit (200,000) regardless of the real row count. Reads and writes one row at a
+        // time. Mirrors Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule44ValidationRequest request, Stream outputStream)
+        {
+            NormalizeRequest(request.StudTable, request.QualTable, request.PqmTable, request.ColumnMapping, out var st, out var qt, out var pt, out var m);
+            var pgList = ParsePgTypes(request.PgTypesText);
+            var pgSql = BuildPgInList(pgList);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+            var (bodySql, orderSql) = BuildValidationSqlParts(schema, st, qt, pt, m, pgSql);
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = $@"WITH validation AS ({bodySql}) SELECT * FROM validation {orderSql};";
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetName(i)).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
         }
 
         public async Task<Rule44ValidationSummary?> GetStoredSummaryAsync(int runId)

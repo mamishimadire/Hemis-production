@@ -279,15 +279,58 @@ namespace HemisAudit.Controllers
             return Json(new { success = true, message = "Signoff removed.", resultsVisible, workspace });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule44ValidationSummary summary)
         {
             if (summary == null)
                 return BadRequest("Rule 44 summary payload is required.");
-            var full = await ResolveFullSummaryAsync(summary);
-            var bytes = BuildExcelExport(full);
-            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"Rule44_Research_Time_{Ts()}.xlsx");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                var populationCount = await _rule44.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+                }
+
+                var resolved = await _rule44.GetExportSummaryAsync(exportRequest);
+                var bytes = BuildExcelExport(resolved);
+                return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    $"Rule44_Research_Time_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule44ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule44.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
@@ -295,9 +338,24 @@ namespace HemisAudit.Controllers
         {
             if (summary == null)
                 return BadRequest("Rule 44 summary payload is required.");
-            var full = await ResolveFullSummaryAsync(summary);
-            var bytes = BuildCsvExport(full);
-            return File(bytes, "text/csv", $"Rule44_Research_Time_{Ts()}.csv");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                Response.ContentType = "text/csv";
+                Response.Headers.ContentDisposition = $"attachment; filename=\"Rule44_Research_Time_{Ts()}.csv\"";
+                await _rule44.StreamCsvExportAsync(exportRequest, Response.Body);
+                return new EmptyResult();
+            }
+            catch (Exception ex)
+            {
+                if (!Response.HasStarted)
+                {
+                    Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return Json(new { error = ex.Message });
+                }
+                return new EmptyResult();
+            }
         }
 
         [HttpPost]
@@ -313,7 +371,17 @@ namespace HemisAudit.Controllers
         {
             var stored = await _rule44.GetStoredSummaryAsync(runId);
             if (stored == null) return NotFound();
-            var bytes = BuildExcelExport(stored);
+
+            var exportRequest = BuildRequestFromSummary(stored);
+            var populationCount = await _rule44.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+
+            var resolved = await _rule44.GetExportSummaryAsync(exportRequest);
+            var bytes = BuildExcelExport(resolved);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule44_Research_Time_Run_{runId}.xlsx");
         }
 
@@ -322,8 +390,12 @@ namespace HemisAudit.Controllers
         {
             var stored = await _rule44.GetStoredSummaryAsync(runId);
             if (stored == null) return NotFound();
-            var bytes = BuildCsvExport(stored);
-            return File(bytes, "text/csv", $"Rule44_Research_Time_Run_{runId}.csv");
+
+            var exportRequest = BuildRequestFromSummary(stored);
+            Response.ContentType = "text/csv";
+            Response.Headers.ContentDisposition = $"attachment; filename=\"Rule44_Research_Time_Run_{runId}.csv\"";
+            await _rule44.StreamCsvExportAsync(exportRequest, Response.Body);
+            return new EmptyResult();
         }
 
         [HttpGet]
@@ -346,6 +418,33 @@ namespace HemisAudit.Controllers
 
         // The browser only ever holds the 10-row UI sample - resolve the full stored population
         // (via SavedRunId) for exports so Excel/CSV always contain the complete tested population.
+        private async Task<Rule44ValidationRequest> ResolveExportRequestAsync(Rule44ValidationSummary summary)
+        {
+            if (summary == null)
+                throw new InvalidOperationException("Run Rule 44 first before downloading results.");
+
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
+
+            if (string.IsNullOrWhiteSpace(summary.StudTable) || string.IsNullOrWhiteSpace(summary.QualTable) || string.IsNullOrWhiteSpace(summary.PqmTable))
+                throw new InvalidOperationException("Run Rule 44 first before downloading results.");
+
+            return BuildRequestFromSummary(summary);
+        }
+
+        private static Rule44ValidationRequest BuildRequestFromSummary(Rule44ValidationSummary summary) => new()
+        {
+            ClientId = summary.ClientId,
+            StudTable = summary.StudTable,
+            QualTable = summary.QualTable,
+            PqmTable = summary.PqmTable,
+            PgTypesText = summary.PgTypesText,
+            ColumnMapping = summary.ColumnMapping
+        };
+
         private async Task<Rule44ValidationSummary> ResolveFullSummaryAsync(Rule44ValidationSummary summary)
         {
             if (summary.SavedRunId is int runId && runId > 0)

@@ -668,7 +668,14 @@ window.toggleAccordion = function(s) {
             headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': token },
             body: JSON.stringify(payload)
         });
-        if (!r.ok) throw new Error('Download failed.');
+        if (!r.ok) {
+            let message = 'Download failed.';
+            try {
+                const errorBody = await r.json();
+                message = errorBody?.error || message;
+            } catch { }
+            throw new Error(message);
+        }
         const blob = await r.blob();
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
@@ -677,6 +684,30 @@ window.toggleAccordion = function(s) {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(a.href);
+    }
+
+    async function downloadCsvFile() {
+        if (!state.summary) throw new Error('Run Rule 44 first before downloading the CSV results.');
+        await downloadBlob(`${apiBase}/DownloadCsv`, state.summary, 'Rule44_Research_Time.csv');
+    }
+
+    async function downloadExcelFile() {
+        if (!state.summary) throw new Error('Run Rule 44 first before downloading the Excel results.');
+
+        const info = await postJson(`${apiBase}/GetExportInfo`, state.summary);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsvFile
+            );
+            return;
+        }
+
+        try {
+            await downloadBlob(`${apiBase}/DownloadExcel`, state.summary, 'Rule44_Research_Time.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+        }
     }
 
     function showSpinner(msg) { if (els.spinnerMsg) els.spinnerMsg.textContent = msg; if (els.spinner) els.spinner.style.display = 'flex'; }
@@ -798,8 +829,8 @@ window.toggleAccordion = function(s) {
     document.getElementById('signoffBtn')?.addEventListener('click',       () => signoffWorkspace().catch(err => { hideSpinner(); setWorkspaceState(err.message, 'error'); }));
     document.getElementById('removeSignoffBtn')?.addEventListener('click', () => removeSignoff().catch(err    => { hideSpinner(); setWorkspaceState(err.message, 'error'); }));
 
-    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => state.summary && downloadBlob(`${apiBase}/DownloadExcel`, state.summary, 'Rule44_Research_Time.xlsx').catch(err => setWorkspaceState(err.message, 'error')));
-    document.getElementById('downloadCsvBtn')?.addEventListener('click',   () => state.summary && downloadBlob(`${apiBase}/DownloadCsv`,  state.summary, 'Rule44_Research_Time.csv').catch(err  => setWorkspaceState(err.message, 'error')));
+    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => downloadExcelFile().catch(err => setWorkspaceState(err.message, 'error')));
+    document.getElementById('downloadCsvBtn')?.addEventListener('click',   () => downloadCsvFile().catch(err => setWorkspaceState(err.message, 'error')));
     document.getElementById('downloadSqlBtn')?.addEventListener('click',   () => downloadBlob(`${apiBase}/DownloadSql`, getRequest(), 'Rule44_Research_Time.sql').catch(err => setWorkspaceState(err.message, 'error')));
 
     els.clientId?.addEventListener('change', () => loadWorkspace().catch(err => setWorkspaceState(err.message, 'error')));
