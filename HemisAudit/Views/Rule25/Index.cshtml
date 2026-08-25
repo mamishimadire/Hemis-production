@@ -316,6 +316,30 @@
         });
     }
 
+    async function downloadCsvFile() {
+        if (!state.summary) throw new Error('Run Rule 25 first before downloading the CSV results.');
+        await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule25_Fail_Exceptions.csv');
+    }
+
+    async function downloadExcelFile() {
+        if (!state.summary) throw new Error('Run Rule 25 first before downloading the Excel results.');
+
+        const info = await postJson(`${apiBasePath}/GetExportInfo`, state.summary);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsvFile
+            );
+            return;
+        }
+
+        try {
+            await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule25_Course_Reconciliation.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+        }
+    }
+
     function showSpinner(message) {
         els.spinnerMsg.textContent = message || 'Processing...';
         els.spinner.style.display = 'flex';
@@ -1163,15 +1187,15 @@
     els.saveWorkspaceBtn.addEventListener('click', saveWorkspace);
     els.signoffBtn.addEventListener('click', signoffWorkspace);
     els.removeSignoffBtn.addEventListener('click', removeWorkspaceSignoff);
-    document.getElementById('downloadExcelBtn').addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule25_Course_Reconciliation.xlsx'));
-    document.getElementById('downloadCsvBtn').addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule25_Fail_Exceptions.csv'));
+    document.getElementById('downloadExcelBtn').addEventListener('click', () => downloadExcelFile().catch(err => window.showAppToast?.(err.message, 'error')));
+    document.getElementById('downloadCsvBtn').addEventListener('click', () => downloadCsvFile().catch(err => window.showAppToast?.(err.message, 'error')));
     document.getElementById('downloadSqlBtn').addEventListener('click', () => downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule25.sql'));
     document.getElementById('downloadAllBtn').addEventListener('click', async () => {
         if (!state.summary) {
             return;
         }
-        if (document.getElementById('chkExcel').checked) await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule25_Course_Reconciliation.xlsx');
-        if (document.getElementById('chkCsv').checked) await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule25_Fail_Exceptions.csv');
+        if (document.getElementById('chkExcel').checked) await downloadExcelFile();
+        if (document.getElementById('chkCsv').checked) await downloadCsvFile();
         if (document.getElementById('chkSql').checked) await downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule25.sql');
     });
 
