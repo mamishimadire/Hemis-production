@@ -371,6 +371,90 @@ ORDER BY issue_count DESC;";
             return sql.Trim();
         }
 
+        // Re-runs the same analysis a fresh "Run Validation" would, without the save-run side
+        // effect - used by the Excel export path.
+        public async Task<Rule24ValidationSummary> GetExportSummaryAsync(Rule24ValidationRequest request) =>
+            await AnalyseAsync(request);
+
+        // Cheap population size check - stops at a COUNT(*), no result rows loaded.
+        public async Task<int> GetPopulationCountAsync(Rule24ValidationRequest request)
+        {
+            EnsureAuditTableLooksCorrect(request.AuditTable);
+            await EnsureColumnsExistAsync(request.ClientId, ToVerifyRequest(request));
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule24PrepSql(schema, request.StudTable, request.QualTable, request.AuditTable, request.H16Table, request);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            var passStatus = request.Control1OnlyMode ? "NO_BLANKS" : "MATCH";
+            var statusCounts = await GetStatusCountsAsync(connection);
+            var totalValidated = statusCounts.Values.Sum();
+            var matches = statusCounts.GetValueOrDefault(passStatus);
+            var mismatches = totalValidated - matches;
+            return mismatches + Math.Min(matches, PassSampleLimit);
+        }
+
+        // Bypasses AnalyseAsync/LoadRowsAsync entirely for the mismatch side - no cap. The
+        // matching side stays a deliberate fixed-size sample (PassSampleLimit). Mirrors
+        // Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule24ValidationRequest request, Stream outputStream)
+        {
+            EnsureAuditTableLooksCorrect(request.AuditTable);
+            await EnsureColumnsExistAsync(request.ClientId, ToVerifyRequest(request));
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule24PrepSql(schema, request.StudTable, request.QualTable, request.AuditTable, request.H16Table, request);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            var passStatus = request.Control1OnlyMode ? "NO_BLANKS" : "MATCH";
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = $@"
+SELECT * FROM ( SELECT * FROM rule24_population WHERE reconciliation_status <> @status ORDER BY row_number ) mismatches
+UNION ALL
+SELECT * FROM ( SELECT * FROM rule24_population WHERE reconciliation_status = @status ORDER BY row_number LIMIT {PassSampleLimit} ) match_sample;";
+            command.Parameters.AddWithValue("status", passStatus);
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetName(i)).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
+        }
+
         // ── Analysis ─────────────────────────────────────────────────────────────────────
 
         private async Task<Rule24ValidationSummary> AnalyseAsync(Rule24ValidationRequest request)
