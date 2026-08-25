@@ -479,6 +479,83 @@ SELECT
             return Task.FromResult(sql.Trim());
         }
 
+        // Re-runs the same analysis a fresh "Run Validation" would, without the save-run side
+        // effect - used by the Excel export path.
+        public async Task<Rule29ValidationSummary> GetExportSummaryAsync(Rule29ValidationRequest request) =>
+            await AnalyseAsync(request);
+
+        // Cheap population size check - stops at a COUNT(*), no result rows loaded. Reports what
+        // a download will actually contain: the full match count when ShowAllRecords is set, or
+        // the same deliberate sample size AnalyseAsync uses otherwise (that's a user choice, not
+        // a bug to fix).
+        public async Task<int> GetPopulationCountAsync(Rule29ValidationRequest request)
+        {
+            var parsedValues = ParseFilterValues(request.FilterValue);
+            var normalizedValues = parsedValues.Select(NormalizeComparableValue).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using var countCommand = connection.CreateCommand();
+            var countPredicate = BuildFilterPredicate(countCommand, request.FilterColumn, parsedValues, normalizedValues);
+            countCommand.CommandText = $"SELECT COUNT(*) FROM \"{schema}\".\"{request.TableName}\" WHERE {countPredicate};";
+            var matchingCount = Convert.ToInt32(await countCommand.ExecuteScalarAsync());
+
+            return request.ShowAllRecords ? matchingCount : Math.Min(Math.Max(request.SampleSize, 1), matchingCount);
+        }
+
+        // Bypasses AnalyseAsync entirely - that buffers every matching row into a list capped at
+        // MatchingRowLimit even when ShowAllRecords is set, regardless of the real match count.
+        // Reads and writes one row at a time, using the query's own column names directly.
+        // Honors ShowAllRecords/SampleSize the same way AnalyseAsync does - sampling is a
+        // deliberate user choice, not something this removes. Mirrors
+        // Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule29ValidationRequest request, Stream outputStream)
+        {
+            var parsedValues = ParseFilterValues(request.FilterValue);
+            var normalizedValues = parsedValues.Select(NormalizeComparableValue).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            var predicate = BuildFilterPredicate(command, request.FilterColumn, parsedValues, normalizedValues);
+            command.CommandText = request.ShowAllRecords
+                ? $"SELECT * FROM \"{schema}\".\"{request.TableName}\" WHERE {predicate};"
+                : $"SELECT * FROM \"{schema}\".\"{request.TableName}\" WHERE {predicate} LIMIT @limit;";
+            if (!request.ShowAllRecords)
+                command.Parameters.AddWithValue("limit", Math.Max(request.SampleSize, 1));
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetName(i)).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
+        }
+
         // ── Analysis ─────────────────────────────────────────────────────────────────────
 
         private async Task<Rule29ValidationSummary> AnalyseAsync(Rule29ValidationRequest request)
