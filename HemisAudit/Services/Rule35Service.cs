@@ -445,6 +445,79 @@ WHERE ""{request.DuplicateColumn}"" IS NOT NULL;
             return Task.FromResult(sql.Trim());
         }
 
+        // Re-runs the same analysis a fresh "Run Validation" would, without the save-run side
+        // effect - used by the Excel export path.
+        public async Task<Rule35ValidationSummary> GetExportSummaryAsync(Rule35ValidationRequest request) =>
+            await AnalyseAsync(request);
+
+        // Cheap population size check - stops at a COUNT(*), no result rows loaded.
+        public async Task<int> GetPopulationCountAsync(Rule35ValidationRequest request)
+        {
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+            return await CountAsync(connection, $"SELECT COUNT(*) FROM \"{schema}\".\"{request.TableName}\";");
+        }
+
+        // Bypasses AnalyseAsync entirely - that buffers every row (tagged DUPLICATE/UNIQUE) into
+        // a list capped at RowLimit (5,000) regardless of the real row count. Reads and writes
+        // one row at a time. Mirrors Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule35ValidationRequest request, Stream outputStream)
+        {
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = $@"
+SELECT
+    ROW_NUMBER() OVER (ORDER BY occurrence_count DESC, duplicate_status DESC, duplicate_value) AS validation_number,
+    occurrence_count,
+    duplicate_status,
+    duplicate_value,
+    x.*
+FROM
+(
+    SELECT
+        CAST(t.""{request.DuplicateColumn}"" AS text) AS duplicate_value,
+        COUNT(*) OVER (PARTITION BY t.""{request.DuplicateColumn}"") AS occurrence_count,
+        CASE
+            WHEN COUNT(*) OVER (PARTITION BY t.""{request.DuplicateColumn}"") > 1 THEN 'DUPLICATE'
+            ELSE 'UNIQUE'
+        END AS duplicate_status,
+        t.*
+    FROM ""{schema}"".""{request.TableName}"" t
+) x
+ORDER BY occurrence_count DESC, duplicate_status DESC, validation_number;";
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetName(i)).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
+        }
+
         // ── Analysis ─────────────────────────────────────────────────────────────────────
 
         private async Task<Rule35ValidationSummary> AnalyseAsync(Rule35ValidationRequest request)

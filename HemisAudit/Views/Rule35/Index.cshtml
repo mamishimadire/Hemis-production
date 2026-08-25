@@ -342,6 +342,30 @@
         });
     }
 
+    async function downloadCsvFile() {
+        if (!state.summary) throw new Error('Run Rule 35 first before downloading the CSV results.');
+        await downloadPost(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule35_Duplicate_Check.csv');
+    }
+
+    async function downloadExcelFile() {
+        if (!state.summary) throw new Error('Run Rule 35 first before downloading the Excel results.');
+
+        const info = await postJson(`${apiBasePath}/GetExportInfo`, state.summary);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsvFile
+            );
+            return;
+        }
+
+        try {
+            await downloadPost(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule35_Duplicate_Check.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+        }
+    }
+
     function setStatusBadge(status) {
         if (!status) {
             els.statusBadge.style.display = 'none';
@@ -1009,10 +1033,10 @@
     async function downloadAll() {
         if (!state.summary) return;
         if (document.getElementById('chkExcel').checked) {
-            await downloadPost(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule35_Duplicate_Check.xlsx');
+            await downloadExcelFile();
         }
         if (document.getElementById('chkCsv').checked) {
-            await downloadPost(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule35_Duplicate_Check.csv');
+            await downloadCsvFile();
         }
         if (document.getElementById('chkSql').checked) {
             await downloadPost(`${apiBasePath}/DownloadSql`, buildRequest(), 'Rule35_Duplicate_Check.sql');
@@ -1020,8 +1044,8 @@
     }
 
     function bindDownloadButtons() {
-        document.getElementById('downloadExcelBtn')?.addEventListener('click', () => state.summary && downloadPost(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule35_Duplicate_Check.xlsx'));
-        document.getElementById('downloadCsvBtn')?.addEventListener('click', () => state.summary && downloadPost(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule35_Duplicate_Check.csv'));
+        document.getElementById('downloadExcelBtn')?.addEventListener('click', () => downloadExcelFile().catch(err => setWorkspaceInfo(err.message, 'error')));
+        document.getElementById('downloadCsvBtn')?.addEventListener('click', () => downloadCsvFile().catch(err => setWorkspaceInfo(err.message, 'error')));
         document.getElementById('downloadSqlBtn')?.addEventListener('click', () => downloadPost(`${apiBasePath}/DownloadSql`, buildRequest(), 'Rule35_Duplicate_Check.sql'));
     }
 
