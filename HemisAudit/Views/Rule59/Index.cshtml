@@ -234,12 +234,29 @@ window.toggleAccordion = function (section) {
     async function downloadBlob(url, payload, defaultName) {
         await window.downloadFileWithProgress({ url, method:'POST', headers:{'Content-Type':'application/json','RequestVerificationToken':token}, body:JSON.stringify(payload), defaultFileName:defaultName, label:'Downloading' });
     }
-    function openSavedDownload(kind) {
+    async function checkExcelSizeOrWarn() {
+        if (!state.summary) return true;
+        try {
+            const info = await postJson(`${apiBase}/GetExportInfo`, state.summary);
+            if (info?.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                    () => openSavedDownload('csv')
+                );
+                return false;
+            }
+        } catch { /* population check failed - let the actual download surface any real error */ }
+        return true;
+    }
+
+    async function openSavedDownload(kind) {
         if (!state.currentRunId) {
             setWorkspaceState('Save or load a Rule 59 run before downloading results.','warning');
             setActiveTab('downloads');
             return;
         }
+
+        if (kind === 'excel' && !(await checkExcelSizeOrWarn())) return;
 
         const exts = { excel: 'xlsx', csv: 'csv', sql: 'sql' };
         const routes = {
@@ -251,7 +268,12 @@ window.toggleAccordion = function (section) {
         const url = routes[kind];
         if (!url) return;
         const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '');
-        window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: `Rule59_Run_${state.currentRunId}_${stamp}.${exts[kind]}`, label: 'Downloading result' });
+        try {
+            await window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: `Rule59_Run_${state.currentRunId}_${stamp}.${exts[kind]}`, label: 'Downloading result' });
+        } catch (err) {
+            if (kind === 'excel') window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, () => openSavedDownload('csv'));
+            else setWorkspaceState(err.message, 'error');
+        }
     }
 
     function populateSelect(sel, values, selected) {
@@ -496,7 +518,7 @@ window.toggleAccordion = function (section) {
             const id = state.currentRunId;
             const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '');
             const tasks = [];
-            if (document.getElementById('chkExcel')?.checked) tasks.push(() => window.downloadFileWithProgress({ url: `/Rule59/DownloadSavedExcel?runId=${id}`, method: 'GET', defaultFileName: `Rule59_Run_${id}_${stamp}.xlsx`, label: 'Downloading result' }));
+            if (document.getElementById('chkExcel')?.checked) tasks.push(async () => { if (await checkExcelSizeOrWarn()) await window.downloadFileWithProgress({ url: `/Rule59/DownloadSavedExcel?runId=${id}`, method: 'GET', defaultFileName: `Rule59_Run_${id}_${stamp}.xlsx`, label: 'Downloading result' }); });
             if (document.getElementById('chkCsv')?.checked)   tasks.push(() => window.downloadFileWithProgress({ url: `/Rule59/DownloadSavedCsv?runId=${id}`, method: 'GET', defaultFileName: `Rule59_Run_${id}_${stamp}.csv`, label: 'Downloading result' }));
             if (document.getElementById('chkSql')?.checked)   tasks.push(() => window.downloadFileWithProgress({ url: `/Rule59/DownloadSavedSql?runId=${id}`, method: 'GET', defaultFileName: `Rule59_Run_${id}_${stamp}.sql`, label: 'Downloading result' }));
             for (const task of tasks) { await task(); }

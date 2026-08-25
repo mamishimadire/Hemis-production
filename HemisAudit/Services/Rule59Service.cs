@@ -120,7 +120,7 @@ FROM validation;";
         {
             try
             {
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, RowLimit);
 
                 if (summary.Success && request.ClientId > 0)
                 {
@@ -138,7 +138,24 @@ FROM validation;";
             catch (Exception ex) { return new Rule59ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<Rule59ValidationSummary> AnalyseAsync(Rule59ValidationRequest req)
+        public async Task<Rule59ValidationSummary> GetExportSummaryAsync(Rule59ValidationRequest request)
+            => await AnalyseAsync(request, rowLimit: null);
+
+        public async Task<int> GetPopulationCountAsync(Rule59ValidationRequest req)
+        {
+            await ValidateColumnsExistAsync(req.ClientId, req.ValpacTable, [req.ValpacCol037]);
+            await ValidateColumnsExistAsync(req.ClientId, req.ProdTable, [req.ProdColPersonelNumber]);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(req.ClientId);
+            await using var connection = conn;
+
+            var (bodySql, _) = BuildValidationSqlParts(schema, req);
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"WITH validation AS ({bodySql}) SELECT COUNT(*) FROM validation;";
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
+        private async Task<Rule59ValidationSummary> AnalyseAsync(Rule59ValidationRequest req, int? rowLimit)
         {
             await ValidateColumnsExistAsync(req.ClientId, req.ValpacTable, [req.ValpacCol037]);
             await ValidateColumnsExistAsync(req.ClientId, req.ProdTable, [req.ProdColPersonelNumber]);
@@ -177,7 +194,7 @@ FROM validation;";
 WITH validation AS ({bodySql})
 SELECT * FROM validation
 {orderSql}
-LIMIT @limit;";
+{(rowLimit.HasValue ? "LIMIT @limit" : "")};";
 
             var rows = new List<Rule59ValidationRowRecord>();
             int rowNo = 0;
@@ -185,7 +202,7 @@ LIMIT @limit;";
             await using (var cmd = connection.CreateCommand())
             {
                 cmd.CommandText = rowsSql;
-                cmd.Parameters.AddWithValue("limit", RowLimit);
+                if (rowLimit.HasValue) cmd.Parameters.AddWithValue("limit", rowLimit.Value);
                 await using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {
