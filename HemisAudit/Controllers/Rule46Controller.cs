@@ -411,6 +411,11 @@ namespace HemisAudit.Controllers
             }));
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadCsv([FromQuery] int runId)
         {
@@ -423,9 +428,12 @@ namespace HemisAudit.Controllers
                 TempData["Error"] = "The assigned data analyst must sign off before downloading.";
                 return RedirectToAction(nameof(Index));
             }
-            var fullSummary = await _rule46.GetStoredSummaryAsync(runId) ?? review.Summary!;
-            var bytes = BuildCombinedCsvBytes(fullSummary);
-            return File(bytes, "text/csv", $"Rule46_Foundation_Chain_Run_{runId}.csv");
+
+            var exportRequest = BuildRequestFromSummary(review.Summary!);
+            Response.ContentType = "text/csv";
+            Response.Headers.ContentDisposition = $"attachment; filename=\"Rule46_Foundation_Chain_Run_{runId}.csv\"";
+            await _rule46.StreamCsvExportAsync(exportRequest, Response.Body);
+            return new EmptyResult();
         }
 
         [HttpGet]
@@ -441,10 +449,31 @@ namespace HemisAudit.Controllers
                 return RedirectToAction(nameof(Index));
             }
 
-            var fullSummary = await _rule46.GetStoredSummaryAsync(runId) ?? review.Summary!;
-            var bytes = BuildExcelExport(fullSummary);
+            var exportRequest = BuildRequestFromSummary(review.Summary!);
+            var populationCount = await _rule46.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            var resolved = await _rule46.GetExportSummaryAsync(exportRequest);
+            var bytes = BuildExcelExport(resolved);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule46_Foundation_Chain_Run_{runId}.xlsx");
         }
+
+        private static Rule46ValidationRequest BuildRequestFromSummary(Rule46ValidationSummary s) => new()
+        {
+            StudTable = s.StudTable, StudKey = s.StudKey, StudIdCol = s.StudIdCol,
+            Stud007Col = s.Stud007Col,
+            Stud010Col = s.Stud010Col,
+            Stud012Col = s.Stud012Col,
+            Stud026Col = s.Stud026Col,
+            StudFilterCol = s.StudFilterCol, StudFilterValue = s.StudFilterValue,
+            QualTable = s.QualTable, QualKey = s.QualKey, QualNameCol = s.QualNameCol,
+            PqmTable = s.PqmTable, PqmNameCol = s.PqmNameCol,
+            ClientId = s.ClientId
+        };
 
         [HttpGet]
         public async Task<IActionResult> DownloadSql([FromQuery] int runId)
@@ -468,24 +497,6 @@ namespace HemisAudit.Controllers
             var sqlText = _rule46.GenerateValidationSql(req);
             var bytes = _export.ExportSql(sqlText);
             return File(bytes, "application/sql", $"Rule46_Foundation_Chain_Run_{runId}.sql");
-        }
-
-        private static byte[] BuildCombinedCsvBytes(Rule46ValidationSummary summary)
-        {
-            using var ms = new System.IO.MemoryStream();
-            using var sw = new System.IO.StreamWriter(ms, System.Text.Encoding.UTF8);
-            sw.WriteLine("\"HEMIS RULE 46 - Foundation Student Chain Validation\"");
-            sw.WriteLine($"\"Timestamp\",\"{summary.Timestamp}\"");
-            sw.WriteLine($"\"Total\",{summary.TotalValidated},\"Pass\",{summary.PassCount},\"Fail\",{summary.FailCount},\"Exception Rate\",{summary.ExceptionRate:0.00}%");
-            sw.WriteLine();
-            sw.WriteLine("\"Row\",\"Stud_Key\",\"Stud__008\",\"Stud__007\",\"Stud__010\",\"Stud__012\",\"Stud__026\",\"STUD__106\",\"Qual_Key\",\"Qual_Name\",\"PQM_Name\",\"Result\",\"Detail\"");
-            foreach (var row in summary.ValidationRows)
-            {
-                static string Q(string? v) => "\"" + (v ?? "").Replace("\"", "\"\"") + "\"";
-                sw.WriteLine($"{row.RowNumber},{Q(row.StudId)},{Q(row.StudentId)},{Q(row.Stud007)},{Q(row.Stud010)},{Q(row.Stud012)},{Q(row.Stud026)},{Q(row.StudFilterValue)},{Q(row.QualId)},{Q(row.QualName)},{Q(row.PqmName)},{Q(row.ValidationResult)},{Q(row.ResultDetail)}");
-            }
-            sw.Flush();
-            return ms.ToArray();
         }
 
         private static byte[] BuildExcelExport(Rule46ValidationSummary summary)

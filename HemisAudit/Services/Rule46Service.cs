@@ -1,4 +1,5 @@
 using Newtonsoft.Json;
+using System.Globalization;
 using HemisAudit.Helpers;
 using HemisAudit.Models;
 using HemisAudit.ViewModels;
@@ -142,6 +143,65 @@ namespace HemisAudit.Services
             var summary = DeserializeSummary(row.ResultsJSON);
             if (summary != null) summary.SavedRunId = runId;
             return summary;
+        }
+
+        // Re-runs the same analysis a fresh "Run Validation" would, without the save-run side
+        // effect - used by the Excel export path.
+        public async Task<Rule46ValidationSummary> GetExportSummaryAsync(Rule46ValidationRequest request) =>
+            await AnalyseAsync(request);
+
+        // Cheap population size check - stops at a COUNT(*), no result rows loaded.
+        public async Task<int> GetPopulationCountAsync(Rule46ValidationRequest request)
+        {
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+            var (bodySql, _) = BuildValidationSqlParts(schema, request);
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = $@"WITH validation AS ({bodySql}) SELECT COUNT(*) FROM validation;";
+            return Convert.ToInt32(await command.ExecuteScalarAsync());
+        }
+
+        // Bypasses AnalyseAsync entirely - that buffers every row into a list capped at RowLimit
+        // (200,000) regardless of the real row count. Reads and writes one row at a time. Mirrors
+        // Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule46ValidationRequest request, Stream outputStream)
+        {
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+            var (bodySql, orderSql) = BuildValidationSqlParts(schema, request);
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = $@"WITH validation AS ({bodySql}) SELECT * FROM validation {orderSql};";
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetName(i)).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
         }
 
         private async Task<Rule46ValidationSummary> AnalyseAsync(Rule46ValidationRequest req)
