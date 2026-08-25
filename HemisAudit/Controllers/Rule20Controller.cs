@@ -627,22 +627,79 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule20_Foundation_Validation_{runId}.sql");
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule20ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var fileName = $"Rule20_Foundation_Validation_{Ts()}.xlsx";
-            var bytes = _export.ExportExcel(summary);
-            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                var populationCount = await _rule20.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+                }
+
+                var resolved = await _rule20.GetExportSummaryAsync(exportRequest);
+                var fileName = $"Rule20_Foundation_Validation_{Ts()}.xlsx";
+                var bytes = _export.ExportExcel(resolved);
+                return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule20ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule20.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule20ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var fileName = $"Rule20_Foundation_Validation_{Ts()}.csv";
-            var bytes = _export.ExportCsv(summary);
-            return File(bytes, "text/csv", fileName);
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                Response.ContentType = "text/csv";
+                Response.Headers.ContentDisposition = $"attachment; filename=\"Rule20_Foundation_Validation_{Ts()}.csv\"";
+                await _rule20.StreamCsvExportAsync(exportRequest, Response.Body);
+                return new EmptyResult();
+            }
+            catch (Exception ex)
+            {
+                if (!Response.HasStarted)
+                {
+                    Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return Json(new { error = ex.Message });
+                }
+                return new EmptyResult();
+            }
         }
 
         [HttpPost]
@@ -742,6 +799,36 @@ namespace HemisAudit.Controllers
             var engagementRole = await _systemDb.GetEngagementRoleAsync(clientId, user, role);
             return string.Equals(engagementRole, role, StringComparison.OrdinalIgnoreCase) &&
                    ValidationRunAccessPolicy.CanAssignedUserSignOff(engagementRole);
+        }
+
+        // Lightweight counterpart to ResolveExportSummaryAsync: resolves the table/column config
+        // needed to query fresh and confirms the caller can access this engagement, without ever
+        // loading a result row itself.
+        private async Task<Rule20ValidationRequest> ResolveExportRequestAsync(Rule20ValidationSummary summary)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
+
+            if (string.IsNullOrWhiteSpace(summary.StudTable) || string.IsNullOrWhiteSpace(summary.QualTable) ||
+                string.IsNullOrWhiteSpace(summary.CregTable) || string.IsNullOrWhiteSpace(summary.CrseTable))
+            {
+                throw new InvalidOperationException("Run Rule 20 first before downloading results.");
+            }
+
+            return new Rule20ValidationRequest
+            {
+                ClientId = summary.ClientId,
+                StudTable = summary.StudTable,
+                QualTable = summary.QualTable,
+                CregTable = summary.CregTable,
+                CrseTable = summary.CrseTable,
+                PgTypesText = summary.PgTypesText,
+                GoverningPartCodes = summary.GoverningPartCodes,
+                ColumnMapping = summary.ColumnMapping
+            };
         }
 
         private async Task<Rule20ValidationSummary> ResolveExportSummaryAsync(Rule20ValidationSummary summary)

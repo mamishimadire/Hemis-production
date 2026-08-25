@@ -156,6 +156,83 @@ namespace HemisAudit.Services
             return await AnalyseAsync(request, includeAllReviewRows: true);
         }
 
+        // Cheap population size check - runs the same server-side prep SQL as a full export but
+        // stops at a COUNT(*), no result rows loaded. Mirrors Rule12Service.GetPopulationCountAsync.
+        public async Task<int> GetPopulationCountAsync(Rule20ValidationRequest request)
+        {
+            ValidateRequest(request.StudTable, request.QualTable, request.CregTable, request.CrseTable);
+            var m = NormalizeColumnMapping(request.ColumnMapping);
+            var pgTypes = ParsePgTypes(request.PgTypesText);
+
+            await EnsureRule20IndexesAsync(request.ClientId, request.StudTable, request.QualTable, request.CregTable, request.CrseTable, m);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule20PrepSql(schema, request.StudTable, request.QualTable, request.CregTable, request.CrseTable, m, pgTypes);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            return await CountAsync(connection, "SELECT COUNT(*) FROM rule20_population;");
+        }
+
+        // Bypasses AnalyseAsync/LoadPopulationRowsAsync entirely - those buffer every row as a
+        // full Dictionary<string,string?> before anything can be written out, capped at
+        // MaxSafeReviewRows for a full export regardless of the real population size. Reads and
+        // writes one row at a time, using the query's own column names directly. Mirrors
+        // Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule20ValidationRequest request, Stream outputStream)
+        {
+            ValidateRequest(request.StudTable, request.QualTable, request.CregTable, request.CrseTable);
+            var m = NormalizeColumnMapping(request.ColumnMapping);
+            var pgTypes = ParsePgTypes(request.PgTypesText);
+
+            await EnsureRule20IndexesAsync(request.ClientId, request.StudTable, request.QualTable, request.CregTable, request.CrseTable, m);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule20PrepSql(schema, request.StudTable, request.QualTable, request.CregTable, request.CrseTable, m, pgTypes);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT * FROM rule20_population ORDER BY sample_number;";
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetName(i)).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
+        }
+
         public async Task<int?> GetClientIdForRunAsync(int runId) => await _systemDb.GetClientIdForRunAsync(runId);
 
         public async Task<Rule20WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null, bool includeSummary = true)
