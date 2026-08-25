@@ -107,7 +107,7 @@ namespace HemisAudit.Services
         {
             try
             {
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, RowLimit);
 
                 if (summary.Success && request.ClientId > 0)
                 {
@@ -134,7 +134,24 @@ namespace HemisAudit.Services
             return summary;
         }
 
-        private async Task<Rule53ValidationSummary> AnalyseAsync(Rule53ValidationRequest req)
+        public async Task<Rule53ValidationSummary> GetExportSummaryAsync(Rule53ValidationRequest request)
+            => await AnalyseAsync(request, rowLimit: null);
+
+        public async Task<int> GetPopulationCountAsync(Rule53ValidationRequest req)
+        {
+            await ValidateColumnsExistAsync(req.ClientId, req.ValpacTable, [req.ValpacSubjCol]);
+            await ValidateColumnsExistAsync(req.ClientId, req.ProdTable, [req.ProdSubjCol]);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(req.ClientId);
+            await using var connection = conn;
+
+            var (bodySql, _) = BuildValidationSqlParts(schema, req);
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"WITH validation AS ({bodySql}) SELECT COUNT(*) FROM validation;";
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
+        private async Task<Rule53ValidationSummary> AnalyseAsync(Rule53ValidationRequest req, int? rowLimit)
         {
             await ValidateColumnsExistAsync(req.ClientId, req.ValpacTable, [req.ValpacSubjCol]);
             await ValidateColumnsExistAsync(req.ClientId, req.ProdTable, [req.ProdSubjCol]);
@@ -173,7 +190,7 @@ FROM validation;";
 WITH validation AS ({bodySql})
 SELECT * FROM validation
 {orderSql}
-LIMIT @limit;";
+{(rowLimit.HasValue ? "LIMIT @limit" : "")};";
 
             var rows = new List<Rule53ValidationRow>();
             int rowNo = 0;
@@ -181,7 +198,7 @@ LIMIT @limit;";
             await using (var cmd = connection.CreateCommand())
             {
                 cmd.CommandText = rowsSql;
-                cmd.Parameters.AddWithValue("limit", RowLimit);
+                if (rowLimit.HasValue) cmd.Parameters.AddWithValue("limit", rowLimit.Value);
                 await using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {
