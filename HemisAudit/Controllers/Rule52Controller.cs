@@ -323,13 +323,25 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = runId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var fullSummary = await _rule52.GetStoredSummaryAsync(runId) ?? review.Summary!;
-            return File(_export.ExportRule52Excel(fullSummary), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule52_VALPAC_Production_Run_{runId}.xlsx");
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary!);
+            var populationCount = await _rule52.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+            var resolved = await _rule52.GetExportSummaryAsync(exportRequest);
+            return File(_export.ExportRule52Excel(resolved), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule52_VALPAC_Production_Run_{runId}.xlsx");
         }
 
         [HttpGet]
@@ -337,8 +349,9 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var fullSummary = await _rule52.GetStoredSummaryAsync(runId) ?? review.Summary!;
-            return File(_export.ExportRule52Csv(fullSummary), "text/csv", $"Rule52_VALPAC_Production_Run_{runId}.csv");
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary!);
+            var resolved = await _rule52.GetExportSummaryAsync(exportRequest);
+            return File(_export.ExportRule52Csv(resolved), "text/csv", $"Rule52_VALPAC_Production_Run_{runId}.csv");
         }
 
         [HttpGet]
@@ -359,15 +372,58 @@ namespace HemisAudit.Controllers
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule52ValidationSummary summary)
         {
-            var resolved = await ResolveExportSummaryAsync(summary);
-            return File(_export.ExportRule52Excel(resolved), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule52_VALPAC_Production_{Ts()}.xlsx");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule52.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                    throw new InvalidOperationException($"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+
+                var resolved = await _rule52.GetExportSummaryAsync(exportRequest);
+                return File(_export.ExportRule52Excel(resolved), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule52_VALPAC_Production_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule52ValidationSummary summary)
         {
-            var resolved = await ResolveExportSummaryAsync(summary);
-            return File(_export.ExportRule52Csv(resolved), "text/csv", $"Rule52_VALPAC_Production_{Ts()}.csv");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var resolved = await _rule52.GetExportSummaryAsync(exportRequest);
+                return File(_export.ExportRule52Csv(resolved), "text/csv", $"Rule52_VALPAC_Production_{Ts()}.csv");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule52ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule52.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
@@ -393,25 +449,30 @@ namespace HemisAudit.Controllers
             return review;
         }
 
-        private async Task<Rule52ValidationSummary> ResolveExportSummaryAsync(Rule52ValidationSummary summary)
+        private async Task<Rule52ValidationRequest> ResolveExportRequestAsync(Rule52ValidationSummary summary)
         {
+            if (summary == null)
+                throw new InvalidOperationException("Run Rule 52 first before downloading results.");
+
             var user = await _users.GetUserAsync(User);
-            if (summary.SavedRunId is int savedRunId && savedRunId > 0)
-            {
-                var stored = await _rule52.GetStoredSummaryAsync(savedRunId);
-                if (stored != null) return stored;
-            }
-            if (summary.ClientId > 0)
-            {
-                var workspace = await _rule52.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email);
-                if (workspace?.RunId is int workspaceRunId && workspaceRunId > 0)
-                {
-                    var stored = await _rule52.GetStoredSummaryAsync(workspaceRunId);
-                    if (stored != null) return stored;
-                }
-            }
-            return summary;
+            var role = await GetCurrentSystemRoleAsync(user);
+
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
+
+            if (string.IsNullOrWhiteSpace(summary.ValpacTable) || string.IsNullOrWhiteSpace(summary.ProdTable))
+                throw new InvalidOperationException("Run Rule 52 first before downloading results.");
+
+            return BuildRequestFromSummary(summary.ClientId, summary);
         }
+
+        private static Rule52ValidationRequest BuildRequestFromSummary(int clientId, Rule52ValidationSummary s) => new()
+        {
+            ClientId = clientId,
+            ValpacTable = s.ValpacTable, ValpacSubjCol = s.ValpacSubjCol,
+            ApprovalStatusCol = s.ApprovalStatusCol, ApprovalStatusValues = s.ApprovalStatusValues,
+            ProdTable = s.ProdTable, ProdSubjCol = s.ProdSubjCol
+        };
 
         private static bool CanDownloadSavedRun(Rule52RunReviewViewModel review, string systemRole)
             => ValidationRunAccessPolicy.CanDownloadSignedResults(systemRole, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff);

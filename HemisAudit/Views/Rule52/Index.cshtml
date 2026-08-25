@@ -717,30 +717,38 @@ window.r52Tab = function(tab) {
         renderRule52Results();
     };
 
+    async function downloadBlob(url, payload, defaultName) {
+        await window.downloadFileWithProgress({ url, method: 'POST', headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': TOKEN }, body: JSON.stringify(payload), defaultFileName, label: 'Downloading' });
+    }
+
     window.r52DlCsv = async function() {
-        if (!st.runId) return;
-        await window.downloadFileWithProgress({
-            url: API + '/DownloadCsv?runId=' + st.runId,
-            method: 'GET',
-            defaultFileName: 'Rule52_VALPAC_Production_Run_' + st.runId + '.csv',
-            label: 'Downloading CSV'
-        });
+        if (!st.summary) return;
+        try {
+            await downloadBlob(API + '/DownloadCsv', st.summary, 'Rule52_VALPAC_Production_Run_' + st.runId + '.csv');
+        } catch (err) { setWorkspaceMessage(err.message, 'error'); }
     };
 
     window.r52DlExcel = async function() {
-        if (!st.runId) return;
-        await window.downloadFileWithProgress({
-            url: API + '/DownloadExcel?runId=' + st.runId,
-            method: 'GET',
-            defaultFileName: 'Rule52_VALPAC_Production_Run_' + st.runId + '.xlsx',
-            label: 'Downloading Excel'
-        });
+        if (!st.summary) return;
+        try {
+            const info = await post(API + '/GetExportInfo', st.summary);
+            if (info?.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                    window.r52DlCsv
+                );
+                return;
+            }
+            await downloadBlob(API + '/DownloadExcel', st.summary, 'Rule52_VALPAC_Production_Run_' + st.runId + '.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, window.r52DlCsv);
+        }
     };
 
     window.r52DlSql = async function() {
         if (!st.runId) return;
         await window.downloadFileWithProgress({
-            url: API + '/DownloadSql?runId=' + st.runId,
+            url: API + '/DownloadSavedSql?runId=' + st.runId,
             method: 'GET',
             defaultFileName: 'Rule52_VALPAC_Production_Run_' + st.runId + '.sql',
             label: 'Downloading SQL'
