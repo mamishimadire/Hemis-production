@@ -570,6 +570,11 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = redirectRunId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
@@ -577,8 +582,17 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportExcel(review.Summary);
-            var scope = review.Summary.Sampled ? "Summary_and_Sample" : "Summary_and_All_Matches";
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            var populationCount = await _rule27.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+
+            var resolved = await _rule27.GetExportSummaryAsync(exportRequest);
+            var bytes = _export.ExportExcel(resolved);
+            var scope = resolved.Sampled ? "Summary_and_Sample" : "Summary_and_All_Matches";
             return File(bytes,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule27_{scope}_Run_{runId}.xlsx");
@@ -591,10 +605,24 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
             var scope = review.Summary.Sampled ? "Displayed_Sample" : "All_Matching_Records";
-            var bytes = _export.ExportCsv(review.Summary);
-            return File(bytes, "text/csv", $"Rule27_{scope}_Run_{runId}.csv");
+            Response.ContentType = "text/csv";
+            Response.Headers.ContentDisposition = $"attachment; filename=\"Rule27_{scope}_Run_{runId}.csv\"";
+            await _rule27.StreamCsvExportAsync(exportRequest, Response.Body);
+            return new EmptyResult();
         }
+
+        private static Rule27ValidationRequest BuildRequestFromSummary(int clientId, Rule27ValidationSummary summary) => new()
+        {
+            ClientId = clientId,
+            TableName = summary.TableName,
+            FilterColumn = summary.FilterColumn,
+            FilterValue = summary.FilterValue,
+            BreakdownColumn = summary.BreakdownColumn,
+            SampleSize = summary.SampleSize,
+            ShowAllRecords = summary.ShowAllRecords
+        };
 
         [HttpGet]
         public async Task<IActionResult> DownloadSavedSql(int runId)
@@ -621,23 +649,74 @@ namespace HemisAudit.Controllers
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule27ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportExcel(summary);
-            var scope = summary.Sampled ? "Summary_and_Sample" : "Summary_and_All_Matches";
-            var fileName = $"Rule27_{scope}_{Ts()}.xlsx";
-            return File(bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                fileName);
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+
+                var populationCount = await _rule27.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+                }
+
+                var resolved = await _rule27.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportExcel(resolved);
+                var scope = resolved.Sampled ? "Summary_and_Sample" : "Summary_and_All_Matches";
+                return File(bytes,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    $"Rule27_{scope}_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule27ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule27.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule27ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var scope = summary.Sampled ? "Displayed_Sample" : "All_Matching_Records";
-            var fileName = $"Rule27_{scope}_{Ts()}.csv";
-            var bytes = _export.ExportCsv(summary);
-            return File(bytes, "text/csv", fileName);
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var scope = summary.Sampled ? "Displayed_Sample" : "All_Matching_Records";
+
+                Response.ContentType = "text/csv";
+                Response.Headers.ContentDisposition = $"attachment; filename=\"Rule27_{scope}_{Ts()}.csv\"";
+                await _rule27.StreamCsvExportAsync(exportRequest, Response.Body);
+                return new EmptyResult();
+            }
+            catch (Exception ex)
+            {
+                if (!Response.HasStarted)
+                {
+                    Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return Json(new { error = ex.Message });
+                }
+                return new EmptyResult();
+            }
         }
 
         [HttpPost]
@@ -743,6 +822,20 @@ namespace HemisAudit.Controllers
                 return false;
 
             return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
+        }
+
+        private async Task<Rule27ValidationRequest> ResolveExportRequestAsync(Rule27ValidationSummary summary)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
+
+            if (string.IsNullOrWhiteSpace(summary.TableName) || string.IsNullOrWhiteSpace(summary.FilterColumn))
+                throw new InvalidOperationException("Run Rule 27 first before downloading results.");
+
+            return BuildRequestFromSummary(summary.ClientId, summary);
         }
 
         private async Task<Rule27ValidationSummary> ResolveExportSummaryAsync(Rule27ValidationSummary summary)

@@ -467,6 +467,73 @@ SELECT
             return Task.FromResult(sql.Trim());
         }
 
+        // Re-runs the same analysis a fresh "Run Validation" would, without the save-run side
+        // effect - used by the Excel export path.
+        public async Task<Rule27ValidationSummary> GetExportSummaryAsync(Rule27ValidationRequest request) =>
+            await AnalyseAsync(request);
+
+        // Cheap population size check - stops at a COUNT(*), no result rows loaded.
+        public async Task<int> GetPopulationCountAsync(Rule27ValidationRequest request)
+        {
+            var parsedValues = ParseFilterValues(request.FilterValue);
+            var normalizedValues = parsedValues.Select(NormalizeComparableValue).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using var countCommand = connection.CreateCommand();
+            var countPredicate = BuildFilterPredicate(countCommand, request.FilterColumn, parsedValues, normalizedValues);
+            countCommand.CommandText = $"SELECT COUNT(*) FROM \"{schema}\".\"{request.TableName}\" WHERE {countPredicate};";
+            return Convert.ToInt32(await countCommand.ExecuteScalarAsync());
+        }
+
+        // Bypasses AnalyseAsync entirely - that buffers every matching row as a full
+        // Dictionary<string,string?> before anything can be written out, capped at
+        // MatchingRowLimit regardless of the real match count. Reads and writes one row at a
+        // time, using the query's own column names directly. Mirrors
+        // Rule12Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule27ValidationRequest request, Stream outputStream)
+        {
+            var parsedValues = ParseFilterValues(request.FilterValue);
+            var normalizedValues = parsedValues.Select(NormalizeComparableValue).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            var predicate = BuildFilterPredicate(command, request.FilterColumn, parsedValues, normalizedValues);
+            command.CommandText = $"SELECT * FROM \"{schema}\".\"{request.TableName}\" WHERE {predicate};";
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetName(i)).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
+        }
+
         // ── Analysis ─────────────────────────────────────────────────────────────────────
 
         private async Task<Rule27ValidationSummary> AnalyseAsync(Rule27ValidationRequest request)
