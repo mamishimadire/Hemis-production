@@ -17,5 +17,7 @@ namespace HemisAudit.Services
         Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment);
         Task RemoveSignoffAsync(int runId, string reviewerEmail);
         string GenerateSql(Rule51ValidationRequest request);
+        Task<Rule51ValidationSummary> GetExportSummaryAsync(Rule51ValidationRequest request);
+        Task<int> GetPopulationCountAsync(Rule51ValidationRequest request);
     }
 }

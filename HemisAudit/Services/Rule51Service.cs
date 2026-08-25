@@ -162,7 +162,7 @@ namespace HemisAudit.Services
         {
             try
             {
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, RowLimit);
 
                 if (summary.Success && request.ClientId > 0)
                 {
@@ -180,7 +180,33 @@ namespace HemisAudit.Services
             catch (Exception ex) { return new Rule51ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<Rule51ValidationSummary> AnalyseAsync(Rule51ValidationRequest req)
+        public async Task<Rule51ValidationSummary> GetExportSummaryAsync(Rule51ValidationRequest request)
+            => await AnalyseAsync(request, rowLimit: null);
+
+        public async Task<int> GetPopulationCountAsync(Rule51ValidationRequest req)
+        {
+            var valpacTable = Sanitise(req.ValpacTable);
+            var prodTable   = Sanitise(req.ProdTable);
+            var mappings    = SanitizeMappings(GetMappings(req));
+            if (mappings.Count == 0) throw new InvalidOperationException("At least one column mapping is required.");
+
+            var col049             = !string.IsNullOrWhiteSpace(req.ValpacCol049) ? Sanitise(req.ValpacCol049) : null;
+            var saValues           = ParseSaValues(req.SaNationalValues);
+            var zPlaceholders      = ParseZPlaceholders(req.ValpacCol008ZPlaceholders);
+            var cregTable          = !string.IsNullOrWhiteSpace(req.CregTable) ? Sanitise(req.CregTable) : null;
+            var cregIdCol          = !string.IsNullOrWhiteSpace(req.CregIdCol) ? Sanitise(req.CregIdCol) : null;
+            var cregCompletionCol  = !string.IsNullOrWhiteSpace(req.CregCompletionStatusCol) ? Sanitise(req.CregCompletionStatusCol) : null;
+            var cregCompletionVals = ParseFilterValues(req.CregCompletionStatusValues);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(req.ClientId);
+            await using var connection = conn;
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = BuildPopulationCountSql(schema, valpacTable, prodTable, mappings, col049, saValues, zPlaceholders, cregTable, cregIdCol, cregCompletionCol, cregCompletionVals);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            return await reader.ReadAsync() ? GetInt(reader, 0) : 0;
+        }
+
+        private async Task<Rule51ValidationSummary> AnalyseAsync(Rule51ValidationRequest req, int? rowLimit)
         {
             var valpacTable = Sanitise(req.ValpacTable);
             var prodTable   = Sanitise(req.ProdTable);
@@ -221,7 +247,7 @@ namespace HemisAudit.Services
                 }
             }
 
-            var reviewRows = await LoadRowsAsync(connection, schema, valpacTable, prodTable, RowLimit, mappings, col049, saValues, zPlaceholders, cregTable, cregIdCol, cregCompletionCol, cregCompletionVals);
+            var reviewRows = await LoadRowsAsync(connection, schema, valpacTable, prodTable, rowLimit, mappings, col049, saValues, zPlaceholders, cregTable, cregIdCol, cregCompletionCol, cregCompletionVals);
 
             var foreignExemptCount = reviewRows.Count(r => string.Equals(ReadValue(r.DisplayValues, "FOREIGN_NATIONAL_EXEMPT"), "1"));
             var controlSummaries   = BuildControlSummaries(totalTested, matched, req.ValpacTable, req.ProdTable, mappings.Count);

@@ -302,6 +302,30 @@ window.toggleAccordion = function (section) {
         await window.downloadFileWithProgress({ url, method:'POST', headers:{'Content-Type':'application/json','RequestVerificationToken':token}, body:JSON.stringify(payload), defaultFileName:defaultName, label:'Downloading' });
     }
 
+    async function downloadCsvFile() {
+        if (!state.summary) throw new Error('Run Rule 51 first before downloading the CSV results.');
+        await downloadBlob(`${apiBase}/DownloadCsv`, state.summary, 'Rule51_VALPAC_Production.csv');
+    }
+
+    async function downloadExcelFile() {
+        if (!state.summary) throw new Error('Run Rule 51 first before downloading the Excel results.');
+
+        const info = await postJson(`${apiBase}/GetExportInfo`, state.summary);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsvFile
+            );
+            return;
+        }
+
+        try {
+            await downloadBlob(`${apiBase}/DownloadExcel`, state.summary, 'Rule51_VALPAC_Production.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+        }
+    }
+
     function populateSelect(sel, values, selected) {
         if (!sel) return;
         sel.innerHTML = '<option value="">Select table</option>';
@@ -1023,8 +1047,8 @@ window.toggleAccordion = function (section) {
         els.downloadAllBtn?.addEventListener('click', async () => {
             try {
                 if (!state.summary) throw new Error('Run Rule 51 first.');
-                if (document.getElementById('chkExcel')?.checked) await downloadBlob(`${apiBase}/DownloadExcel`,state.summary,'Rule51_VALPAC_Production.xlsx');
-                if (document.getElementById('chkCsv')?.checked)   await downloadBlob(`${apiBase}/DownloadCsv`,state.summary,'Rule51_VALPAC_Production.csv');
+                if (document.getElementById('chkExcel')?.checked) await downloadExcelFile();
+                if (document.getElementById('chkCsv')?.checked)   await downloadCsvFile();
                 if (document.getElementById('chkSql')?.checked)   await downloadBlob(`${apiBase}/DownloadSql`,getRequest(),'Rule51_VALPAC_Production.sql');
             } catch (err) { setWorkspaceState(err.message||'Download failed.','error'); }
         });
@@ -1032,8 +1056,8 @@ window.toggleAccordion = function (section) {
 
     els.signoffBtn?.addEventListener('click', () => signoffWorkspace().catch(err => { hideSpinner(); setWorkspaceState(err.message,'error'); }));
     els.removeSignoffBtn?.addEventListener('click', () => removeWorkspaceSignoff().catch(err => { hideSpinner(); setWorkspaceState(err.message,'error'); }));
-    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => state.summary&&downloadBlob(`${apiBase}/DownloadExcel`,state.summary,'Rule51_VALPAC_Production.xlsx').catch(err=>setWorkspaceState(err.message,'error')));
-    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => state.summary&&downloadBlob(`${apiBase}/DownloadCsv`,state.summary,'Rule51_VALPAC_Production.csv').catch(err=>setWorkspaceState(err.message,'error')));
+    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => downloadExcelFile().catch(err=>setWorkspaceState(err.message,'error')));
+    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => downloadCsvFile().catch(err=>setWorkspaceState(err.message,'error')));
     document.getElementById('downloadSqlBtn')?.addEventListener('click', () => downloadBlob(`${apiBase}/DownloadSql`,getRequest(),'Rule51_VALPAC_Production.sql').catch(err=>setWorkspaceState(err.message,'error')));
     els.clientId?.addEventListener('change', () => {
         if (els.datasetsLink) els.datasetsLink.href = els.clientId.value ? '/EngagementDatasets?clientId=' + els.clientId.value : '#';
