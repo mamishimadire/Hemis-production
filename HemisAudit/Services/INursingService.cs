@@ -17,5 +17,7 @@ namespace HemisAudit.Services
         Task<NursingWorkspaceSaveResult> BeginWorkspaceEditAsync(int runId, string reviewerEmail, string? reviewerName = null);
         Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment);
         Task RemoveSignoffAsync(int runId, string reviewerEmail);
+        Task<NursingValidationSummary> GetExportSummaryAsync(NursingValidationRequest request);
+        Task<int> GetPopulationCountAsync(NursingValidationRequest request);
     }
 }

@@ -678,9 +678,25 @@ window.toggleAccordion = function (section) {
     function dl(url, filename) { return window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' }); }
     function fileStamp() { return new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', ''); }
 
+    async function downloadExcelSaved(runId, filename) {
+        try {
+            const info = await fetch(`${apiBase}/GetExportInfo?runId=${runId}`).then(r => r.json());
+            if (info && info.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                    () => dl(`${apiBase}/DownloadSavedCsv?runId=${runId}`, filename.replace(/\.xlsx$/, '.csv'))
+                );
+                return;
+            }
+            await dl(`${apiBase}/DownloadSavedExcel?runId=${runId}`, filename);
+        } catch (error) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${error.message}`, () => dl(`${apiBase}/DownloadSavedCsv?runId=${runId}`, filename.replace(/\.xlsx$/, '.csv')));
+        }
+    }
+
     document.getElementById('downloadExcelBtn')?.addEventListener('click', () => {
         if (!state.currentRunId) { setWorkspaceState('Run Rule 73 first before downloading Excel results.', 'warning'); return; }
-        dl(`${apiBase}/DownloadSavedExcel?runId=${state.currentRunId}`, `Rule73_Nursing_${fileStamp()}.xlsx`).catch(error => setWorkspaceState(error.message, 'error'));
+        downloadExcelSaved(state.currentRunId, `Rule73_Nursing_${fileStamp()}.xlsx`);
     });
     document.getElementById('downloadCsvBtn')?.addEventListener('click', () => {
         if (!state.currentRunId) { setWorkspaceState('Run Rule 73 first before downloading CSV results.', 'warning'); return; }
@@ -693,7 +709,7 @@ window.toggleAccordion = function (section) {
     document.getElementById('downloadAllBtn')?.addEventListener('click', async () => {
         if (!state.currentRunId) { setWorkspaceState('Save the workspace before downloading.', 'warning'); return; }
         const id = state.currentRunId; const stamp = fileStamp();
-        await dl(`${apiBase}/DownloadSavedExcel?runId=${id}`, `Rule73_Run_${id}_${stamp}.xlsx`);
+        await downloadExcelSaved(id, `Rule73_Run_${id}_${stamp}.xlsx`);
         await dl(`${apiBase}/DownloadSavedCsv?runId=${id}`, `Rule73_Run_${id}_${stamp}.csv`);
         await dl(`${apiBase}/DownloadSavedSql?runId=${id}`, `Rule73_Run_${id}_${stamp}.sql`);
     });
