@@ -129,7 +129,7 @@ WHERE UPPER(TRIM(CAST(S.""{m.StudStatusCol}"" AS text))) IN ({studStatusSql})
                 request.ColumnMapping = NormalizeMapping(request.ColumnMapping);
                 request.StudStatusValue = NormalizeFilterValue(request.StudStatusValue, "N");
 
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, RowLimit);
 
                 if (summary.Success && request.ClientId > 0)
                 {
@@ -147,7 +147,30 @@ WHERE UPPER(TRIM(CAST(S.""{m.StudStatusCol}"" AS text))) IN ({studStatusSql})
             catch (Exception ex) { return new Rule61ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<Rule61ValidationSummary> AnalyseAsync(Rule61ValidationRequest req)
+        public async Task<Rule61ValidationSummary> GetExportSummaryAsync(Rule61ValidationRequest request)
+            => await AnalyseAsync(request, rowLimit: null);
+
+        public async Task<int> GetPopulationCountAsync(Rule61ValidationRequest req)
+        {
+            var m = NormalizeMapping(req.ColumnMapping);
+            var pgList = ParsePgTypes(req.PgTypesText);
+            if (pgList.Count == 0) return 0;
+
+            await ValidateColumnsExistAsync(req.ClientId, req.StudTable, [m.StudStudentNoCol, m.StudStatusCol, m.StudQualCodeCol, m.StudIdCol, m.StudResearchTimeCol]);
+            await ValidateColumnsExistAsync(req.ClientId, req.QualTable, [m.QualQualCodeCol, m.QualNameCol, m.QualTypeCol]);
+            await ValidateColumnsExistAsync(req.ClientId, req.PqmTable, [m.PqmNameCol, m.PqmResearchTimeCol]);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(req.ClientId);
+            await using var connection = conn;
+
+            var pgSql = BuildInList(pgList);
+            var (bodySql, _) = BuildValidationSqlParts(schema, req.StudTable, req.QualTable, req.PqmTable, m, pgSql, req.StudStatusValue);
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"WITH validation AS ({bodySql}) SELECT COUNT(*) FROM validation;";
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
+        private async Task<Rule61ValidationSummary> AnalyseAsync(Rule61ValidationRequest req, int? rowLimit)
         {
             var m = NormalizeMapping(req.ColumnMapping);
             var pgList = ParsePgTypes(req.PgTypesText);
@@ -190,7 +213,7 @@ FROM validation;";
 WITH validation AS ({bodySql})
 SELECT * FROM validation
 {orderSql}
-LIMIT @limit;";
+{(rowLimit.HasValue ? "LIMIT @limit" : "")};";
 
             var passRows = new List<Rule61ReviewRow>();
             var failRows = new List<Rule61ReviewRow>();
@@ -199,7 +222,7 @@ LIMIT @limit;";
             await using (var cmd = connection.CreateCommand())
             {
                 cmd.CommandText = rowsSql;
-                cmd.Parameters.AddWithValue("limit", RowLimit);
+                if (rowLimit.HasValue) cmd.Parameters.AddWithValue("limit", rowLimit.Value);
                 await using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {
