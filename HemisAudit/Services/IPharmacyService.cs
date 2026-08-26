@@ -17,5 +17,7 @@ namespace HemisAudit.Services
         Task<PharmacyWorkspaceSaveResult> BeginWorkspaceEditAsync(int runId, string reviewerEmail, string? reviewerName = null);
         Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment);
         Task RemoveSignoffAsync(int runId, string reviewerEmail);
+        Task<PharmacyValidationSummary> GetExportSummaryAsync(PharmacyValidationRequest request);
+        Task<int> GetPopulationCountAsync(PharmacyValidationRequest request);
     }
 }

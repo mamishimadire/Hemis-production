@@ -285,12 +285,24 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = runId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var fullSummary = await _pharmacy.GetStoredSummaryAsync(runId) ?? review.Summary;
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            var populationCount = await _pharmacy.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+            var fullSummary = await _pharmacy.GetExportSummaryAsync(exportRequest);
             var rows = (fullSummary.ReviewRows ?? new()).Select(r => (
                 r.DisplayValues.TryGetValue("SOURCE_QUAL", out var q) ? q ?? "" : "",
                 r.DisplayValues.TryGetValue("SOURCE_SURNAME", out var s) ? s ?? "" : "",
@@ -306,7 +318,7 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var fullSummary = await _pharmacy.GetStoredSummaryAsync(runId) ?? review.Summary;
+            var fullSummary = await _pharmacy.GetExportSummaryAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
             var rows = (fullSummary.ReviewRows ?? new()).Select(r => (
                 r.DisplayValues.TryGetValue("SOURCE_QUAL", out var q) ? q ?? "" : "",
                 r.DisplayValues.TryGetValue("SOURCE_SURNAME", out var s) ? s ?? "" : "",
@@ -314,6 +326,20 @@ namespace HemisAudit.Controllers
                 string.Equals(r.ValidationResult, "PASS", StringComparison.OrdinalIgnoreCase) ? (r.DisplayValues.TryGetValue("SOURCE_QUAL", out var pq) ? pq ?? "" : "") : "",
                 r.DisplayValues.TryGetValue("PRODUCTION_SURNAME", out var ps) ? ps ?? "" : ""));
             return File(_export.ExportQualSurnameCsv(rows), "text/csv", $"Rule72_Pharmacy_Run_{runId}.csv");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: false);
+            if (review == null) return NotFound();
+            var populationCount = await _pharmacy.GetPopulationCountAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpGet]
