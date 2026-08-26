@@ -123,7 +123,7 @@ WHERE UPPER(TRIM(CAST(""{request.StudFulfilledCol}"" AS text))) = '{fval}';");
         {
             try
             {
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, RowLimit);
 
                 if (summary.Success && request.ClientId > 0)
                 {
@@ -141,7 +141,33 @@ WHERE UPPER(TRIM(CAST(""{request.StudFulfilledCol}"" AS text))) = '{fval}';");
             catch (Exception ex) { return new Rule55ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<Rule55ValidationSummary> AnalyseAsync(Rule55ValidationRequest req)
+        public async Task<Rule55ValidationSummary> GetExportSummaryAsync(Rule55ValidationRequest request)
+            => await AnalyseAsync(request, rowLimit: null);
+
+        public async Task<int> GetPopulationCountAsync(Rule55ValidationRequest req)
+        {
+            var requiredStudCols = new List<string> { req.StudIdCol, req.StudQualCodeCol, req.StudFulfilledCol };
+            await ValidateColumnsExistAsync(req.ClientId, req.StudTable, requiredStudCols);
+            await ValidateColumnsExistAsync(req.ClientId, req.QualTable, [req.QualCodeCol, req.QualNameCol, req.QualTypeCol, req.QualApprovalCol]);
+
+            var hasPqm = !string.IsNullOrWhiteSpace(req.PqmTable) &&
+                         !string.IsNullOrWhiteSpace(req.PqmQualNameColumn) &&
+                         !string.IsNullOrWhiteSpace(req.PqmQualTypeColumn);
+            if (hasPqm) await ValidateColumnsExistAsync(req.ClientId, req.PqmTable, [req.PqmQualNameColumn, req.PqmQualTypeColumn]);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(req.ClientId);
+            await using var connection = conn;
+
+            var fval = NormalizeFilterValue(req.StudFulfilledFilterValue, "W");
+            var approvalValue = NormalizeFilterValue(req.QualApprovalFilterValue, "A");
+            var bodySql = BuildValidationSql(schema, req, fval, approvalValue, hasPqm);
+
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"WITH validation AS ({bodySql}) SELECT COUNT(*) FROM validation;";
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
+        private async Task<Rule55ValidationSummary> AnalyseAsync(Rule55ValidationRequest req, int? rowLimit)
         {
             var requiredStudCols = new List<string> { req.StudIdCol, req.StudQualCodeCol, req.StudFulfilledCol };
             await ValidateColumnsExistAsync(req.ClientId, req.StudTable, requiredStudCols);
@@ -185,8 +211,8 @@ FROM validation;";
 
             await using (var cmd = connection.CreateCommand())
             {
-                cmd.CommandText = $"{bodySql}\nLIMIT @limit;";
-                cmd.Parameters.AddWithValue("limit", RowLimit);
+                cmd.CommandText = rowLimit.HasValue ? $"{bodySql}\nLIMIT @limit;" : $"{bodySql};";
+                if (rowLimit.HasValue) cmd.Parameters.AddWithValue("limit", rowLimit.Value);
                 await using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {
