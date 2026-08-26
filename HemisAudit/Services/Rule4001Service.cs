@@ -89,7 +89,7 @@ namespace HemisAudit.Services
         {
             try
             {
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, ExceptionSaveLimit);
 
                 if (summary.Success && request.ClientId > 0)
                     summary.SavedRunId = await SaveValidationRunAsync(request, summary, userEmail, userName);
@@ -100,7 +100,32 @@ namespace HemisAudit.Services
             catch (Exception ex) { return new Rule4001ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<Rule4001ValidationSummary> AnalyseAsync(Rule4001ValidationRequest req)
+        public async Task<Rule4001ValidationSummary?> GetExportSummaryByRunIdAsync(int runId)
+        {
+            var stored = await _systemDb.GetRuleRunByIdAsync(runId, 4001);
+            if (stored == null) return null;
+
+            var req = new Rule4001ValidationRequest
+            {
+                ClientId = stored.ClientId,
+                ValpacTable = stored.StudTable,
+                SfteTable = stored.DeceasedTable,
+                ValpacKeyCol = stored.StudColumn,
+                SfteKeyCol = stored.DeceasedColumn
+            };
+
+            var summary = await AnalyseAsync(req, exceptionLimit: null);
+            summary.SavedRunId = runId;
+            return summary;
+        }
+
+        public async Task<int> GetPopulationCountByRunIdAsync(int runId)
+        {
+            var summary = await GetExportSummaryByRunIdAsync(runId);
+            return summary?.TotalCount ?? 0;
+        }
+
+        private async Task<Rule4001ValidationSummary> AnalyseAsync(Rule4001ValidationRequest req, int? exceptionLimit = null)
         {
             var valpacKey = string.IsNullOrWhiteSpace(req.ValpacKeyCol) ? "_037" : req.ValpacKeyCol;
             var sfteKey   = string.IsNullOrWhiteSpace(req.SfteKeyCol)   ? "_037" : req.SfteKeyCol;
@@ -156,9 +181,9 @@ namespace HemisAudit.Services
                 MissingInValpacCount = exceptionRows.Count(r => r.OverallResult == "MISSING-VALPAC"),
                 ExceptionRate        = rowNo == 0 ? 0m : Math.Round(exCount * 100m / rowNo, 2),
                 Status               = exCount == 0 ? "PASS" : "FAIL",
-                ReviewRows           = exceptionRows.Take(ExceptionSaveLimit).ToList(),
+                ReviewRows           = exceptionLimit.HasValue ? exceptionRows.Take(exceptionLimit.Value).ToList() : exceptionRows,
                 AgreeSample          = agreeRows.Take(AgreeSaveLimit).ToList(),
-                Warning              = BuildScaleWarning(exceptionRows.Count, Math.Min(exceptionRows.Count, ExceptionSaveLimit), agreeRows.Count, Math.Min(agreeRows.Count, AgreeSaveLimit))
+                Warning              = BuildScaleWarning(exceptionRows.Count, exceptionLimit.HasValue ? Math.Min(exceptionRows.Count, exceptionLimit.Value) : exceptionRows.Count, agreeRows.Count, Math.Min(agreeRows.Count, AgreeSaveLimit))
             };
         }
 

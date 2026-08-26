@@ -388,7 +388,21 @@ window.r4001Tab = function(tab) {
     function r4001DownloadSaved(url, filename) {
         return window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
     }
-    window.r4001DlAll = function() { if (st.runId) r4001DownloadSaved(API + '/DownloadExcel?runId=' + st.runId, 'Rule4001_Run_' + st.runId + '.xlsx'); };
+    function r4001DownloadExcelSaved(runId) {
+        return fetch(API + '/GetExportInfo?runId=' + runId).then(function(r) { return r.json(); }).then(function(info) {
+            if (info && info.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    'This engagement has ' + (info.totalRecords || 0).toLocaleString() + ' records - too many to include in a single Excel file.',
+                    function() { r4001DownloadSaved(API + '/DownloadCsv?runId=' + runId, 'Rule4001_Run_' + runId + '.csv'); }
+                );
+                return;
+            }
+            return r4001DownloadSaved(API + '/DownloadExcel?runId=' + runId, 'Rule4001_Run_' + runId + '.xlsx');
+        }).catch(function(err) {
+            window.showExcelTooLargeModal("This engagement's Excel export failed: " + err.message, function() { r4001DownloadSaved(API + '/DownloadCsv?runId=' + runId, 'Rule4001_Run_' + runId + '.csv'); });
+        });
+    }
+    window.r4001DlAll = function() { if (st.runId) r4001DownloadExcelSaved(st.runId); };
 
     /* ── Workspace ── */
     window.r4001SaveWorkspace = function() {
@@ -529,7 +543,7 @@ window.r4001Tab = function(tab) {
         renderMissing(summary);
         renderAgree(summary);
         if (summary && st.runId) {
-            var dlE = g('r4001DlExcel'); if (dlE) dlE.onclick = function() { r4001DownloadSaved(API + '/DownloadExcel?runId=' + st.runId, 'Rule4001_Run_' + st.runId + '.xlsx'); };
+            var dlE = g('r4001DlExcel'); if (dlE) dlE.onclick = function() { r4001DownloadExcelSaved(st.runId); };
             var dlC = g('r4001DlCsv');   if (dlC) dlC.onclick = function() { r4001DownloadSaved(API + '/DownloadCsv?runId='   + st.runId, 'Rule4001_Run_' + st.runId + '.csv'); };
             var dlS = g('r4001DlSql');   if (dlS) dlS.onclick = function() { r4001DownloadSaved(API + '/DownloadSql?runId='   + st.runId, 'Rule4001_Run_' + st.runId + '.sql'); };
         }

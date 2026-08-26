@@ -233,14 +233,24 @@ namespace HemisAudit.Controllers
             return Json(result);
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadExcel([FromQuery] int runId)
         {
             var user    = await _users.GetUserAsync(User);
             var role    = await GetCurrentSystemRoleAsync(user);
-            var summary = await _rule4001.GetFullSummaryByRunIdAsync(runId);
+            var summary = await _rule4001.GetExportSummaryByRunIdAsync(runId);
             if (summary == null || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
                 return NotFound();
+            if (summary.TotalCount > ExcelExportRowSafetyLimit)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = $"This engagement has {summary.TotalCount:N0} records, too many to export as one Excel file." });
+            }
             var bytes = BuildXlsxBytes(summary);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule40_1_StaffPresence_Run_{runId}.xlsx");
         }
@@ -250,11 +260,28 @@ namespace HemisAudit.Controllers
         {
             var user    = await _users.GetUserAsync(User);
             var role    = await GetCurrentSystemRoleAsync(user);
-            var summary = await _rule4001.GetFullSummaryByRunIdAsync(runId);
+            var summary = await _rule4001.GetExportSummaryByRunIdAsync(runId);
             if (summary == null || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
                 return NotFound();
             var bytes = BuildCsvBytes(summary);
             return File(bytes, "text/csv", $"Rule40_1_StaffPresence_Run_{runId}.csv");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo([FromQuery] int runId)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            var summary = await _rule4001.GetFullSummaryByRunIdAsync(runId);
+            if (summary == null || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                return NotFound();
+            var populationCount = await _rule4001.GetPopulationCountByRunIdAsync(runId);
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpGet]
