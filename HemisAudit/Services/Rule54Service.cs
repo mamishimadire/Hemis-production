@@ -125,7 +125,7 @@ INNER JOIN ""{schema}"".""{qt}"" q ON UPPER(TRIM(CAST(c.""{ci}"" AS text))) = UP
         {
             try
             {
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, RowLimit);
 
                 if (summary.Success && request.ClientId > 0)
                 {
@@ -143,7 +143,25 @@ INNER JOIN ""{schema}"".""{qt}"" q ON UPPER(TRIM(CAST(c.""{ci}"" AS text))) = UP
             catch (Exception ex) { return new Rule54ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<Rule54ValidationSummary> AnalyseAsync(Rule54ValidationRequest req)
+        public async Task<Rule54ValidationSummary> GetExportSummaryAsync(Rule54ValidationRequest request)
+            => await AnalyseAsync(request, rowLimit: null);
+
+        public async Task<int> GetPopulationCountAsync(Rule54ValidationRequest req)
+        {
+            await ValidateColumnsExistAsync(req.ClientId, req.CredTable, [req.CredIdCol, req.CredCourseCol, req.CredCreditCol, req.CredResearch1Col]);
+            await ValidateColumnsExistAsync(req.ClientId, req.QualTable, [req.QualIdCol, req.QualNameCol]);
+            await ValidateColumnsExistAsync(req.ClientId, req.PqmTable,  [req.PqmNameCol, req.PqmResearch1Col]);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(req.ClientId);
+            await using var connection = conn;
+
+            var bodySql = BuildValidationSql(schema, req);
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"WITH validation AS ({bodySql}) SELECT COUNT(*) FROM validation;";
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
+        private async Task<Rule54ValidationSummary> AnalyseAsync(Rule54ValidationRequest req, int? rowLimit)
         {
             await ValidateColumnsExistAsync(req.ClientId, req.CredTable, [req.CredIdCol, req.CredCourseCol, req.CredCreditCol, req.CredResearch1Col]);
             await ValidateColumnsExistAsync(req.ClientId, req.QualTable, [req.QualIdCol, req.QualNameCol]);
@@ -179,8 +197,8 @@ FROM validation;";
 
             await using (var cmd = connection.CreateCommand())
             {
-                cmd.CommandText = $"{bodySql}\nLIMIT @limit;";
-                cmd.Parameters.AddWithValue("limit", RowLimit);
+                cmd.CommandText = rowLimit.HasValue ? $"{bodySql}\nLIMIT @limit;" : $"{bodySql};";
+                if (rowLimit.HasValue) cmd.Parameters.AddWithValue("limit", rowLimit.Value);
                 await using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {

@@ -1155,7 +1155,20 @@ function fileStamp() {
 
 async function downloadExcel() {
     if (!state.validationResult) { alert('Run validation first.'); return; }
-    await downloadPost('/Rule54/DownloadExcel', state.validationResult, `Rule54_CRED_QUAL_PQM_Validation_${fileStamp()}.xlsx`);
+
+    try {
+        const info = await post('/Rule54/GetExportInfo', state.validationResult);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsv
+            );
+            return;
+        }
+        await downloadPost('/Rule54/DownloadExcel', state.validationResult, `Rule54_CRED_QUAL_PQM_Validation_${fileStamp()}.xlsx`);
+    } catch (err) {
+        window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsv);
+    }
 }
 async function downloadCsv() {
     if (!state.validationResult) { alert('Run validation first.'); return; }

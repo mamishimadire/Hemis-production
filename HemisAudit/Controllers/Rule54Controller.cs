@@ -479,12 +479,25 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = redirectRunId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var bytes = _export.ExportRule54Excel(review.Summary);
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            var populationCount = await _rule54.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+            var resolved = await _rule54.GetExportSummaryAsync(exportRequest);
+            var bytes = _export.ExportRule54Excel(resolved);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule54_CRED_QUAL_PQM_Validation_Run_{runId}.xlsx");
         }
@@ -494,7 +507,8 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var bytes = _export.ExportRule54Csv(review.Summary, false);
+            var resolved = await _rule54.GetExportSummaryAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            var bytes = _export.ExportRule54Csv(resolved, false);
             return File(bytes, "text/csv", $"Rule54_Validation_Results_Run_{runId}.csv");
         }
 
@@ -503,7 +517,8 @@ namespace HemisAudit.Controllers
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var bytes = _export.ExportRule54Csv(review.Summary, true);
+            var resolved = await _rule54.GetExportSummaryAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            var bytes = _export.ExportRule54Csv(resolved, true);
             return File(bytes, "text/csv", $"Rule54_CRED_QUAL_PQM_Exceptions_Run_{runId}.csv");
         }
 
@@ -534,26 +549,78 @@ namespace HemisAudit.Controllers
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule54ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportRule54Excel(summary);
-            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"Rule54_CRED_QUAL_PQM_Validation_{Ts()}.xlsx");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule54.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                    throw new InvalidOperationException($"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+
+                var resolved = await _rule54.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportRule54Excel(resolved);
+                return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    $"Rule54_CRED_QUAL_PQM_Validation_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule54ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportRule54Csv(summary, false);
-            return File(bytes, "text/csv", $"Rule54_Validation_Results_{Ts()}.csv");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var resolved = await _rule54.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportRule54Csv(resolved, false);
+                return File(bytes, "text/csv", $"Rule54_Validation_Results_{Ts()}.csv");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadExceptionsCsv([FromBody] Rule54ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportRule54Csv(summary, true);
-            return File(bytes, "text/csv", $"Rule54_CRED_QUAL_PQM_Exceptions_{Ts()}.csv");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var resolved = await _rule54.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportRule54Csv(resolved, true);
+                return File(bytes, "text/csv", $"Rule54_CRED_QUAL_PQM_Exceptions_{Ts()}.csv");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule54ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule54.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
@@ -627,25 +694,31 @@ namespace HemisAudit.Controllers
             return ValidationRunAccessPolicy.IsAssignedDataAnalyst(engagementRole);
         }
 
-        private async Task<Rule54ValidationSummary> ResolveExportSummaryAsync(Rule54ValidationSummary summary)
+        private async Task<Rule54ValidationRequest> ResolveExportRequestAsync(Rule54ValidationSummary summary)
         {
+            if (summary == null)
+                throw new InvalidOperationException("Run Rule 54 first before downloading results.");
+
             var user = await _users.GetUserAsync(User);
-            if (summary.SavedRunId is int savedRunId && savedRunId > 0)
-            {
-                var review = await _rule54.GetSavedRunAsync(savedRunId, user?.Email);
-                if (review?.Summary != null) return review.Summary;
-            }
-            if (summary.ClientId > 0)
-            {
-                var workspace = await _rule54.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email);
-                if (workspace?.RunId is int workspaceRunId && workspaceRunId > 0)
-                {
-                    var review = await _rule54.GetSavedRunAsync(workspaceRunId, user?.Email);
-                    if (review?.Summary != null) return review.Summary;
-                }
-            }
-            return summary;
+            var role = await GetCurrentSystemRoleAsync(user);
+
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
+
+            if (string.IsNullOrWhiteSpace(summary.CredTable) || string.IsNullOrWhiteSpace(summary.QualTable) || string.IsNullOrWhiteSpace(summary.PqmTable))
+                throw new InvalidOperationException("Run Rule 54 first before downloading results.");
+
+            return BuildRequestFromSummary(summary.ClientId, summary);
         }
+
+        private static Rule54ValidationRequest BuildRequestFromSummary(int clientId, Rule54ValidationSummary s) => new()
+        {
+            ClientId = clientId,
+            CredTable = s.CredTable, CredIdCol = s.CredIdCol, CredCourseCol = s.CredCourseCol,
+            CredCreditCol = s.CredCreditCol, CredResearch1Col = s.CredResearch1Col,
+            QualTable = s.QualTable, QualIdCol = s.QualIdCol, QualNameCol = s.QualNameCol,
+            PqmTable = s.PqmTable, PqmNameCol = s.PqmNameCol, PqmResearch1Col = s.PqmResearch1Col
+        };
 
         private async Task<object> RequireDataAnalystAsync<T>(Func<Task<T>> action)
         {
