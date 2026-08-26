@@ -125,7 +125,7 @@ FROM results;";
         {
             try
             {
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, RowLimit);
 
                 if (summary.Success && request.ClientId > 0)
                 {
@@ -143,7 +143,27 @@ FROM results;";
             catch (Exception ex) { return new RadiographyValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<RadiographyValidationSummary> AnalyseAsync(RadiographyValidationRequest request)
+        public async Task<RadiographyValidationSummary> GetExportSummaryAsync(RadiographyValidationRequest request)
+            => await AnalyseAsync(request, rowLimit: null);
+
+        public async Task<int> GetPopulationCountAsync(RadiographyValidationRequest request)
+        {
+            await ValidateColumnsExistAsync(request.ClientId, request.RadiographyTable, [request.QualificationColumn, request.SurnameColumn]);
+            await ValidateColumnsExistAsync(request.ClientId, request.ProductionTable, [request.QualificationColumn]);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            var qualCol = Sanitise(request.QualificationColumn);
+            var surnameCol = Sanitise(request.SurnameColumn);
+            var ctes = BuildValidationCtes(schema, request.RadiographyTable, request.ProductionTable, qualCol, surnameCol);
+
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"WITH {ctes} SELECT COUNT(*) FROM results;";
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
+        private async Task<RadiographyValidationSummary> AnalyseAsync(RadiographyValidationRequest request, int? rowLimit)
         {
             await ValidateColumnsExistAsync(request.ClientId, request.RadiographyTable, [request.QualificationColumn, request.SurnameColumn]);
             await ValidateColumnsExistAsync(request.ClientId, request.ProductionTable, [request.QualificationColumn]);
@@ -186,8 +206,8 @@ FROM results;";
 WITH {ctes}
 SELECT source_qual, source_surname, matched_surname, validation_result FROM results
 ORDER BY CASE WHEN validation_result = 'FAIL' THEN 0 ELSE 1 END, source_qual
-LIMIT @limit;";
-                cmd.Parameters.AddWithValue("limit", RowLimit);
+{(rowLimit.HasValue ? "LIMIT @limit" : "")};";
+                if (rowLimit.HasValue) cmd.Parameters.AddWithValue("limit", rowLimit.Value);
                 await using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {

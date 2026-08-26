@@ -17,5 +17,7 @@ namespace HemisAudit.Services
         Task<RadiographyWorkspaceSaveResult> BeginWorkspaceEditAsync(int runId, string reviewerEmail, string? reviewerName = null);
         Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment);
         Task RemoveSignoffAsync(int runId, string reviewerEmail);
+        Task<RadiographyValidationSummary> GetExportSummaryAsync(RadiographyValidationRequest request);
+        Task<int> GetPopulationCountAsync(RadiographyValidationRequest request);
     }
 }
