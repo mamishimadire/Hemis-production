@@ -904,33 +904,52 @@ window.toggleAccordion = function (section) {
         setWorkspaceState(error.message, 'error');
     }));
 
-    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => {
+    async function downloadCsvFile() {
+        const payload = getSummaryDownloadPayload();
+        if (!payload) { setWorkspaceState('Run Rule 64 first before downloading CSV results.', 'warning'); return; }
+        await downloadBlob(`${apiBase}/DownloadCsv`, payload, 'Rule64_STUD_CREG_Student_Number_Validation.csv');
+    }
+
+    document.getElementById('downloadExcelBtn')?.addEventListener('click', async () => {
         const payload = getSummaryDownloadPayload();
         if (!payload) {
             setWorkspaceState('Run Rule 64 first before downloading Excel results.', 'warning');
             return;
         }
 
-        downloadBlob(`${apiBase}/DownloadExcel`, payload, 'Rule64_STUD_CREG_Student_Number_Validation.xlsx')
-            .catch(error => setWorkspaceState(error.message, 'error'));
-    });
-    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => {
-        const payload = getSummaryDownloadPayload();
-        if (!payload) {
-            setWorkspaceState('Run Rule 64 first before downloading CSV results.', 'warning');
-            return;
+        try {
+            const info = await postJson(`${apiBase}/GetExportInfo`, payload);
+            if (info?.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                    downloadCsvFile
+                );
+                return;
+            }
+            await downloadBlob(`${apiBase}/DownloadExcel`, payload, 'Rule64_STUD_CREG_Student_Number_Validation.xlsx');
+        } catch (error) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${error.message}`, downloadCsvFile);
         }
-
-        downloadBlob(`${apiBase}/DownloadCsv`, payload, 'Rule64_STUD_CREG_Student_Number_Validation.csv')
-            .catch(error => setWorkspaceState(error.message, 'error'));
     });
+    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => downloadCsvFile().catch(error => setWorkspaceState(error.message, 'error')));
     document.getElementById('downloadSqlBtn')?.addEventListener('click', () =>
         downloadBlob(`${apiBase}/DownloadSql`, getRequest(), 'Rule64_STUD_CREG_Student_Number_Validation.sql').catch(error => setWorkspaceState(error.message, 'error')));
     document.getElementById('downloadAllBtn')?.addEventListener('click', async () => {
         if (!state.currentRunId) { setWorkspaceState('Save the workspace before downloading.', 'warning'); return; }
         const id = state.currentRunId;
         const dl = (url, filename) => window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
-        await dl(`${apiBase}/DownloadSavedExcel?runId=${id}`, `Rule64_Run_${id}.xlsx`);
+        const payload = getSummaryDownloadPayload();
+        let excelOk = true;
+        if (payload) {
+            try {
+                const info = await postJson(`${apiBase}/GetExportInfo`, payload);
+                if (info?.exceedsExcelLimit) {
+                    excelOk = false;
+                    window.showExcelTooLargeModal(`This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`, () => dl(`${apiBase}/DownloadSavedCsv?runId=${id}`, `Rule64_Run_${id}.csv`));
+                }
+            } catch { /* let the actual download surface any real error */ }
+        }
+        if (excelOk) await dl(`${apiBase}/DownloadSavedExcel?runId=${id}`, `Rule64_Run_${id}.xlsx`);
         await dl(`${apiBase}/DownloadSavedCsv?runId=${id}`, `Rule64_Run_${id}.csv`);
         await dl(`${apiBase}/DownloadSavedSql?runId=${id}`, `Rule64_Run_${id}.sql`);
     });

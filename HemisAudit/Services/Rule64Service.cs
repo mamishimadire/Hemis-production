@@ -114,7 +114,7 @@ namespace HemisAudit.Services
             {
                 request.ColumnMapping = NormalizeMapping(request.ColumnMapping);
 
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, RowLimit);
 
                 if (summary.Success && request.ClientId > 0)
                 {
@@ -133,7 +133,26 @@ namespace HemisAudit.Services
             catch (Exception ex) { return new Rule64ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<Rule64ValidationSummary> AnalyseAsync(Rule64ValidationRequest req)
+        public async Task<Rule64ValidationSummary> GetExportSummaryAsync(Rule64ValidationRequest request)
+            => await AnalyseAsync(request, rowLimit: null);
+
+        public async Task<int> GetPopulationCountAsync(Rule64ValidationRequest req)
+        {
+            var m = NormalizeMapping(req.ColumnMapping);
+            await ValidateColumnsExistAsync(req.ClientId, req.StudTable, [m.StudStudentNoCol, m.StudCompareValueCol]);
+            await ValidateColumnsExistAsync(req.ClientId, req.CregTable, [m.CregStudentNoCol, m.CregCompareValueCol]);
+            await ValidateColumnsExistAsync(req.ClientId, req.ProdTable, [m.ProdStudentNoCol]);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(req.ClientId);
+            await using var connection = conn;
+
+            var cteSql = BuildValidationCtes(schema, req.StudTable, req.CregTable, req.ProdTable, m);
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"WITH {cteSql} SELECT COUNT(*) FROM results;";
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
+        private async Task<Rule64ValidationSummary> AnalyseAsync(Rule64ValidationRequest req, int? rowLimit)
         {
             var m = NormalizeMapping(req.ColumnMapping);
 
@@ -172,7 +191,7 @@ SELECT * FROM results
 ORDER BY
     CASE WHEN validation_result = 'FAIL' THEN 0 ELSE 1 END,
     student_no
-LIMIT @limit;";
+{(rowLimit.HasValue ? "LIMIT @limit" : "")};";
 
             var passRows = new List<Rule64ReviewRow>();
             var failRows = new List<Rule64ReviewRow>();
@@ -180,7 +199,7 @@ LIMIT @limit;";
             await using (var cmd = connection.CreateCommand())
             {
                 cmd.CommandText = rowsSql;
-                cmd.Parameters.AddWithValue("limit", RowLimit);
+                if (rowLimit.HasValue) cmd.Parameters.AddWithValue("limit", rowLimit.Value);
                 await using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {

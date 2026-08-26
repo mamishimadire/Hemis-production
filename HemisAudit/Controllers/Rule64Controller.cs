@@ -312,21 +312,69 @@ namespace HemisAudit.Controllers
             return Json(new { success = true, message = "Signoff removed.", resultsVisible, workspace });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule64ValidationSummary summary)
         {
-            var resolved = await ResolveDownloadSummaryAsync(summary);
-            var bytes = _export.ExportRule64Excel(resolved);
-            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"Rule64_STUD_CREG_Student_Number_Validation_{Ts()}.xlsx");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule64.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                    throw new InvalidOperationException($"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+
+                var resolved = await _rule64.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportRule64Excel(resolved);
+                return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    $"Rule64_STUD_CREG_Student_Number_Validation_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule64ValidationSummary summary)
         {
-            var resolved = await ResolveDownloadSummaryAsync(summary);
-            var bytes = BuildCsvExport(resolved);
-            return File(bytes, "text/csv", $"Rule64_STUD_CREG_Student_Number_Validation_{Ts()}.csv");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var resolved = await _rule64.GetExportSummaryAsync(exportRequest);
+                var bytes = BuildCsvExport(resolved);
+                return File(bytes, "text/csv", $"Rule64_STUD_CREG_Student_Number_Validation_{Ts()}.csv");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule64ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule64.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
@@ -340,8 +388,16 @@ namespace HemisAudit.Controllers
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
-            var stored = await _rule64.GetStoredSummaryAsync(runId);
-            var resolved = await ResolveDownloadSummaryAsync(stored ?? new Rule64ValidationSummary { SavedRunId = runId });
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
+            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            var populationCount = await _rule64.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+            var resolved = await _rule64.GetExportSummaryAsync(exportRequest);
             var bytes = _export.ExportRule64Excel(resolved);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule64_STUD_CREG_Student_Number_Validation_Run_{runId}.xlsx");
         }
@@ -349,8 +405,9 @@ namespace HemisAudit.Controllers
         [HttpGet]
         public async Task<IActionResult> DownloadSavedCsv(int runId)
         {
-            var stored = await _rule64.GetStoredSummaryAsync(runId);
-            var resolved = await ResolveDownloadSummaryAsync(stored ?? new Rule64ValidationSummary { SavedRunId = runId });
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
+            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
+            var resolved = await _rule64.GetExportSummaryAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
             var bytes = BuildCsvExport(resolved);
             return File(bytes, "text/csv", $"Rule64_STUD_CREG_Student_Number_Validation_Run_{runId}.csv");
         }
@@ -413,36 +470,42 @@ namespace HemisAudit.Controllers
 
         private static string CsvValue(string? value) => "\"" + (value ?? string.Empty).Replace("\"", "\"\"") + "\"";
 
-        private async Task<Rule64ValidationSummary> ResolveDownloadSummaryAsync(Rule64ValidationSummary? summary)
+        private async Task<Rule64ValidationRequest> ResolveExportRequestAsync(Rule64ValidationSummary summary)
         {
-            if (summary?.SavedRunId is int runId && runId > 0)
-            {
-                var stored = await _rule64.GetStoredSummaryAsync(runId);
-                if (stored != null)
-                    summary = stored;
-            }
+            if (summary == null)
+                throw new InvalidOperationException("Run Rule 64 first before downloading results.");
 
-            summary ??= new Rule64ValidationSummary();
-            summary.PassRows ??= new List<Rule64ReviewRow>();
-            summary.FailRows ??= new List<Rule64ReviewRow>();
-            summary.ExceptionCategories ??= new List<Rule64ExceptionCategoryViewModel>();
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
 
-            if (summary.PassCount <= 0 && summary.PassRows.Count > 0)
-                summary.PassCount = summary.PassRows.Count;
-            if (summary.FailCount <= 0 && summary.FailRows.Count > 0)
-                summary.FailCount = summary.FailRows.Count;
-            if (summary.TotalCount <= 0)
-                summary.TotalCount = summary.PassCount + summary.FailCount;
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
 
-            summary.ExceptionDetailCount = Math.Max(summary.ExceptionDetailCount, summary.FailRows.Count);
-            summary.ExceptionRate = summary.TotalCount == 0
-                ? 0m
-                : Math.Round((decimal)summary.FailCount / summary.TotalCount * 100m, 2);
+            if (string.IsNullOrWhiteSpace(summary.StudTable) || string.IsNullOrWhiteSpace(summary.CregTable))
+                throw new InvalidOperationException("Run Rule 64 first before downloading results.");
 
-            if (string.IsNullOrWhiteSpace(summary.Status))
-                summary.Status = summary.FailCount == 0 ? "PASS" : "FAIL";
+            return BuildRequestFromSummary(summary.ClientId, summary);
+        }
 
-            return summary;
+        private static Rule64ValidationRequest BuildRequestFromSummary(int clientId, Rule64ValidationSummary s) => new()
+        {
+            ClientId = clientId,
+            StudTable = s.StudTable, CregTable = s.CregTable, ProdTable = s.ProdTable,
+            ColumnMapping = s.ColumnMapping ?? new Rule64ColumnMapping()
+        };
+
+        private async Task<Rule64RunReviewViewModel?> LoadAuthorizedSavedRunAsync(int runId, bool requireDownloadAccess)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            var review = await _rule64.GetSavedRunAsync(runId, user?.Email);
+            if (review == null) { TempData["Error"] = "Saved validation run was not found."; return null; }
+            if (!await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role)) { TempData["Error"] = "You do not have access."; return null; }
+            if (!ValidationRunAccessPolicy.CanViewSignedResults(role, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff))
+            { TempData["Error"] = "Only analyst-signed results are available."; return null; }
+            if (requireDownloadAccess && !ValidationRunAccessPolicy.CanDownloadSignedResults(role, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff))
+            { TempData["Error"] = "The data analyst must sign off first."; return null; }
+            return review;
         }
 
         private async Task<string> GetCurrentSystemRoleAsync(ApplicationUser? user)
