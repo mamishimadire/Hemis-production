@@ -321,7 +321,7 @@
             @if (canDownload)
             {
                 <a asp-action="DownloadSavedExcel" asp-route-runId="@Model.RunId" class="btn btn-info">Excel</a>
-                <a asp-action="DownloadSavedCsv" asp-route-runId="@Model.RunId" class="btn btn-info">CSV</a>
+                <a asp-action="DownloadSavedCsv" asp-route-runId="@Model.RunId" class="btn btn-info">Full CSV</a>
                 <a asp-action="DownloadSavedSql" asp-route-runId="@Model.RunId" class="btn btn-secondary">SQL</a>
             }
             else

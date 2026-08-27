@@ -23,7 +23,7 @@
         @if (canDownload)
         {
             <a href="/ClinicalTech/DownloadSavedExcel?runId=@Model.RunId" class="btn btn-info">Download Excel</a>
-            <a href="/ClinicalTech/DownloadSavedCsv?runId=@Model.RunId"   class="btn btn-info">Download CSV</a>
+            <a href="/ClinicalTech/DownloadSavedCsv?runId=@Model.RunId"   class="btn btn-info">Full CSV</a>
             <a href="/ClinicalTech/DownloadSavedSql?runId=@Model.RunId"   class="btn btn-secondary">Download SQL</a>
         }
         <a asp-controller="Dashboard" asp-action="Index" class="btn btn-secondary">Back to Dashboard</a>

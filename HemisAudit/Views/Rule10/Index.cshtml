@@ -1,4 +1,4 @@
-﻿@using HemisAudit.Models
+@using HemisAudit.Models
 @using HemisAudit.ViewModels
 @{
     var ruleNumber = ViewBag.RuleNumber is int currentRuleNumber ? currentRuleNumber : 10;
@@ -387,7 +387,7 @@
             </div>
             <div class="action-bar" style="justify-content:flex-start;margin:0">
                 <button type="button" class="btn btn-info" id="downloadExcelBtn">Excel</button>
-                <button type="button" class="btn btn-info" id="downloadCsvBtn">CSV</button>
+                <button type="button" class="btn btn-info" id="downloadCsvBtn">Full CSV</button>
                 <button type="button" class="btn btn-secondary" id="downloadSqlBtn">SQL</button>
             </div>
         </div>

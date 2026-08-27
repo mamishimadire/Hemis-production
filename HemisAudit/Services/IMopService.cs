@@ -17,5 +17,7 @@ namespace HemisAudit.Services
         Task<MopWorkspaceSaveResult> BeginWorkspaceEditAsync(int runId, string reviewerEmail, string? reviewerName = null);
         Task AddOrUpdateSignoffAsync(int runId, string reviewerEmail, string comment);
         Task RemoveSignoffAsync(int runId, string reviewerEmail);
+        Task<MopValidationSummary> GetExportSummaryAsync(MopValidationRequest request);
+        Task<int> GetPopulationCountAsync(MopValidationRequest request);
     }
 }
