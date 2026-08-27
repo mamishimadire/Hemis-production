@@ -224,6 +224,18 @@ LIMIT 5;";
         }
 
         public async Task<Rule34ValidationSummary> RunValidationAsync(Rule34ValidationRequest request, string? userEmail = null, string? userName = null)
+            => await AnalyseAndMaybeSaveAsync(request, RowLimit, save: true, userEmail, userName);
+
+        public async Task<Rule34ValidationSummary> GetExportSummaryAsync(Rule34ValidationRequest request)
+            => await AnalyseAndMaybeSaveAsync(request, rowLimit: null, save: false, null, null);
+
+        public async Task<int> GetPopulationCountAsync(Rule34ValidationRequest request)
+        {
+            var summary = await GetExportSummaryAsync(request);
+            return summary.TotalValidated;
+        }
+
+        private async Task<Rule34ValidationSummary> AnalyseAndMaybeSaveAsync(Rule34ValidationRequest request, int? rowLimit, bool save, string? userEmail, string? userName)
         {
             try
             {
@@ -338,7 +350,7 @@ FROM ""{schema}"".""{request.TableName}"" src{(string.IsNullOrWhiteSpace(whereCl
                         if (dayStatus.Contains("Saturday", StringComparison.OrdinalIgnoreCase) ||
                             dayStatus.Contains("Sunday", StringComparison.OrdinalIgnoreCase)) weekendCount++;
 
-                        if (rows.Count < RowLimit)
+                        if (!rowLimit.HasValue || rows.Count < rowLimit.Value)
                         {
                             rows.Add(new Rule34ValidationRowRecord
                             {
@@ -402,14 +414,14 @@ FROM ""{schema}"".""{request.TableName}"" src{(string.IsNullOrWhiteSpace(whereCl
                     Exceptions = rows.Where(r => !r.DateMatch).ToList(),
                     ToleranceExceptions = rows.Where(r => r.WithinTolerance).ToList(),
                     Warning = rowsTruncated
-                        ? $"Only the first {RowLimit:N0} rows were retained for browser review, export, and exception listing. Total records validated: {total:N0}."
+                        ? $"Only the first {rowLimit:N0} rows were retained for browser review, export, and exception listing. Total records validated: {total:N0}."
                         : null
                 };
 
-                if (request.ClientId > 0)
+                if (save && request.ClientId > 0)
                     summary.SavedRunId = await SaveValidationRunAsync(request, summary, userEmail, userName);
 
-                ApplyBrowserPreview(summary);
+                if (save) ApplyBrowserPreview(summary);
                 return summary;
             }
             catch (Exception ex)

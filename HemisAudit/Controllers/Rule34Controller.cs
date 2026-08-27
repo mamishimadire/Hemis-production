@@ -658,6 +658,11 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = redirectRunId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
@@ -665,7 +670,15 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportExcel(review.Summary);
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            var populationCount = await _rule34.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+            var resolved = await _rule34.GetExportSummaryAsync(exportRequest);
+            var bytes = _export.ExportExcel(resolved);
             return File(bytes,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule34_Census_Date_Validation_Run_{runId}.xlsx");
@@ -678,7 +691,8 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportCsv(review.Summary, false);
+            var resolved = await _rule34.GetExportSummaryAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            var bytes = _export.ExportCsv(resolved, false);
             return File(bytes, "text/csv", $"Rule34_Validation_Results_Run_{runId}.csv");
         }
 
@@ -689,9 +703,39 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportCsv(review.Summary, true);
+            var resolved = await _rule34.GetExportSummaryAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            var bytes = _export.ExportCsv(resolved, true);
             return File(bytes, "text/csv", $"Rule34_Census_Date_Exceptions_Run_{runId}.csv");
         }
+
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: false);
+            if (review == null) return NotFound();
+            var populationCount = await _rule34.GetPopulationCountAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
+        }
+
+        private static Rule34ValidationRequest BuildRequestFromSummary(int clientId, Rule34ValidationSummary s) => new()
+        {
+            ClientId = clientId,
+            TableName = s.TableName,
+            ClientTableName = s.ClientTableName,
+            FirstDayColumn = s.FirstDayColumn,
+            LastDayColumn = s.LastDayColumn,
+            CensusDateColumn = s.CensusDateColumn,
+            ClientJoinColumn = s.ClientJoinColumn,
+            StartYear = s.StartYear,
+            EndYear = s.EndYear,
+            BlockColumn = s.BlockColumn,
+            BlockExcludeValues = s.BlockExcludeValues
+        };
 
         [HttpGet]
         public async Task<IActionResult> DownloadSavedSql(int runId)
@@ -722,29 +766,81 @@ namespace HemisAudit.Controllers
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule34ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportExcel(summary);
-            return File(bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"Rule34_Census_Date_Validation_{Ts()}.xlsx");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule34.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                    throw new InvalidOperationException($"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+
+                var resolved = await _rule34.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportExcel(resolved);
+                return File(bytes,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    $"Rule34_Census_Date_Validation_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule34ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var fileName = $"Rule34_Validation_Results_{Ts()}.csv";
-            var bytes = _export.ExportCsv(summary, false);
-            return File(bytes, "text/csv", fileName);
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var resolved = await _rule34.GetExportSummaryAsync(exportRequest);
+                var fileName = $"Rule34_Validation_Results_{Ts()}.csv";
+                var bytes = _export.ExportCsv(resolved, false);
+                return File(bytes, "text/csv", fileName);
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadExceptionsCsv([FromBody] Rule34ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var fileName = $"Rule34_Census_Date_Exceptions_{Ts()}.csv";
-            var bytes = _export.ExportCsv(summary, true);
-            return File(bytes, "text/csv", fileName);
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var resolved = await _rule34.GetExportSummaryAsync(exportRequest);
+                var fileName = $"Rule34_Census_Date_Exceptions_{Ts()}.csv";
+                var bytes = _export.ExportCsv(resolved, true);
+                return File(bytes, "text/csv", fileName);
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule34ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule34.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
@@ -868,29 +964,21 @@ namespace HemisAudit.Controllers
             return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
         }
 
-        private async Task<Rule34ValidationSummary> ResolveExportSummaryAsync(Rule34ValidationSummary summary)
+        private async Task<Rule34ValidationRequest> ResolveExportRequestAsync(Rule34ValidationSummary summary)
         {
+            if (summary == null)
+                throw new InvalidOperationException("Run Rule 34 first before downloading results.");
+
             var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
 
-            if (summary.SavedRunId is int savedRunId && savedRunId > 0)
-            {
-                var review = await _rule34.GetSavedRunAsync(savedRunId, user?.Email);
-                if (review?.Summary != null)
-                    return review.Summary;
-            }
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
 
-            if (summary.ClientId > 0)
-            {
-                var workspace = await _rule34.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email, includeSummary: false);
-                if (workspace?.RunId is int workspaceRunId && workspaceRunId > 0)
-                {
-                    var review = await _rule34.GetSavedRunAsync(workspaceRunId, user?.Email);
-                    if (review?.Summary != null)
-                        return review.Summary;
-                }
-            }
+            if (string.IsNullOrWhiteSpace(summary.TableName))
+                throw new InvalidOperationException("Run Rule 34 first before downloading results.");
 
-            return summary;
+            return BuildRequestFromSummary(summary.ClientId, summary);
         }
 
         private async Task<object> RequireDataAnalystAsync<T>(Func<Task<T>> action)

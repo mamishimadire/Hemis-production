@@ -1434,7 +1434,20 @@ function fileStamp() {
 
 async function downloadExcel() {
     if (!state.validationResult) return alert('Run validation first.');
-    await downloadPost('/Rule34/DownloadExcel', state.validationResult, `Rule34_Census_Date_Validation_${fileStamp()}.xlsx`);
+
+    try {
+        const info = await post('/Rule34/GetExportInfo', state.validationResult);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsv
+            );
+            return;
+        }
+        await downloadPost('/Rule34/DownloadExcel', state.validationResult, `Rule34_Census_Date_Validation_${fileStamp()}.xlsx`);
+    } catch (err) {
+        window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsv);
+    }
 }
 
 async function downloadCsv() {
