@@ -667,15 +667,17 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/sql", $"Rule12_Course_Selection_{runId}.sql");
         }
 
-        // ClosedXML builds the whole workbook in memory before it can be saved - there is no
-        // streaming write path with this library - and .xlsx itself caps out at 1,048,576 rows
-        // per sheet regardless, which is a hard format limit no amount of memory changes. On the
-        // old 512MB container, even 100,000 rows was unreliable, which is why this used to sit
-        // far below the format ceiling. The Render service was upgraded to 4GB specifically to
-        // support single-file exports, so this is now set to Excel's own actual maximum - a
-        // population above this genuinely cannot fit in one .xlsx file regardless of memory, at
-        // which point the part-download/CSV fallback still applies.
-        private const int ExcelExportRowSafetyLimit = 1_048_576;
+        // ClosedXML builds the whole workbook fully in memory - there is no streaming write path
+        // with this library. Rule 12's Dashboard Results sheet writes 13-14 string columns per
+        // row, and ClosedXML's per-cell overhead (each cell is a real object with style
+        // references, not a lean array slot) is commonly several hundred bytes to ~1KB even for
+        // plain strings - so a population well under Excel's own 1,048,576-row-per-sheet format
+        // ceiling can still exhaust the container's memory. This was confirmed in production: an
+        // export with a population under the old 1,048,576 gate threw OutOfMemoryException. This
+        // limit is therefore set well below the format ceiling to leave real headroom on the 4GB
+        // container; populations above it fall back to the part-download/CSV flow, which is
+        // always reliable regardless of size since CSV streams row-by-row instead of buffering.
+        private const int ExcelExportRowSafetyLimit = 200_000;
 
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule12ValidationRequest request)
@@ -747,11 +749,12 @@ namespace HemisAudit.Controllers
             }
         }
 
-        // Only reached now if a population exceeds ExcelExportRowSafetyLimit - i.e. genuinely
-        // more than Excel's own 1,048,576-row-per-sheet format ceiling, which no memory increase
-        // can fix. Matches that same ceiling so each part is as large as a single sheet can ever
-        // legally be.
-        private const int ExcelExportPartSize = 1_048_576;
+        // Reached once a population exceeds ExcelExportRowSafetyLimit. Each part still builds one
+        // full ClosedXML workbook in memory, so it carries the exact same per-row memory cost as
+        // a direct download - matching this to ExcelExportRowSafetyLimit (rather than Excel's own
+        // much higher 1,048,576-row format ceiling) keeps every individual part just as safe as
+        // the direct-download path.
+        private const int ExcelExportPartSize = ExcelExportRowSafetyLimit;
 
         [HttpPost]
         public async Task<IActionResult> DownloadExcelPart([FromBody] Rule12ExportPartRequest request)
