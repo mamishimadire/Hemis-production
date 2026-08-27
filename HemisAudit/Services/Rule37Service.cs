@@ -376,7 +376,7 @@ INNER JOIN ""{schema}"".""{request.QualTable}"" q
                 if (!string.IsNullOrWhiteSpace(request.PqmCode2Col))
                     ValidateNames(request.PqmCode2Col);
 
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, RowLimit);
                 if (summary.Success && request.ClientId > 0)
                 {
                     try
@@ -704,7 +704,21 @@ DROP TABLE rule37_base;
 
         // ── Analysis ─────────────────────────────────────────────────────────────────────
 
-        private async Task<Rule37ValidationSummary> AnalyseAsync(Rule37ValidationRequest request)
+        public async Task<Rule37ValidationSummary> GetExportSummaryAsync(Rule37ValidationRequest request)
+            => await AnalyseAsync(request, rowLimit: null);
+
+        public async Task<int> GetPopulationCountAsync(Rule37ValidationRequest request)
+        {
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+            return await CountAsync(connection, $@"
+SELECT COUNT(*)
+FROM ""{schema}"".""{request.CesmTable}"" c
+INNER JOIN ""{schema}"".""{request.QualTable}"" q
+    ON TRIM(CAST(c.""{request.CesmIdCol}"" AS text)) = TRIM(CAST(q.""{request.QualIdCol}"" AS text));");
+        }
+
+        private async Task<Rule37ValidationSummary> AnalyseAsync(Rule37ValidationRequest request, int? rowLimit)
         {
             var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
             await using var connection = conn;
@@ -718,8 +732,8 @@ SELECT c.""{request.CesmIdCol}"", c.""{request.CesmCodeCol}"", q.""{request.Qual
 FROM ""{schema}"".""{request.CesmTable}"" c
 INNER JOIN ""{schema}"".""{request.QualTable}"" q
     ON TRIM(CAST(c.""{request.CesmIdCol}"" AS text)) = TRIM(CAST(q.""{request.QualIdCol}"" AS text))
-LIMIT @limit;";
-                cmd.Parameters.AddWithValue("limit", RowLimit + 1);
+{(rowLimit.HasValue ? "LIMIT @limit" : "")};";
+                if (rowLimit.HasValue) cmd.Parameters.AddWithValue("limit", rowLimit.Value + 1);
 
                 await using var r = await cmd.ExecuteReaderAsync();
                 while (await r.ReadAsync())
@@ -731,9 +745,9 @@ LIMIT @limit;";
                 }
             }
 
-            var rowsTruncated = hemis.Count > RowLimit;
+            var rowsTruncated = rowLimit.HasValue && hemis.Count > rowLimit.Value;
             if (rowsTruncated)
-                hemis = hemis.Take(RowLimit).ToList();
+                hemis = hemis.Take(rowLimit!.Value).ToList();
 
             var totalMerged = rowsTruncated
                 ? await CountAsync(connection, $@"
@@ -815,7 +829,7 @@ INNER JOIN ""{schema}"".""{request.QualTable}"" q
                 ValidationRows = validationRows,
                 Exceptions = exceptions,
                 Warning = rowsTruncated
-                    ? $"Only the first {RowLimit:N0} merged CESM/QUAL rows were analysed for browser review and export performance. Total merged records: {total:N0}."
+                    ? $"Only the first {rowLimit:N0} merged CESM/QUAL rows were analysed for browser review and export performance. Total merged records: {total:N0}."
                     : null
             };
         }

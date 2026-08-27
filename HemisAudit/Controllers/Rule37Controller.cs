@@ -651,6 +651,11 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = redirectRunId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
@@ -658,7 +663,15 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportRule37Excel(review.Summary);
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            var populationCount = await _rule37.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+            var resolved = await _rule37.GetExportSummaryAsync(exportRequest);
+            var bytes = _export.ExportRule37Excel(resolved);
             return File(bytes,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule37_CESM_PQM_Validation_Run_{runId}.xlsx");
@@ -671,7 +684,8 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportRule37Csv(review.Summary, false);
+            var resolved = await _rule37.GetExportSummaryAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            var bytes = _export.ExportRule37Csv(resolved, false);
             return File(bytes, "text/csv", $"Rule37_Validation_Results_Run_{runId}.csv");
         }
 
@@ -682,9 +696,39 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportRule37Csv(review.Summary, true);
+            var resolved = await _rule37.GetExportSummaryAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            var bytes = _export.ExportRule37Csv(resolved, true);
             return File(bytes, "text/csv", $"Rule37_CESM_PQM_Exceptions_Run_{runId}.csv");
         }
+
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: false);
+            if (review == null) return NotFound();
+            var populationCount = await _rule37.GetPopulationCountAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
+        }
+
+        private static Rule37ValidationRequest BuildRequestFromSummary(int clientId, Rule37ValidationSummary s) => new()
+        {
+            ClientId    = clientId,
+            CesmTable   = s.CesmTable,
+            CesmIdCol   = s.CesmIdCol,
+            CesmCodeCol = s.CesmCodeCol,
+            QualTable   = s.QualTable,
+            QualIdCol   = s.QualIdCol,
+            QualNameCol = s.QualNameCol,
+            PqmTable    = s.PqmTable,
+            PqmNameCol  = s.PqmNameCol,
+            PqmCode1Col = s.PqmCode1Col,
+            PqmCode2Col = s.PqmCode2Col
+        };
 
         [HttpGet]
         public async Task<IActionResult> DownloadSavedSql(int runId)
@@ -714,27 +758,79 @@ namespace HemisAudit.Controllers
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule37ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportRule37Excel(summary);
-            return File(bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"Rule37_CESM_PQM_Validation_{Ts()}.xlsx");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule37.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                    throw new InvalidOperationException($"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+
+                var resolved = await _rule37.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportRule37Excel(resolved);
+                return File(bytes,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    $"Rule37_CESM_PQM_Validation_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule37ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportRule37Csv(summary, false);
-            return File(bytes, "text/csv", $"Rule37_Validation_Results_{Ts()}.csv");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var resolved = await _rule37.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportRule37Csv(resolved, false);
+                return File(bytes, "text/csv", $"Rule37_Validation_Results_{Ts()}.csv");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadExceptionsCsv([FromBody] Rule37ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportRule37Csv(summary, true);
-            return File(bytes, "text/csv", $"Rule37_CESM_PQM_Exceptions_{Ts()}.csv");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var resolved = await _rule37.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportRule37Csv(resolved, true);
+                return File(bytes, "text/csv", $"Rule37_CESM_PQM_Exceptions_{Ts()}.csv");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule37ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule37.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
@@ -829,29 +925,21 @@ namespace HemisAudit.Controllers
             return ValidationRunAccessPolicy.IsAssignedDataAnalyst(engagementRole);
         }
 
-        private async Task<Rule37ValidationSummary> ResolveExportSummaryAsync(Rule37ValidationSummary summary)
+        private async Task<Rule37ValidationRequest> ResolveExportRequestAsync(Rule37ValidationSummary summary)
         {
+            if (summary == null)
+                throw new InvalidOperationException("Run Rule 37 first before downloading results.");
+
             var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
 
-            if (summary.SavedRunId is int savedRunId && savedRunId > 0)
-            {
-                var review = await _rule37.GetSavedRunAsync(savedRunId, user?.Email);
-                if (review?.Summary != null)
-                    return review.Summary;
-            }
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
 
-            if (summary.ClientId > 0)
-            {
-                var workspace = await _rule37.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email);
-                if (workspace?.RunId is int workspaceRunId && workspaceRunId > 0)
-                {
-                    var review = await _rule37.GetSavedRunAsync(workspaceRunId, user?.Email);
-                    if (review?.Summary != null)
-                        return review.Summary;
-                }
-            }
+            if (string.IsNullOrWhiteSpace(summary.CesmTable) || string.IsNullOrWhiteSpace(summary.QualTable) || string.IsNullOrWhiteSpace(summary.PqmTable))
+                throw new InvalidOperationException("Run Rule 37 first before downloading results.");
 
-            return summary;
+            return BuildRequestFromSummary(summary.ClientId, summary);
         }
 
         private async Task<object> RequireDataAnalystAsync<T>(Func<Task<T>> action)
