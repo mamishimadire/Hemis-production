@@ -113,7 +113,7 @@ namespace HemisAudit.Services
             {
                 ApplyDefaultPairs(request);
 
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, ExceptionRowSaveLimit);
 
                 if (summary.Success && request.ClientId > 0)
                 {
@@ -130,6 +130,18 @@ namespace HemisAudit.Services
                 return summary;
             }
             catch (Exception ex) { return new Rule41ValidationSummary { Success = false, Error = ex.Message }; }
+        }
+
+        public async Task<Rule41ValidationSummary> GetExportSummaryAsync(Rule41ValidationRequest request)
+        {
+            ApplyDefaultPairs(request);
+            return await AnalyseAsync(request, exceptionLimit: null);
+        }
+
+        public async Task<int> GetPopulationCountAsync(Rule41ValidationRequest request)
+        {
+            var summary = await GetExportSummaryAsync(request);
+            return summary.TotalCount;
         }
 
         private static void ApplyDefaultPairs(Rule41ValidationRequest req)
@@ -151,7 +163,7 @@ namespace HemisAudit.Services
             reconc.Rows          = reconc.Rows.Take(BrowserPreviewRowLimit).ToList();
         }
 
-        private async Task<Rule41ValidationSummary> AnalyseAsync(Rule41ValidationRequest req)
+        private async Task<Rule41ValidationSummary> AnalyseAsync(Rule41ValidationRequest req, int? exceptionLimit)
         {
             var studSecondary  = string.IsNullOrWhiteSpace(req.StudSecondaryKey)  ? null : req.StudSecondaryKey;
             var auditSecondary = string.IsNullOrWhiteSpace(req.H16SecondaryKey) ? null : req.H16SecondaryKey;
@@ -173,7 +185,7 @@ namespace HemisAudit.Services
             var allKeys = studMap.Keys.Union(auditMap.Keys).ToList();
             var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
-            var reconc = RunReconciliation(studMap, req.StudKey, auditMap, req.H16Key, allKeys, req.Pairs, req.StudTable, req.H16Table);
+            var reconc = RunReconciliation(studMap, req.StudKey, auditMap, req.H16Key, allKeys, req.Pairs, req.StudTable, req.H16Table, exceptionLimit);
             reconc.StudSecondaryKey  = studSecondary;
             reconc.H16SecondaryKey = auditSecondary;
 
@@ -214,7 +226,7 @@ namespace HemisAudit.Services
             string auditKey,
             List<string> allNormKeys,
             List<Rule41ColumnPair> pairs,
-            string studTable, string auditTable)
+            string studTable, string auditTable, int? exceptionLimit)
         {
             var reconc = new Rule41ReconciliationSummary
             {
@@ -278,7 +290,7 @@ namespace HemisAudit.Services
             reconc.AgreeCount    = reconc.TotalCount - reconc.ExceptionRows.Count;
             reconc.ExceptionRate = reconc.TotalCount == 0 ? 0m : Math.Round((decimal)reconc.ExceptionRows.Count / reconc.TotalCount * 100m, 2);
 
-            reconc.ExceptionRows = reconc.ExceptionRows.Take(ExceptionRowSaveLimit).ToList();
+            reconc.ExceptionRows = exceptionLimit.HasValue ? reconc.ExceptionRows.Take(exceptionLimit.Value).ToList() : reconc.ExceptionRows;
             reconc.Rows          = reconc.Rows.Take(AgreeSampleLimit).ToList();
 
             return reconc;
