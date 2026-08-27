@@ -665,6 +665,11 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = redirectRunId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
@@ -672,7 +677,15 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportRule38Excel(review.Summary);
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            var populationCount = await _rule38.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+            var resolved = await _rule38.GetExportSummaryAsync(exportRequest);
+            var bytes = _export.ExportRule38Excel(resolved);
             return File(bytes,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule38_QUAL_PQM_Validation_Run_{runId}.xlsx");
@@ -685,7 +698,8 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportRule38Csv(review.Summary, false);
+            var resolved = await _rule38.GetExportSummaryAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            var bytes = _export.ExportRule38Csv(resolved, false);
             return File(bytes, "text/csv", $"Rule38_Validation_Results_Run_{runId}.csv");
         }
 
@@ -696,7 +710,8 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var bytes = _export.ExportRule38Csv(review.Summary, true);
+            var resolved = await _rule38.GetExportSummaryAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            var bytes = _export.ExportRule38Csv(resolved, true);
             return File(bytes, "text/csv", $"Rule38_QUAL_PQM_Exceptions_Run_{runId}.csv");
         }
 
@@ -707,62 +722,130 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var request = new Rule38ValidationRequest
-            {
-                ClientId              = review.ClientId,
-                QualTable             = review.Summary.QualTable,
-                QualIdCol             = review.Summary.QualIdCol,
-                QualNameCol           = review.Summary.QualNameCol,
-                QualApprovalCol       = review.Summary.QualApprovalCol,
-                QualApprovalValue     = review.Summary.QualApprovalValue,
-                QualTypeCol           = review.Summary.QualTypeCol,
-                QualMinTimeTotalCol   = review.Summary.QualMinTimeTotalCol,
-                QualMinTimeWilCol     = review.Summary.QualMinTimeWilCol,
-                QualHeqfCol           = review.Summary.QualHeqfCol,
-                QualTotalSubsidyCol   = review.Summary.QualTotalSubsidyCol,
-                QualCesmCodeCol       = review.Summary.QualCesmCodeCol,
-                PqmTable              = review.Summary.PqmTable,
-                PqmNameCol            = review.Summary.PqmNameCol,
-                PqmQualTypeCol        = review.Summary.PqmQualTypeCol,
-                PqmCesmCodeCol        = review.Summary.PqmCesmCodeCol,
-                PqmCesmCode1Col       = review.Summary.PqmCesmCode1Col,
-                PqmMinTimeTotalCol    = review.Summary.PqmMinTimeTotalCol,
-                PqmWilCol             = review.Summary.PqmWilCol,
-                PqmAccreditationCol   = review.Summary.PqmAccreditationCol,
-                PqmTotalSubsidyCol    = review.Summary.PqmTotalSubsidyCol,
-                HeqfIndicatorCodesCsv = review.Summary.HeqfIndicatorCodesCsv,
-                UseMPrefixPopulationSplit = review.Summary.UseMPrefixPopulationSplit || review.Summary.ExcludeMPrefixPattern,
-                ExcludeMPrefixPattern = review.Summary.UseMPrefixPopulationSplit || review.Summary.ExcludeMPrefixPattern,
-                PostgraduateTypesCsv = review.Summary.PostgraduateTypesCsv
-            };
+            var request = BuildRequestFromSummary(review.ClientId, review.Summary);
             var bytes = _export.ExportSql(_rule38.GenerateSql(request));
             return File(bytes, "application/sql", $"Rule38_QUAL_PQM_Validation_Run_{runId}.sql");
         }
 
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: false);
+            if (review == null) return NotFound();
+            var populationCount = await _rule38.GetPopulationCountAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
+        }
+
+        private static Rule38ValidationRequest BuildRequestFromSummary(int clientId, Rule38ValidationSummary s) => new()
+        {
+            ClientId              = clientId,
+            QualTable             = s.QualTable,
+            QualIdCol             = s.QualIdCol,
+            QualNameCol           = s.QualNameCol,
+            QualApprovalCol       = s.QualApprovalCol,
+            QualApprovalValue     = s.QualApprovalValue,
+            QualTypeCol           = s.QualTypeCol,
+            QualMinTimeTotalCol   = s.QualMinTimeTotalCol,
+            QualMinTimeWilCol     = s.QualMinTimeWilCol,
+            QualHeqfCol           = s.QualHeqfCol,
+            QualTotalSubsidyCol   = s.QualTotalSubsidyCol,
+            QualCesmCodeCol       = s.QualCesmCodeCol,
+            PqmTable              = s.PqmTable,
+            PqmNameCol            = s.PqmNameCol,
+            PqmQualTypeCol        = s.PqmQualTypeCol,
+            PqmCesmCodeCol        = s.PqmCesmCodeCol,
+            PqmCesmCode1Col       = s.PqmCesmCode1Col,
+            PqmMinTimeTotalCol    = s.PqmMinTimeTotalCol,
+            PqmWilCol             = s.PqmWilCol,
+            PqmAccreditationCol   = s.PqmAccreditationCol,
+            PqmTotalSubsidyCol    = s.PqmTotalSubsidyCol,
+            HeqfIndicatorCodesCsv = s.HeqfIndicatorCodesCsv,
+            UseMPrefixPopulationSplit = s.UseMPrefixPopulationSplit || s.ExcludeMPrefixPattern,
+            ExcludeMPrefixPattern = s.UseMPrefixPopulationSplit || s.ExcludeMPrefixPattern,
+            PostgraduateTypesCsv = s.PostgraduateTypesCsv
+        };
+
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule38ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportRule38Excel(summary);
-            return File(bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"Rule38_QUAL_PQM_Validation_{Ts()}.xlsx");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule38.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                    throw new InvalidOperationException($"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+
+                var resolved = await _rule38.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportRule38Excel(resolved);
+                return File(bytes,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    $"Rule38_QUAL_PQM_Validation_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadCsv([FromBody] Rule38ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportRule38Csv(summary, false);
-            return File(bytes, "text/csv", $"Rule38_Validation_Results_{Ts()}.csv");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var resolved = await _rule38.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportRule38Csv(resolved, false);
+                return File(bytes, "text/csv", $"Rule38_Validation_Results_{Ts()}.csv");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
         public async Task<IActionResult> DownloadExceptionsCsv([FromBody] Rule38ValidationSummary summary)
         {
-            summary = await ResolveExportSummaryAsync(summary);
-            var bytes = _export.ExportRule38Csv(summary, true);
-            return File(bytes, "text/csv", $"Rule38_QUAL_PQM_Exceptions_{Ts()}.csv");
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var resolved = await _rule38.GetExportSummaryAsync(exportRequest);
+                var bytes = _export.ExportRule38Csv(resolved, true);
+                return File(bytes, "text/csv", $"Rule38_QUAL_PQM_Exceptions_{Ts()}.csv");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule38ValidationSummary summary)
+        {
+            try
+            {
+                var exportRequest = await ResolveExportRequestAsync(summary);
+                var populationCount = await _rule38.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
@@ -857,29 +940,21 @@ namespace HemisAudit.Controllers
             return ValidationRunAccessPolicy.IsAssignedDataAnalyst(engagementRole);
         }
 
-        private async Task<Rule38ValidationSummary> ResolveExportSummaryAsync(Rule38ValidationSummary summary)
+        private async Task<Rule38ValidationRequest> ResolveExportRequestAsync(Rule38ValidationSummary summary)
         {
+            if (summary == null)
+                throw new InvalidOperationException("Run Rule 38 first before downloading results.");
+
             var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
 
-            if (summary.SavedRunId is int savedRunId && savedRunId > 0)
-            {
-                var review = await _rule38.GetSavedRunAsync(savedRunId, user?.Email);
-                if (review?.Summary != null)
-                    return review.Summary;
-            }
+            if (summary.ClientId <= 0 || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+                throw new InvalidOperationException("You cannot access this engagement.");
 
-            if (summary.ClientId > 0)
-            {
-                var workspace = await _rule38.GetCurrentWorkspaceStateAsync(summary.ClientId, user?.Email);
-                if (workspace?.RunId is int workspaceRunId && workspaceRunId > 0)
-                {
-                    var review = await _rule38.GetSavedRunAsync(workspaceRunId, user?.Email);
-                    if (review?.Summary != null)
-                        return review.Summary;
-                }
-            }
+            if (string.IsNullOrWhiteSpace(summary.QualTable) || string.IsNullOrWhiteSpace(summary.PqmTable))
+                throw new InvalidOperationException("Run Rule 38 first before downloading results.");
 
-            return summary;
+            return BuildRequestFromSummary(summary.ClientId, summary);
         }
 
         private async Task<object> RequireDataAnalystAsync<T>(Func<Task<T>> action)

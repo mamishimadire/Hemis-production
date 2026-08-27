@@ -503,7 +503,7 @@ namespace HemisAudit.Services
                     request.QualTotalSubsidyCol, request.PqmNameCol, request.PqmQualTypeCol, request.PqmMinTimeTotalCol,
                     request.PqmWilCol, request.PqmAccreditationCol, request.PqmTotalSubsidyCol);
 
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, RowLimit);
                 if (summary.Success && request.ClientId > 0)
                 {
                     try
@@ -525,9 +525,23 @@ namespace HemisAudit.Services
             }
         }
 
+        public async Task<Rule38ValidationSummary> GetExportSummaryAsync(Rule38ValidationRequest request)
+            => await AnalyseAsync(request, rowLimit: null);
+
+        public async Task<int> GetPopulationCountAsync(Rule38ValidationRequest request)
+        {
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+            var av = (request.QualApprovalValue ?? "A").Trim().ToUpperInvariant();
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"SELECT COUNT(*) FROM ""{schema}"".""{request.QualTable}"" WHERE UPPER(TRIM(CAST(""{request.QualApprovalCol}"" AS text))) = @approvalValue;";
+            cmd.Parameters.AddWithValue("approvalValue", av);
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
         // ── Analysis ─────────────────────────────────────────────────────────────────────
 
-        private async Task<Rule38ValidationSummary> AnalyseAsync(Rule38ValidationRequest request)
+        private async Task<Rule38ValidationSummary> AnalyseAsync(Rule38ValidationRequest request, int? rowLimit)
         {
             var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
             await using var connection = conn;
@@ -566,14 +580,14 @@ SELECT
 FROM ""{schema}"".""{request.QualTable}"" Q
 WHERE UPPER(TRIM(CAST(Q.""{request.QualApprovalCol}"" AS text))) = @approvalValue
 ORDER BY Q.""{request.QualIdCol}""
-LIMIT @limit;";
+{(rowLimit.HasValue ? "LIMIT @limit" : "")};";
                 cmd.Parameters.AddWithValue("approvalValue", av);
-                cmd.Parameters.AddWithValue("limit", RowLimit + 1);
+                if (rowLimit.HasValue) cmd.Parameters.AddWithValue("limit", rowLimit.Value + 1);
 
                 await using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {
-                    if (qualRows.Count >= RowLimit)
+                    if (rowLimit.HasValue && qualRows.Count >= rowLimit.Value)
                     {
                         rowsTruncated = true;
                         break;
@@ -684,7 +698,7 @@ FROM ""{schema}"".""{request.PqmTable}"" P;";
                 ControlSummaries = controlSummaries,
                 ValidationRows = rows,
                 Warning = rowsTruncated
-                    ? $"Only the first {RowLimit:N0} approved QUAL rows were analysed for browser review and export performance."
+                    ? $"Only the first {rowLimit:N0} approved QUAL rows were analysed for browser review and export performance."
                     : null
             };
         }
