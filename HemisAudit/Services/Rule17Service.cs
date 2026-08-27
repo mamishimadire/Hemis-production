@@ -191,6 +191,28 @@ namespace HemisAudit.Services
             }
         }
 
+        // Cheap population count for the Excel-export size gate: the same COUNT query
+        // AnalyseAsync runs to compute filteredCount/MatchingCount, without loading any rows.
+        public async Task<int> GetPopulationCountAsync(Rule17ValidationRequest request)
+        {
+            await ValidateRequestAsync(request);
+
+            var parsedValues = ParseFilterValues(request.FilterValue);
+            var normalizedValues = parsedValues.Select(NormalizeComparableValue).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using var countCommand = connection.CreateCommand();
+            var countPredicate = BuildFilterPredicate(countCommand, request.FilterColumn, parsedValues, normalizedValues, "s");
+            countCommand.CommandText = $@"
+SELECT COUNT(*)
+FROM ""{schema}"".""{request.TableName}"" s
+INNER JOIN ""{schema}"".""{request.QualTable}"" q ON s.""{request.StudJoinCol}"" = q.""{request.QualJoinCol}""
+WHERE {countPredicate};";
+            return Convert.ToInt32(await countCommand.ExecuteScalarAsync());
+        }
+
         public async Task<int?> GetClientIdForRunAsync(int runId) => await _systemDb.GetClientIdForRunAsync(runId);
 
         public async Task<Rule17WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null, bool includeSummary = true)

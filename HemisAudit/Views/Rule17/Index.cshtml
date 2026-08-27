@@ -1092,13 +1092,37 @@
     document.getElementById('saveWorkspaceBtn').addEventListener('click', saveWorkspace);
     document.getElementById('signoffBtn').addEventListener('click', signOffWorkspace);
     document.getElementById('removeSignoffBtn').addEventListener('click', removeWorkspaceSignoff);
-    document.getElementById('downloadExcelBtn').addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule17_Filtered_Results.xlsx'));
-    document.getElementById('downloadCsvBtn').addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule17_Filtered_Results.csv'));
+    async function downloadCsvFile() {
+        if (!state.summary) throw new Error('Run Rule 17 first before downloading the CSV results.');
+        await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule17_Filtered_Results.csv');
+    }
+
+    async function downloadExcelFile() {
+        if (!state.summary) throw new Error('Run Rule 17 first before downloading the Excel results.');
+
+        const info = await postJson(`${apiBasePath}/GetExportInfo`, state.summary);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsvFile
+            );
+            return;
+        }
+
+        try {
+            await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule17_Filtered_Results.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+        }
+    }
+
+    document.getElementById('downloadExcelBtn').addEventListener('click', () => downloadExcelFile().catch(err => setWorkspaceInfo('danger', err.message)));
+    document.getElementById('downloadCsvBtn').addEventListener('click', () => downloadCsvFile().catch(err => setWorkspaceInfo('danger', err.message)));
     document.getElementById('downloadSqlBtn').addEventListener('click', () => downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule17.sql'));
     document.getElementById('downloadAllBtn').addEventListener('click', async () => {
         if (!state.summary) return;
-        if (document.getElementById('chkExcel').checked) await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule17_Filtered_Results.xlsx');
-        if (document.getElementById('chkCsv').checked) await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule17_Filtered_Results.csv');
+        if (document.getElementById('chkExcel').checked) await downloadExcelFile();
+        if (document.getElementById('chkCsv').checked) await downloadCsvFile();
         if (document.getElementById('chkSql').checked) await downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule17.sql');
     });
 

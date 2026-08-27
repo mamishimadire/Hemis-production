@@ -390,9 +390,22 @@
 
     document.getElementById('downloadExcelBtn')?.addEventListener('click', async () => {
         try {
+            const info = await postJson('/Rule65/GetExportInfo', summaryPayload);
+            if (info?.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                    () => downloadBlob('/Rule65/DownloadCsv', summaryPayload, 'Rule65_Cancellation_Census_Date_Validation.csv')
+                        .catch(error => { document.getElementById('downloadStatus').textContent = error.message || 'CSV download failed.'; })
+                );
+                return;
+            }
             await downloadBlob('/Rule65/DownloadExcel', summaryPayload, 'Rule65_Cancellation_Census_Date_Validation.xlsx');
         } catch (error) {
-            document.getElementById('downloadStatus').textContent = error.message || 'Excel download failed.';
+            window.showExcelTooLargeModal(
+                `This engagement's Excel export failed: ${error.message}`,
+                () => downloadBlob('/Rule65/DownloadCsv', summaryPayload, 'Rule65_Cancellation_Census_Date_Validation.csv')
+                    .catch(err => { document.getElementById('downloadStatus').textContent = err.message || 'CSV download failed.'; })
+            );
         }
     });
 

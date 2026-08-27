@@ -301,15 +301,39 @@ namespace HemisAudit.Controllers
             return Json(new { success = true, message = "Signoff removed.", resultsVisible, workspace });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
             var review = await LoadAuthorizedSavedRunAsync(runId);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
             var fullSummary = await _rule65.GetStoredSummaryAsync(runId) ?? review.Summary;
+            if (fullSummary.TotalCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {fullSummary.TotalCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
             var bytes = BuildExcelExport(fullSummary);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule65_Cancellation_Census_Date_Validation_Run_{runId}.xlsx");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId);
+            if (review == null) return NotFound();
+            var fullSummary = await _rule65.GetStoredSummaryAsync(runId) ?? review.Summary;
+            return Json(new
+            {
+                totalRecords = fullSummary.TotalCount,
+                exceedsExcelLimit = fullSummary.TotalCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpGet]
@@ -343,9 +367,26 @@ namespace HemisAudit.Controllers
         public async Task<IActionResult> DownloadExcel([FromBody] Rule65ValidationSummary summary)
         {
             var resolved = await ResolveDownloadSummaryAsync(summary);
+            if (resolved.TotalCount > ExcelExportRowSafetyLimit)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = $"This engagement has {resolved.TotalCount:N0} records, too many to export as one Excel file." });
+            }
             var bytes = BuildExcelExport(resolved);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule65_Cancellation_Census_Date_Validation_{Ts()}.xlsx");
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule65ValidationSummary summary)
+        {
+            var resolved = await ResolveDownloadSummaryAsync(summary);
+            return Json(new
+            {
+                totalRecords = resolved.TotalCount,
+                exceedsExcelLimit = resolved.TotalCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpPost]

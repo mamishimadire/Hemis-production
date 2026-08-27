@@ -8,6 +8,8 @@ namespace HemisAudit.Services
         Task<Rule26ColumnSelectionResult> GetColumnsAsync(int clientId, string tableName, bool isProfTable);
         Task<Rule26VerifyResult> VerifyTablesAsync(Rule26VerifyRequest request);
         Task<Rule26ValidationSummary> RunValidationAsync(Rule26ValidationRequest request, string? userEmail = null, string? userName = null);
+        Task<Rule26ValidationSummary> GetExportSummaryAsync(Rule26ValidationRequest request);
+        Task<int> GetPopulationCountAsync(Rule26ValidationRequest request);
         Task<int?> GetClientIdForRunAsync(int runId);
         Task<Rule26WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null, bool includeSummary = true);
         Task<Rule26RunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null);

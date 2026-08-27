@@ -192,6 +192,18 @@ SELECT
             }
         }
 
+        public async Task<Rule26ValidationSummary> GetExportSummaryAsync(Rule26ValidationRequest request)
+        {
+            ValidateRequest(request);
+            return await AnalyseAsync(request);
+        }
+
+        public async Task<int> GetPopulationCountAsync(Rule26ValidationRequest request)
+        {
+            var summary = await GetExportSummaryAsync(request);
+            return summary.TotalValidated;
+        }
+
         public async Task<int?> GetClientIdForRunAsync(int runId) => await _systemDb.GetClientIdForRunAsync(runId);
 
         public async Task<Rule26WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null, bool includeSummary = true)

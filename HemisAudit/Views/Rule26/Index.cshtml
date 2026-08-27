@@ -1309,12 +1309,33 @@
         }
     }
 
+    async function downloadCsvFile() {
+        await downloadPost(`${apiBasePath}/DownloadCsv`, state.summary, `Rule26_ProfToPayroll_Exceptions_${fileStamp()}.csv`);
+    }
+
+    async function downloadExcelFile() {
+        if (!state.summary) return;
+        try {
+            const info = await postJson(`${apiBasePath}/GetExportInfo`, state.summary);
+            if (info?.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                    downloadCsvFile
+                );
+                return;
+            }
+            await downloadPost(`${apiBasePath}/DownloadExcel`, state.summary, `Rule26_ProfToPayroll_Validation_${fileStamp()}.xlsx`);
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+        }
+    }
+
     async function downloadAll() {
         if (!state.summary) return;
         try {
             showSpinner('Preparing downloads...');
             if (document.getElementById('chkExcel').checked) {
-                await downloadPost(`${apiBasePath}/DownloadExcel`, state.summary, `Rule26_ProfToPayroll_Validation_${fileStamp()}.xlsx`);
+                await downloadExcelFile();
             }
             if (document.getElementById('chkCsv').checked) {
                 await downloadPost(`${apiBasePath}/DownloadCsv`, state.summary, `Rule26_ProfToPayroll_Exceptions_${fileStamp()}.csv`);
@@ -1376,8 +1397,12 @@
     els.removeSignoffBtn.addEventListener('click', removeWorkspaceSignoff);
     els.downloadAllBtn.addEventListener('click', downloadAll);
     els.downloadExcelBtn.addEventListener('click', async () => {
-        if (!state.summary) return;
-        await downloadPost(`${apiBasePath}/DownloadExcel`, state.summary, `Rule26_ProfToPayroll_Validation_${fileStamp()}.xlsx`);
+        try {
+            await downloadExcelFile();
+        } catch (error) {
+            els.workspaceInfo.className = 'alert alert--error';
+            els.workspaceInfo.textContent = toFriendlyRequestError(error);
+        }
     });
     els.downloadCsvBtn.addEventListener('click', async () => {
         if (!state.summary) return;

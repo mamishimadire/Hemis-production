@@ -137,6 +137,17 @@ FROM validation;";
             catch (Exception ex) { return new Rule58ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
+        // AnalyseAsync itself never truncates rows - the full population is always analysed and
+        // returned here. Only RunValidationAsync's response to the browser gets trimmed afterwards.
+        public async Task<Rule58ValidationSummary> GetExportSummaryAsync(Rule58ValidationRequest request)
+            => await AnalyseAsync(request);
+
+        public async Task<int> GetPopulationCountAsync(Rule58ValidationRequest request)
+        {
+            var summary = await GetExportSummaryAsync(request);
+            return summary.TotalValidated;
+        }
+
         private async Task<Rule58ValidationSummary> AnalyseAsync(Rule58ValidationRequest req)
         {
             await ValidateColumnsExistAsync(req.ClientId, req.ValpacTable, [req.ValpacCol037]);

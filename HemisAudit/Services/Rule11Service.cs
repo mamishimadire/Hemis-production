@@ -859,6 +859,17 @@ WHERE UPPER(TRIM(q.""{request.QualApprovalCol}""::text)) = @approvalValue;";
             return workspace;
         }
 
+        // Rule 11's RunValidationAsync always auto-saves a new run as a side effect (see
+        // SaveValidationRunAsync above), and there is no separate non-saving full-analysis path to
+        // reuse for a population check the way Rule26/Rule34/Rule38 do (calling their analysis
+        // method again would silently create a duplicate saved run every time a user opens the
+        // download panel). The saved/current summary's TotalValidated is already the full,
+        // untruncated population count (GetSavedRunAsync deserializes ResultsJSON verbatim and only
+        // ApplyBrowserPreview — never called here — trims the Exceptions/ValidationRows lists), so
+        // this reads that value directly instead of re-running the query.
+        public Task<int> GetPopulationCountAsync(Rule11ValidationSummary summary) =>
+            Task.FromResult(summary?.TotalValidated ?? 0);
+
         public async Task<Rule11RunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null)
         {
             var row = await _systemDb.GetRuleRunByIdAsync(runId, 11);

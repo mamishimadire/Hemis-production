@@ -136,6 +136,17 @@ namespace HemisAudit.Services
             catch (Exception ex) { return new Rule65ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
+        // AnalyseAsync itself never truncates rows - the full population is always analysed and
+        // returned here. Only RunValidationAsync's response to the browser gets trimmed afterwards.
+        public async Task<Rule65ValidationSummary> GetExportSummaryAsync(Rule65ValidationRequest request)
+            => await AnalyseAsync(request);
+
+        public async Task<int> GetPopulationCountAsync(Rule65ValidationRequest request)
+        {
+            var summary = await GetExportSummaryAsync(request);
+            return summary.TotalCount;
+        }
+
         private async Task<Rule65ValidationSummary> AnalyseAsync(Rule65ValidationRequest request)
         {
             var mapping = request.ColumnMapping;

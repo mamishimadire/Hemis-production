@@ -214,7 +214,7 @@ WHERE UPPER(TRIM(CAST(""{request.ErrorTypeColumn}"" AS text))) = UPPER(@filterVa
             {
                 ValidateRequest(request);
 
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, RowLimit);
                 if (summary.Success && request.ClientId > 0)
                 {
                     try
@@ -502,9 +502,10 @@ ORDER BY COUNT(*) DESC, error_code_raw ASC;";
         }
 
         // Re-runs the same analysis a fresh "Run Validation" would, without the save-run side
-        // effect - used by the Excel export path.
+        // effect and without the RowLimit cap - used by the Excel export path so the export sees
+        // the full, unbounded EXCLUDED/REMAINING population instead of the browser-preview cap.
         public async Task<Rule31ValidationSummary> GetExportSummaryAsync(Rule31ValidationRequest request) =>
-            await AnalyseAsync(request);
+            await AnalyseAsync(request, rowLimit: null);
 
         // Cheap population size check - stops at a COUNT(*), no result rows loaded.
         public async Task<int> GetPopulationCountAsync(Rule31ValidationRequest request)
@@ -586,7 +587,7 @@ WHERE UPPER(TRIM(CAST(""{request.ErrorTypeColumn}"" AS text))) = UPPER(@filterVa
 
         // ── Analysis ─────────────────────────────────────────────────────────────────────
 
-        private async Task<Rule31ValidationSummary> AnalyseAsync(Rule31ValidationRequest request)
+        private async Task<Rule31ValidationSummary> AnalyseAsync(Rule31ValidationRequest request, int? rowLimit)
         {
             var exclusions = ParseExclusions(request.ExclusionCodes);
             var normalizedExclusions = exclusions.Select(NormalizeErrorCode).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -641,7 +642,7 @@ WHERE UPPER(TRIM(CAST(""{request.ErrorTypeColumn}"" AS text))) = UPPER(@filterVa
                     IncrementCount(remainingBreakdown, string.IsNullOrWhiteSpace(errorCode) ? "(blank)" : errorCode);
                 }
 
-                if (excludedRows.Count + remainingRows.Count >= RowLimit)
+                if (rowLimit.HasValue && excludedRows.Count + remainingRows.Count >= rowLimit.Value)
                 {
                     rowsTruncated = true;
                     continue;
@@ -699,7 +700,7 @@ WHERE UPPER(TRIM(CAST(""{request.ErrorTypeColumn}"" AS text))) = UPPER(@filterVa
                 ExcludedRows = excludedRows,
                 RemainingRows = remainingRows,
                 Warning = rowsTruncated
-                    ? $"Only the first {RowLimit:N0} rows were saved for browser review and export performance. Total fatal rows found: {totalFatal:N0}."
+                    ? $"Only the first {rowLimit!.Value:N0} rows were saved for browser review and export performance. Total fatal rows found: {totalFatal:N0}."
                     : null
             };
         }

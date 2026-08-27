@@ -553,12 +553,24 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = redirectRunId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
+
+            var populationCount = await _rule15.GetPopulationCountAsync(BuildRequestFromSummary(review.ClientId, review.Summary));
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
 
             var bytes = _export.ExportExcel(review.Summary);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule15_Course_Credentials_Run_{runId}.xlsx");
@@ -598,8 +610,31 @@ namespace HemisAudit.Controllers
         public async Task<IActionResult> DownloadExcel([FromBody] Rule15ValidationSummary summary)
         {
             summary = await ResolveExportSummaryAsync(summary);
+
+            var populationCount = await _rule15.GetPopulationCountAsync(BuildRequestFromSummary(summary.ClientId, summary));
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = $"This engagement has {populationCount:N0} records, too many to export as one Excel file." });
+            }
+
             var bytes = _export.ExportExcel(summary);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule15_Course_Credentials_{Ts()}.xlsx");
+        }
+
+        // Lets the browser decide up front whether Excel can be attempted, without trying (and
+        // failing) a full export first.
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule15ValidationSummary summary)
+        {
+            var resolved = await ResolveExportSummaryAsync(summary);
+            var populationCount = await _rule15.GetPopulationCountAsync(BuildRequestFromSummary(resolved.ClientId, resolved));
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpPost]
@@ -687,6 +722,14 @@ namespace HemisAudit.Controllers
 
             return ValidationRunAccessPolicy.CanViewSignedResults(role, workspace.CurrentUserEngagementRole, workspace.HasDataAnalystSignoff);
         }
+
+        private static Rule15ValidationRequest BuildRequestFromSummary(int clientId, Rule15ValidationSummary s) => new()
+        {
+            ClientId = clientId,
+            StudTable = s.StudTable,
+            BridgeTable = s.BridgeTable,
+            CrseTable = s.CrseTable
+        };
 
         private async Task<Rule15ValidationSummary> ResolveExportSummaryAsync(Rule15ValidationSummary summary)
         {

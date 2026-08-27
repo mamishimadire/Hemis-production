@@ -807,12 +807,25 @@ window.r46Tab = function(tab) {
 
     window.r46DlExcel = async function() {
         if (!st.runId) return;
-        await window.downloadFileWithProgress({
-            url: API + '/DownloadExcel?runId=' + st.runId,
-            method: 'GET',
-            defaultFileName: 'Rule46_Foundation_Chain_Run_' + st.runId + '.xlsx',
-            label: 'Downloading Excel'
-        });
+        var runId = st.runId;
+        try {
+            var info = await fetch(API + '/GetExportInfo?runId=' + runId).then(function(r) { return r.json(); });
+            if (info && info.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    'This engagement has ' + (info.totalRecords || 0).toLocaleString() + ' records - too many to include in a single Excel file.',
+                    function() { return window.r46DlCsv(); }
+                );
+                return;
+            }
+            await window.downloadFileWithProgress({
+                url: API + '/DownloadExcel?runId=' + runId,
+                method: 'GET',
+                defaultFileName: 'Rule46_Foundation_Chain_Run_' + runId + '.xlsx',
+                label: 'Downloading Excel'
+            });
+        } catch (err) {
+            window.showExcelTooLargeModal("This engagement's Excel export failed: " + err.message, function() { return window.r46DlCsv(); });
+        }
     };
 
     window.r46DlSql = async function() {

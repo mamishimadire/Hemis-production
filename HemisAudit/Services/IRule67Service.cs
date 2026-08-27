@@ -8,6 +8,8 @@ namespace HemisAudit.Services
         Task<Rule67ColumnDiscoveryResult> GetColumnsAsync(int clientId, string tableName, string tableRole);
         Task<Rule67VerifyResult> VerifyTablesAsync(Rule67ValidationRequest request);
         Task<Rule67ValidationSummary> RunValidationAsync(Rule67ValidationRequest request, string? userEmail = null, string? userName = null);
+        Task<Rule67ValidationSummary> GetExportSummaryAsync(Rule67ValidationRequest request);
+        Task<int> GetPopulationCountAsync(Rule67ValidationRequest request);
         Task<int?> GetClientIdForRunAsync(int runId);
         Task<Rule67ValidationSummary?> GetStoredSummaryAsync(int runId);
         Task<Rule67WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null);

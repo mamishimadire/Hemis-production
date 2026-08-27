@@ -138,6 +138,17 @@ WHERE UPPER(TRIM(CAST(""{request.CregRegTypeCol}"" AS text))) = '{fval}';");
             catch (Exception ex) { return new Rule57ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
+        // AnalyseAsync itself never truncates rows - the full population is always analysed and
+        // returned here. Only RunValidationAsync's response to the browser gets trimmed afterwards.
+        public async Task<Rule57ValidationSummary> GetExportSummaryAsync(Rule57ValidationRequest request)
+            => await AnalyseAsync(request);
+
+        public async Task<int> GetPopulationCountAsync(Rule57ValidationRequest request)
+        {
+            var summary = await GetExportSummaryAsync(request);
+            return summary.TotalValidated;
+        }
+
         private async Task<Rule57ValidationSummary> AnalyseAsync(Rule57ValidationRequest req)
         {
             await ValidateColumnsExistAsync(req.ClientId, req.StudTable, [req.StudIdCol, req.StudCodeCol, req.StudRegTypeCol]);

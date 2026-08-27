@@ -779,6 +779,32 @@ window.toggleAccordion = function (section) {
         return null;
     }
 
+    async function downloadExcelFile() {
+        const payload = getSummaryDownloadPayload();
+        if (!payload) throw new Error('Run Rule 67 first before downloading Excel results.');
+
+        const info = await postJson(`${apiBase}/GetExportInfo`, payload);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsvFile
+            );
+            return;
+        }
+
+        try {
+            await downloadBlob(`${apiBase}/DownloadExcel`, payload, 'Rule67_CREG_STUD_Pair.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+        }
+    }
+
+    async function downloadCsvFile() {
+        const payload = getSummaryDownloadPayload();
+        if (!payload) throw new Error('Run Rule 67 first before downloading CSV results.');
+        await downloadBlob(`${apiBase}/DownloadCsv`, payload, 'Rule67_CREG_STUD_Pair.csv');
+    }
+
     function showSpinner(message) {
         if (els.spinnerMsg) els.spinnerMsg.textContent = message;
         if (els.spinner) els.spinner.style.display = 'flex';
@@ -961,26 +987,10 @@ window.toggleAccordion = function (section) {
         setWorkspaceState(error.message, 'error');
     }));
 
-    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => {
-        const payload = getSummaryDownloadPayload();
-        if (!payload) {
-            setWorkspaceState('Run Rule 67 first before downloading Excel results.', 'warning');
-            return;
-        }
-
-        downloadBlob(`${apiBase}/DownloadExcel`, payload, 'Rule67_CREG_STUD_Pair.xlsx')
-            .catch(error => setWorkspaceState(error.message, 'error'));
-    });
-    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => {
-        const payload = getSummaryDownloadPayload();
-        if (!payload) {
-            setWorkspaceState('Run Rule 67 first before downloading CSV results.', 'warning');
-            return;
-        }
-
-        downloadBlob(`${apiBase}/DownloadCsv`, payload, 'Rule67_CREG_STUD_Pair.csv')
-            .catch(error => setWorkspaceState(error.message, 'error'));
-    });
+    document.getElementById('downloadExcelBtn')?.addEventListener('click', () =>
+        downloadExcelFile().catch(error => setWorkspaceState(error.message, 'error')));
+    document.getElementById('downloadCsvBtn')?.addEventListener('click', () =>
+        downloadCsvFile().catch(error => setWorkspaceState(error.message, 'error')));
     document.getElementById('downloadSqlBtn')?.addEventListener('click', () =>
         downloadBlob(`${apiBase}/DownloadSql`, getRequest(), 'Rule67_CREG_STUD_Pair.sql').catch(error => setWorkspaceState(error.message, 'error')));
     document.getElementById('downloadAllBtn')?.addEventListener('click', async () => {

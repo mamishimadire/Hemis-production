@@ -249,11 +249,25 @@ namespace HemisAudit.Controllers
         public IActionResult GenerateSql([FromBody] Rule68ValidationRequest request) =>
             Json(new Rule68SqlResult { Success = true, Sql = _rule68.GenerateSql(request) });
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
             var review = await LoadAuthorizedSavedRunAsync(runId);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
+
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            var populationCount = await _rule68.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+
             var fullSummary = await _rule68.GetStoredSummaryAsync(runId) ?? review.Summary;
             return File(_export.ExportRule68Excel(fullSummary), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule68_Credit_Overload_Run_{runId}.xlsx");
         }
@@ -304,8 +318,21 @@ namespace HemisAudit.Controllers
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule68ValidationSummary summary)
         {
-            var resolved = await ResolveExportSummaryAsync(summary);
-            return File(_export.ExportRule68Excel(resolved), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule68_Credit_Overload_{Ts()}.xlsx");
+            try
+            {
+                var resolved = await ResolveExportSummaryAsync(summary);
+                var exportRequest = BuildRequestFromSummary(resolved.ClientId, resolved);
+                var populationCount = await _rule68.GetPopulationCountAsync(exportRequest);
+                if (populationCount > ExcelExportRowSafetyLimit)
+                    throw new InvalidOperationException($"This engagement has {populationCount:N0} records, too many to export as one Excel file.");
+
+                return File(_export.ExportRule68Excel(resolved), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule68_Credit_Overload_{Ts()}.xlsx");
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
@@ -313,6 +340,28 @@ namespace HemisAudit.Controllers
         {
             var resolved = await ResolveExportSummaryAsync(summary);
             return File(_export.ExportRule68Csv(resolved), "text/csv", $"Rule68_Credit_Overload_{Ts()}.csv");
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule68ValidationSummary summary)
+        {
+            try
+            {
+                var resolved = await ResolveExportSummaryAsync(summary);
+                var exportRequest = BuildRequestFromSummary(resolved.ClientId, resolved);
+                var populationCount = await _rule68.GetPopulationCountAsync(exportRequest);
+                return Json(new
+                {
+                    totalRecords = populationCount,
+                    exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                    excelLimit = ExcelExportRowSafetyLimit
+                });
+            }
+            catch (Exception ex)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = ex.Message });
+            }
         }
 
         [HttpPost]
@@ -352,6 +401,33 @@ namespace HemisAudit.Controllers
             }
             return summary;
         }
+
+        private static Rule68ValidationRequest BuildRequestFromSummary(int clientId, Rule68ValidationSummary s) => new()
+        {
+            ClientId = clientId,
+            StudTable = s.StudTable,
+            CregTable = s.CregTable,
+            QualTable = s.QualTable,
+            CredTable = s.CredTable,
+            CrseTable = s.CrseTable,
+            DetailTable = s.DetailTable,
+            CregStudNoCol = s.CregStudNoCol,
+            CregQualCol = s.CregQualCol,
+            CregCourseCol = s.CregCourseCol,
+            QualQualCol = s.QualQualCol,
+            QualNameCol = s.QualNameCol,
+            CredQualCol = s.CredQualCol,
+            CredCourseCol = s.CredCourseCol,
+            CredCreditsCol = s.CredCreditsCol,
+            CrseCourseCol = s.CrseCourseCol,
+            CrseNameCol = s.CrseNameCol,
+            MaxTotalCredits = s.MaxTotalCredits,
+            DetailErrorTypeCol = s.DetailErrorTypeCol,
+            DetailErrorCol = s.DetailErrorCol,
+            DetailErrorTypeValue = s.DetailErrorTypeValue,
+            DetailExclusionCodes = s.DetailExclusionCodes,
+            DetailElementInfoCol = s.DetailElementInfoCol
+        };
 
         private static bool CanDownloadSavedRun(Rule68RunReviewViewModel review, string systemRole)
             => ValidationRunAccessPolicy.CanDownloadSignedResults(systemRole, review.CurrentUserEngagementRole, review.HasDataAnalystSignoff);

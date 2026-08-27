@@ -302,12 +302,25 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = runId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            return File(_export.ExportRule58Excel(review.Summary), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule58_Staff_VALPAC_Production_Run_{runId}.xlsx");
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.Summary);
+            var populationCount = await _rule58.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+            var resolved = await _rule58.GetExportSummaryAsync(exportRequest);
+            return File(_export.ExportRule58Excel(resolved), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule58_Staff_VALPAC_Production_Run_{runId}.xlsx");
         }
 
         [HttpGet]
@@ -330,8 +343,30 @@ namespace HemisAudit.Controllers
         [HttpPost]
         public async Task<IActionResult> DownloadExcel([FromBody] Rule58ValidationSummary summary)
         {
-            var resolved = await ResolveExportSummaryAsync(summary);
+            var resolvedSummary = await ResolveExportSummaryAsync(summary);
+            var exportRequest = BuildRequestFromSummary(resolvedSummary.ClientId, resolvedSummary);
+            var populationCount = await _rule58.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = $"This engagement has {populationCount:N0} records, too many to export as one Excel file." });
+            }
+            var resolved = await _rule58.GetExportSummaryAsync(exportRequest);
             return File(_export.ExportRule58Excel(resolved), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule58_Staff_VALPAC_Production_{Ts()}.xlsx");
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule58ValidationSummary summary)
+        {
+            var resolvedSummary = await ResolveExportSummaryAsync(summary);
+            var exportRequest = BuildRequestFromSummary(resolvedSummary.ClientId, resolvedSummary);
+            var populationCount = await _rule58.GetPopulationCountAsync(exportRequest);
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpPost]

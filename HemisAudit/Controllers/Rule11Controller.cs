@@ -487,14 +487,42 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = redirectRunId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
+
+            var populationCount = await _rule11.GetPopulationCountAsync(review.Summary);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+
             var bytes = _export.ExportRule11Excel(review.Summary);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule11_QUAL_CESM_PQM_Validation_Run_{runId}.xlsx");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: false);
+            if (review == null) return NotFound();
+
+            var populationCount = await _rule11.GetPopulationCountAsync(review.Summary);
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpGet]
@@ -546,9 +574,29 @@ namespace HemisAudit.Controllers
         public async Task<IActionResult> DownloadExcel([FromBody] Rule11ValidationSummary summary)
         {
             summary = await ResolveExportSummaryAsync(summary);
+            var populationCount = await _rule11.GetPopulationCountAsync(summary);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = $"This engagement has {populationCount:N0} records, too many to export as one Excel file." });
+            }
+
             var bytes = _export.ExportRule11Excel(summary);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule11_QUAL_CESM_PQM_Validation_{Ts()}.xlsx");
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule11ValidationSummary summary)
+        {
+            var resolved = await ResolveExportSummaryAsync(summary);
+            var populationCount = await _rule11.GetPopulationCountAsync(resolved);
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpPost]

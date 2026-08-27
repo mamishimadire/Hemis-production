@@ -1353,8 +1353,32 @@ window.toggleAccordion = function (section) {
         hideSpinner();
         setWorkspaceState(err.message, 'error');
     }));
-    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule13_CESM_Qualification_Population.xlsx').catch(err => setWorkspaceState(err.message, 'error')));
-    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => state.summary && downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule13_CESM_Qualification_Population.csv').catch(err => setWorkspaceState(err.message, 'error')));
+    async function downloadCsvFile() {
+        if (!state.summary) throw new Error('Run Rule 13 first before downloading the CSV results.');
+        await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule13_CESM_Qualification_Population.csv');
+    }
+
+    async function downloadExcelFile() {
+        if (!state.summary) throw new Error('Run Rule 13 first before downloading the Excel results.');
+
+        const info = await postJson(`${apiBasePath}/GetExportInfo`, state.summary);
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsvFile
+            );
+            return;
+        }
+
+        try {
+            await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule13_CESM_Qualification_Population.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+        }
+    }
+
+    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => downloadExcelFile().catch(err => setWorkspaceState(err.message, 'error')));
+    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => downloadCsvFile().catch(err => setWorkspaceState(err.message, 'error')));
     document.getElementById('downloadSqlBtn')?.addEventListener('click', () => downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule13_CESM_Qualification_Population.sql').catch(err => setWorkspaceState(err.message, 'error')));
         async function generateRScript() {
         showSpinner('Generating R script...');
@@ -1371,8 +1395,8 @@ window.toggleAccordion = function (section) {
 document.getElementById('downloadAllBtn')?.addEventListener('click', async () => {
         try {
             if (!state.summary) throw new Error('Run Rule 13 first.');
-            if (document.getElementById('chkExcel')?.checked) await downloadBlob(`${apiBasePath}/DownloadExcel`, state.summary, 'Rule13_CESM_Qualification_Population.xlsx');
-            if (document.getElementById('chkCsv')?.checked) await downloadBlob(`${apiBasePath}/DownloadCsv`, state.summary, 'Rule13_CESM_Qualification_Population.csv');
+            if (document.getElementById('chkExcel')?.checked) await downloadExcelFile();
+            if (document.getElementById('chkCsv')?.checked) await downloadCsvFile();
             if (document.getElementById('chkSql')?.checked) await downloadBlob(`${apiBasePath}/DownloadSql`, getRequest(), 'Rule13_CESM_Qualification_Population.sql');
         } catch (err) {
             setWorkspaceState(err.message || 'Download failed.', 'error');

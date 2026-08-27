@@ -9,6 +9,7 @@ namespace HemisAudit.Services
         Task<Rule11FilterValueResult> GetFilterValuesAsync(int clientId, string qualTable, string approvalColumn);
         Task<Rule11VerifyResult> VerifyDataAsync(Rule11VerifyRequest request);
         Task<Rule11ValidationSummary> RunValidationAsync(Rule11ValidationRequest request, string? userEmail = null, string? userName = null);
+        Task<int> GetPopulationCountAsync(Rule11ValidationSummary summary);
         Task<int?> GetClientIdForRunAsync(int runId);
         Task<Rule11WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null);
         Task<Rule11RunReviewViewModel?> GetSavedRunAsync(int runId, string? currentUserEmail = null);

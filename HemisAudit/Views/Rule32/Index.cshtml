@@ -1371,6 +1371,40 @@
         setInfo('Run analysis first before downloading.', 'error');
     }
 
+    async function downloadExcelGated() {
+        if (!state.validationResult && !state.currentRunId) {
+            setInfo('Run analysis first before downloading.', 'error');
+            return;
+        }
+
+        const downloadCsvFallback = () => downloadCurrentOrSaved(
+            `${apiBasePath}/DownloadCsv`,
+            state.validationResult,
+            'DownloadSavedCsv',
+            `${ruleFilePrefix}_Excluded_and_Remaining_${fileStamp()}.csv`);
+
+        try {
+            if (state.validationResult) {
+                const info = await post(`${apiBasePath}/GetExportInfo`, state.validationResult);
+                if (info?.exceedsExcelLimit) {
+                    window.showExcelTooLargeModal(
+                        `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                        downloadCsvFallback
+                    );
+                    return;
+                }
+            }
+
+            await downloadCurrentOrSaved(
+                `${apiBasePath}/DownloadExcel`,
+                state.validationResult,
+                'DownloadSavedExcel',
+                `${ruleFilePrefix}_Fatal_Errors_${fileStamp()}.xlsx`);
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFallback);
+        }
+    }
+
     async function downloadAll() {
         if (!state.validationResult && !state.currentRunId) {
             setInfo('Run analysis first before downloading.', 'error');
@@ -1379,11 +1413,7 @@
 
         const actions = [];
         if (document.getElementById('chkExcel')?.checked) {
-            actions.push(() => downloadCurrentOrSaved(
-                `${apiBasePath}/DownloadExcel`,
-                state.validationResult,
-                'DownloadSavedExcel',
-                `${ruleFilePrefix}_Fatal_Errors_${fileStamp()}.xlsx`));
+            actions.push(() => downloadExcelGated());
         }
         if (document.getElementById('chkCsv')?.checked) {
             actions.push(() => downloadCurrentOrSaved(
@@ -1475,11 +1505,7 @@
     document.getElementById('refreshFilterBtn').addEventListener('click', loadFilterValues);
     document.getElementById('downloadAllBtn').addEventListener('click', downloadAll);
     document.getElementById('downloadExcelBtn').addEventListener('click', async function () {
-        await downloadCurrentOrSaved(
-            `${apiBasePath}/DownloadExcel`,
-            state.validationResult,
-            'DownloadSavedExcel',
-            `${ruleFilePrefix}_Fatal_Errors_${fileStamp()}.xlsx`);
+        await downloadExcelGated();
     });
     document.getElementById('downloadCsvBtn').addEventListener('click', async function () {
         await downloadCurrentOrSaved(

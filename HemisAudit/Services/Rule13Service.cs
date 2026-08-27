@@ -157,6 +157,12 @@ namespace HemisAudit.Services
             return await AnalyseAsync(request, includeAllReviewRows: true);
         }
 
+        public async Task<int> GetPopulationCountAsync(Rule13ValidationRequest request)
+        {
+            var summary = await GetExportSummaryAsync(request);
+            return summary.TotalValidated;
+        }
+
         public async Task<int?> GetClientIdForRunAsync(int runId) => await _systemDb.GetClientIdForRunAsync(runId);
 
         public async Task<Rule13WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null, bool includeSummary = true)

@@ -504,6 +504,91 @@ FROM rule39_population;";
             };
         }
 
+        // Re-runs the same analysis a fresh "Run Validation" would, without the save-run side
+        // effect - used by the Excel export path.
+        public async Task<Rule39ValidationSummary> GetExportSummaryAsync(Rule39ValidationRequest request) =>
+            await AnalyseAsync(request);
+
+        // Cheap population size check - runs the same server-side prep SQL as a full export but
+        // stops at a COUNT(*), no result rows loaded. Reports FLAGGED + the (deliberately capped)
+        // CLEAR sample, since that's what a CSV/Excel download will actually contain. Mirrors
+        // Rule21Service.GetPopulationCountAsync.
+        public async Task<int> GetPopulationCountAsync(Rule39ValidationRequest request)
+        {
+            var cfg = await ResolveColumnConfigAsync(request);
+            await EnsureRule39IndexesAsync(request.ClientId, request.StudTable, request.QualTable, request.NalTable, cfg);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule39PrepSql(schema, request.StudTable, request.QualTable, request.NalTable, cfg);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            var (flaggedCount, clearCount) = await GetResultCountsAsync(connection);
+            return flaggedCount + Math.Min(clearCount, ClearSampleSize);
+        }
+
+        // Bypasses AnalyseAsync/LoadRowsWhereAsync entirely for the FLAGGED side - that's the
+        // audit-relevant exception population and was previously capped at MaxFlaggedRows (5,000)
+        // regardless of the real count. Reads and writes FLAGGED rows one at a time with no cap;
+        // the CLEAR side stays a deliberate fixed-size sample (ClearSampleSize), same as before -
+        // that's an intentional sample for context, not a truncation bug. Mirrors
+        // Rule21Service.StreamCsvExportAsync.
+        public async Task StreamCsvExportAsync(Rule39ValidationRequest request, bool onlyExceptions, Stream outputStream)
+        {
+            var cfg = await ResolveColumnConfigAsync(request);
+            await EnsureRule39IndexesAsync(request.ClientId, request.StudTable, request.QualTable, request.NalTable, cfg);
+
+            var (conn, schema) = await OpenEngagementConnectionAsync(request.ClientId);
+            await using var connection = conn;
+
+            await using (var prepCommand = connection.CreateCommand())
+            {
+                prepCommand.CommandText = BuildRule39PrepSql(schema, request.StudTable, request.QualTable, request.NalTable, cfg);
+                await prepCommand.ExecuteNonQueryAsync();
+            }
+
+            await using var writer = new StreamWriter(outputStream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = false };
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = onlyExceptions
+                ? "SELECT * FROM rule39_population WHERE result = 'FLAGGED' ORDER BY row_number;"
+                : $@"
+SELECT * FROM ( SELECT * FROM rule39_population WHERE result = 'FLAGGED' ORDER BY row_number ) flagged
+UNION ALL
+SELECT * FROM ( SELECT * FROM rule39_population WHERE result = 'CLEAR' ORDER BY row_number LIMIT {ClearSampleSize} ) clear_sample;";
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var headerParts = Enumerable.Range(0, reader.FieldCount).Select(i => reader.GetName(i)).ToList();
+            await writer.WriteLineAsync(string.Join(",", headerParts.Select(StreamCsvEscape)));
+
+            var rowValues = new List<string>(reader.FieldCount);
+            while (await reader.ReadAsync())
+            {
+                rowValues.Clear();
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var val = reader.IsDBNull(i) ? "" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? "";
+                    rowValues.Add(StreamCsvEscape(val));
+                }
+                await writer.WriteLineAsync(string.Join(",", rowValues));
+            }
+
+            await writer.FlushAsync();
+        }
+
+        private static string StreamCsvEscape(string? val)
+        {
+            if (string.IsNullOrEmpty(val))
+                return "";
+            if (val.Contains(',') || val.Contains('"') || val.Contains('\n'))
+                return $"\"{val.Replace("\"", "\"\"")}\"";
+            return val;
+        }
+
         private static string? BuildScaleWarning(int flaggedCount, int flaggedLoaded, int clearCount, int clearLoaded)
         {
             if (flaggedCount > flaggedLoaded)

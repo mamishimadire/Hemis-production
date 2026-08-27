@@ -242,7 +242,7 @@
             <div id="downloadsContent" class="empty-state"><p>Run and save validation first, then use the download buttons below.</p></div>
             <div id="downloadLinksPanel" style="display:none;margin-top:12px">
                 <div class="action-bar" style="justify-content:flex-start;margin:0">
-                    <button type="button" class="btn btn-info" onclick="if(state.currentRunId) downloadSaved('/Rule57/DownloadSavedExcel?runId='+state.currentRunId, `Rule57_Registration_Agreement_${fileStamp()}.xlsx`)">Excel</button>
+                    <button type="button" class="btn btn-info" onclick="if(state.currentRunId) r57DownloadExcelSaved(state.currentRunId)">Excel</button>
                     <button type="button" class="btn btn-info" onclick="if(state.currentRunId) downloadSaved('/Rule57/DownloadSavedCsv?runId='+state.currentRunId, `Rule57_Validation_Results_${fileStamp()}.csv`)">Full CSV</button>
                     <button type="button" class="btn btn-info" onclick="if(state.currentRunId) downloadSaved('/Rule57/DownloadSavedExceptionsCsv?runId='+state.currentRunId, `Rule57_Exceptions_${fileStamp()}.csv`)">Exceptions CSV</button>
                     <button type="button" class="btn btn-secondary" onclick="if(state.currentRunId) downloadSaved('/Rule57/DownloadSavedSql?runId='+state.currentRunId, `Rule57_Registration_Agreement_${fileStamp()}.sql`)">SQL</button>
@@ -974,6 +974,24 @@ async function downloadSaved(url, filename) {
     });
 }
 
+// Checks the population size before downloading Excel - ClosedXML/.xlsx cannot hold more than
+// 1,048,576 rows per sheet. Too large falls back to the shared "download CSV instead" popup.
+function r57DownloadExcelSaved(runId) {
+    return fetch(`/Rule57/GetExportInfo?runId=${runId}`).then(r => r.json()).then(info => {
+        if (info && info.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                () => downloadSaved(`/Rule57/DownloadSavedCsv?runId=${runId}`, `Rule57_Validation_Results_${fileStamp()}.csv`)
+            );
+            return;
+        }
+        return downloadSaved(`/Rule57/DownloadSavedExcel?runId=${runId}`, `Rule57_Registration_Agreement_${fileStamp()}.xlsx`);
+    }).catch(err => {
+        window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`,
+            () => downloadSaved(`/Rule57/DownloadSavedCsv?runId=${runId}`, `Rule57_Validation_Results_${fileStamp()}.csv`));
+    });
+}
+
 async function downloadAll() {
     if (!state.currentRunId) { setWorkspaceInfo('Save the workspace before downloading.', 'warning'); return; }
     const id = state.currentRunId;
@@ -981,7 +999,7 @@ async function downloadAll() {
 
     const tasks = [];
     if (document.getElementById('chkExcel')?.checked)
-        tasks.push(() => downloadSaved(`/Rule57/DownloadSavedExcel?runId=${id}`, `Rule57_Registration_Agreement_${stamp}.xlsx`));
+        tasks.push(() => r57DownloadExcelSaved(id));
     if (document.getElementById('chkCsv')?.checked)
         tasks.push(() => downloadSaved(`/Rule57/DownloadSavedCsv?runId=${id}`, `Rule57_Validation_Results_${stamp}.csv`));
     if (document.getElementById('chkExceptionsCsv')?.checked)

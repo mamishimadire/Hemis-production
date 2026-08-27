@@ -9,6 +9,8 @@ namespace HemisAudit.Services
         Task<Rule66DistinctValuesResult> GetDistinctValuesAsync(int clientId, string tableName, string columnName);
         Task<Rule66VerifyResult> VerifyTablesAsync(Rule66ValidationRequest request);
         Task<Rule66ValidationSummary> RunValidationAsync(Rule66ValidationRequest request, string? userEmail = null, string? userName = null);
+        Task<Rule66ValidationSummary> GetExportSummaryAsync(Rule66ValidationRequest request);
+        Task<int> GetPopulationCountAsync(Rule66ValidationRequest request);
         Task<int?> GetClientIdForRunAsync(int runId);
         Task<Rule66ValidationSummary?> GetStoredSummaryAsync(int runId);
         Task<Rule66WorkspaceStateViewModel?> GetCurrentWorkspaceStateAsync(int clientId, string? currentUserEmail = null);

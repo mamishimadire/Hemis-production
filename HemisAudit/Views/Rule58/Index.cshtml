@@ -256,7 +256,19 @@ window.toggleAccordion = function (section) {
             setWorkspaceState('Run Rule 58 first before downloading Excel.', 'warning');
             return;
         }
-        await downloadBlob(`${apiBase}/DownloadExcel`, state.summary, 'Rule58_Staff_VALPAC_Production.xlsx');
+        try {
+            const info = await postJson(`${apiBase}/GetExportInfo`, state.summary);
+            if (info?.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                    window.downloadRule58Csv
+                );
+                return;
+            }
+            await downloadBlob(`${apiBase}/DownloadExcel`, state.summary, 'Rule58_Staff_VALPAC_Production.xlsx');
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, window.downloadRule58Csv);
+        }
     };
 
     window.downloadRule58Csv = async function () {

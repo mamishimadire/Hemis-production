@@ -581,6 +581,11 @@ namespace HemisAudit.Controllers
             return RedirectToAction(nameof(Run), new { id = redirectRunId });
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadSavedExcel(int runId)
         {
@@ -588,26 +593,52 @@ namespace HemisAudit.Controllers
             if (review == null)
                 return RedirectToAction(nameof(Run), new { id = runId });
 
-            var exportSummary = await _rule10.GetExportSummaryAsync(new Rule10ValidationRequest
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.RunId, review.RuleNumber, review.Summary);
+            var populationCount = await _rule10.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
             {
-                ClientId = review.ClientId,
-                RunId = review.RunId,
-                RuleNumber = review.RuleNumber,
-                QualTable = review.Summary.QualTable,
-                StudTable = review.Summary.StudTable,
-                CregTable = review.Summary.CregTable,
-                CrseTable = review.Summary.CrseTable,
-                QualColumn = review.Summary.QualColumn,
-                StudColumn = review.Summary.StudColumn,
-                CregColumn = review.Summary.CregColumn,
-                CrseColumn = review.Summary.CrseColumn,
-                RuleParameterJson = review.Summary.RuleParameterJson,
-                Rule10JoinConfigJson = review.Summary.Rule10JoinConfigJson
-            });
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+
+            var exportSummary = await _rule10.GetExportSummaryAsync(exportRequest);
 
             var bytes = _export.ExportExcel(exportSummary);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule{review.RuleNumber}_Integrity_Check_Run_{runId}.xlsx");
         }
+
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo(int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: false);
+            if (review == null) return NotFound();
+
+            var exportRequest = BuildRequestFromSummary(review.ClientId, review.RunId, review.RuleNumber, review.Summary);
+            var populationCount = await _rule10.GetPopulationCountAsync(exportRequest);
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
+        }
+
+        private static Rule10ValidationRequest BuildRequestFromSummary(int clientId, int? runId, int ruleNumber, Rule10ValidationSummary s) => new()
+        {
+            ClientId = clientId,
+            RunId = runId,
+            RuleNumber = ruleNumber,
+            QualTable = s.QualTable,
+            StudTable = s.StudTable,
+            CregTable = s.CregTable,
+            CrseTable = s.CrseTable,
+            QualColumn = s.QualColumn,
+            StudColumn = s.StudColumn,
+            CregColumn = s.CregColumn,
+            CrseColumn = s.CrseColumn,
+            RuleParameterJson = s.RuleParameterJson,
+            Rule10JoinConfigJson = s.Rule10JoinConfigJson
+        };
 
         [HttpGet]
         public async Task<IActionResult> DownloadSavedCsv(int runId)
@@ -668,8 +699,27 @@ namespace HemisAudit.Controllers
         public async Task<IActionResult> DownloadExcel([FromBody] Rule10ValidationSummary summary)
         {
             summary = await ResolveExportSummaryAsync(summary);
+            if (summary.TotalValidated > ExcelExportRowSafetyLimit)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = $"This engagement has {summary.TotalValidated:N0} records, too many to export as one Excel file." });
+            }
+
             var bytes = _export.ExportExcel(summary);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule{summary.RuleNumber}_Integrity_Check_{Ts()}.xlsx");
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> GetExportInfo([FromBody] Rule10ValidationSummary summary)
+        {
+            var resolved = await ResolveExportSummaryAsync(summary);
+            var populationCount = resolved.TotalValidated;
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpPost]

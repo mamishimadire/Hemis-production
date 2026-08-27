@@ -462,6 +462,28 @@ namespace HemisAudit.Controllers
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule46_Foundation_Chain_Run_{runId}.xlsx");
         }
 
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo([FromQuery] int runId)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            var review = await _rule46.GetSavedRunAsync(runId, user?.Email);
+            if (review == null || !await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = "You cannot access this engagement." });
+            }
+
+            var exportRequest = BuildRequestFromSummary(review.Summary!);
+            var populationCount = await _rule46.GetPopulationCountAsync(exportRequest);
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
+        }
+
         private static Rule46ValidationRequest BuildRequestFromSummary(Rule46ValidationSummary s) => new()
         {
             StudTable = s.StudTable, StudKey = s.StudKey, StudIdCol = s.StudIdCol,

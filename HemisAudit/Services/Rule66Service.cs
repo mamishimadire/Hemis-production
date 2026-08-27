@@ -162,6 +162,20 @@ WHERE UPPER(TRIM(CAST(""{fundingCol}"" AS text))) IN ({inList});");
             catch (Exception ex) { return new Rule66ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
+        // AnalyseAsync has no row cap - it always computes the full unbounded population, so this
+        // is just a named entry point for export callers (no re-save, no browser preview trim).
+        public async Task<Rule66ValidationSummary> GetExportSummaryAsync(Rule66ValidationRequest request)
+            => await AnalyseAsync(request);
+
+        // No cheap COUNT-only SQL path exists that's separable from the full analysis (the pass/
+        // fail determination depends on the CREG match join) - reusing the full export for the
+        // population count is the established pattern for rules like this (see Rule34/Rule38).
+        public async Task<int> GetPopulationCountAsync(Rule66ValidationRequest request)
+        {
+            var summary = await GetExportSummaryAsync(request);
+            return summary.TotalValidated;
+        }
+
         private async Task<Rule66ValidationSummary> AnalyseAsync(Rule66ValidationRequest request)
         {
             var studQualCol = Sanitise(string.IsNullOrWhiteSpace(request.StudQualCol) ? "_001" : request.StudQualCol);

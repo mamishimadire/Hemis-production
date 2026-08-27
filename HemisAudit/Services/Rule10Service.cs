@@ -221,6 +221,12 @@ namespace HemisAudit.Services
             return await AnalyseAsync(request, includeAllReviewRows: true);
         }
 
+        public async Task<int> GetPopulationCountAsync(Rule10ValidationRequest request)
+        {
+            var summary = await GetExportSummaryAsync(request);
+            return summary.TotalValidated;
+        }
+
         public Task<Rule10ValidationSummary?> GetPendingValidationPreviewAsync(int ruleNumber, int clientId, string reviewerEmail)
         {
             var pending = _pendingValidationCache.GetPending<Rule10ValidationRequest, Rule10ValidationSummary>(ruleNumber, clientId, reviewerEmail);

@@ -1322,14 +1322,28 @@
     document.getElementById('removeSignoffBtn').addEventListener('click', removeWorkspaceSignoff);
     document.getElementById('refreshFilterBtn').addEventListener('click', loadFilterValues);
     document.getElementById('downloadAllBtn').addEventListener('click', downloadAll);
+    function downloadCsvFile() {
+        if (!state.validationResult) return;
+        return downloadPost('/Rule31/DownloadCsv', state.validationResult, `Rule31_Excluded_and_Remaining_${fileStamp()}.csv`);
+    }
     document.getElementById('downloadExcelBtn').addEventListener('click', async function () {
         if (!state.validationResult) return;
+        try {
+            const info = await post('/Rule31/GetExportInfo', state.validationResult);
+            if (info?.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                    downloadCsvFile
+                );
+                return;
+            }
+        } catch (err) {
+            window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsvFile);
+            return;
+        }
         await downloadPost('/Rule31/DownloadExcel', state.validationResult, `Rule31_Fatal_Errors_${fileStamp()}.xlsx`);
     });
-    document.getElementById('downloadCsvBtn').addEventListener('click', async function () {
-        if (!state.validationResult) return;
-        await downloadPost('/Rule31/DownloadCsv', state.validationResult, `Rule31_Excluded_and_Remaining_${fileStamp()}.csv`);
-    });
+    document.getElementById('downloadCsvBtn').addEventListener('click', downloadCsvFile);
     document.getElementById('downloadRemainingBtn').addEventListener('click', async function () {
         if (!state.validationResult) return;
         await downloadPost('/Rule31/DownloadExceptionsCsv', state.validationResult, `Rule31_Remaining_${fileStamp()}.csv`);

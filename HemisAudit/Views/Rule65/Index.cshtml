@@ -904,15 +904,29 @@ window.toggleAccordion = function (section) {
         setWorkspaceState(error.message, 'error');
     }));
 
-    document.getElementById('downloadExcelBtn')?.addEventListener('click', () => {
+    document.getElementById('downloadExcelBtn')?.addEventListener('click', async () => {
         const payload = getSummaryDownloadPayload();
         if (!payload) {
             setWorkspaceState('Run Rule 65 first before downloading Excel results.', 'warning');
             return;
         }
 
-        downloadBlob(`${apiBase}/DownloadExcel`, payload, 'Rule65_Cancellation_Census_Date_Validation.xlsx')
-            .catch(error => setWorkspaceState(error.message, 'error'));
+        try {
+            const info = await postJson(`${apiBase}/GetExportInfo`, payload);
+            if (info?.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                    () => downloadBlob(`${apiBase}/DownloadCsv`, payload, 'Rule65_Cancellation_Census_Date_Validation.csv').catch(error => setWorkspaceState(error.message, 'error'))
+                );
+                return;
+            }
+            await downloadBlob(`${apiBase}/DownloadExcel`, payload, 'Rule65_Cancellation_Census_Date_Validation.xlsx');
+        } catch (error) {
+            window.showExcelTooLargeModal(
+                `This engagement's Excel export failed: ${error.message}`,
+                () => downloadBlob(`${apiBase}/DownloadCsv`, payload, 'Rule65_Cancellation_Census_Date_Validation.csv').catch(err => setWorkspaceState(err.message, 'error'))
+            );
+        }
     });
     document.getElementById('downloadCsvBtn')?.addEventListener('click', () => {
         const payload = getSummaryDownloadPayload();
@@ -930,7 +944,22 @@ window.toggleAccordion = function (section) {
         if (!state.currentRunId) { setWorkspaceState('Save the workspace before downloading.', 'warning'); return; }
         const id = state.currentRunId;
         const dl = (url, filename) => window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
-        await dl(`${apiBase}/DownloadSavedExcel?runId=${id}`, `Rule65_Run_${id}.xlsx`);
+        try {
+            const info = await fetch(`${apiBase}/GetExportInfo?runId=${id}`).then(r => r.json());
+            if (info?.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                    () => dl(`${apiBase}/DownloadSavedCsv?runId=${id}`, `Rule65_Run_${id}.csv`)
+                );
+            } else {
+                await dl(`${apiBase}/DownloadSavedExcel?runId=${id}`, `Rule65_Run_${id}.xlsx`);
+            }
+        } catch (err) {
+            window.showExcelTooLargeModal(
+                `This engagement's Excel export failed: ${err.message}`,
+                () => dl(`${apiBase}/DownloadSavedCsv?runId=${id}`, `Rule65_Run_${id}.csv`)
+            );
+        }
         await dl(`${apiBase}/DownloadSavedCsv?runId=${id}`, `Rule65_Run_${id}.csv`);
         await dl(`${apiBase}/DownloadSavedSql?runId=${id}`, `Rule65_Run_${id}.sql`);
     });

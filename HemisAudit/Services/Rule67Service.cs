@@ -126,6 +126,21 @@ namespace HemisAudit.Services
             catch (Exception ex) { return new Rule67ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
+        // AnalyseAsync has no row cap - it always computes the full unbounded population, so this
+        // is just a named entry point for export callers (no re-save, no browser preview trim).
+        public async Task<Rule67ValidationSummary> GetExportSummaryAsync(Rule67ValidationRequest request)
+            => await AnalyseAsync(request);
+
+        // No cheap COUNT-only SQL path exists that's separable from the full analysis (the pass/
+        // fail determination depends on the STUD match join and optional Rule 29 reconciliation) -
+        // reusing the full export for the population count is the established pattern for rules
+        // like this (see Rule34/Rule38).
+        public async Task<int> GetPopulationCountAsync(Rule67ValidationRequest request)
+        {
+            var summary = await GetExportSummaryAsync(request);
+            return summary.TotalValidated;
+        }
+
         private async Task<Rule67ValidationSummary> AnalyseAsync(Rule67ValidationRequest request)
         {
             var hasDetail = !string.IsNullOrWhiteSpace(request.DetailTable);

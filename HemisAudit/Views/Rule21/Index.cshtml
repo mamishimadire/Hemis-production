@@ -1410,6 +1410,20 @@ async function generateRScript() {
 
 // ── Download ──────────────────────────────────────────────────────────────────
 async function downloadExcel() {
+    if (!state.validationResult && !state.currentRunId) { alert('Run validation first.'); return; }
+    try {
+        const info = await post('/Rule21/GetExportInfo', state.validationResult || {});
+        if (info?.exceedsExcelLimit) {
+            window.showExcelTooLargeModal(
+                `This engagement has ${(info.totalRecords || 0).toLocaleString()} records - too many to include in a single Excel file.`,
+                downloadCsv
+            );
+            return;
+        }
+    } catch (err) {
+        window.showExcelTooLargeModal(`This engagement's Excel export failed: ${err.message}`, downloadCsv);
+        return;
+    }
     await downloadCurrentOrSaved('/Rule21/DownloadExcel', state.validationResult, 'DownloadSavedExcel', `Rule21_FirstTime_NAL_${fileStamp()}.xlsx`);
 }
 async function downloadCsv() {
