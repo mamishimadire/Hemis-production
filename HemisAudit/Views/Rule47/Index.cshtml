@@ -423,7 +423,21 @@ window.r47Tab = function(tab) {
     function r47DownloadSaved(url, filename) {
         return window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
     }
-    window.r47DlAll = function() { if (st.runId) r47DownloadSaved(API + '/DownloadExcel?runId=' + st.runId, 'Rule47_Run_' + st.runId + '.xlsx'); };
+    function r47DownloadExcelSaved(runId) {
+        return fetch(API + '/GetExportInfo?runId=' + runId).then(function(r) { return r.json(); }).then(function(info) {
+            if (info && info.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    'This engagement has ' + (info.totalRecords || 0).toLocaleString() + ' records - too many to include in a single Excel file.',
+                    function() { r47DownloadSaved(API + '/DownloadCsv?runId=' + runId, 'Rule47_Run_' + runId + '.csv'); }
+                );
+                return;
+            }
+            return r47DownloadSaved(API + '/DownloadExcel?runId=' + runId, 'Rule47_Run_' + runId + '.xlsx');
+        }).catch(function(err) {
+            window.showExcelTooLargeModal("This engagement's Excel export failed: " + err.message, function() { r47DownloadSaved(API + '/DownloadCsv?runId=' + runId, 'Rule47_Run_' + runId + '.csv'); });
+        });
+    }
+    window.r47DlAll = function() { if (st.runId) r47DownloadExcelSaved(st.runId); };
 
     /* ── Workspace ── */
     window.r47SaveWorkspace = function() {
@@ -562,7 +576,7 @@ window.r47Tab = function(tab) {
         renderAnalysis(summary);
         renderReconc(summary ? summary.reconc : null);
         if (summary && st.runId) {
-            var dlE = g('r47DlExcel');  if (dlE) dlE.onclick = function() { r47DownloadSaved(API + '/DownloadExcel?runId=' + st.runId, 'Rule47_Run_' + st.runId + '.xlsx'); };
+            var dlE = g('r47DlExcel');  if (dlE) dlE.onclick = function() { r47DownloadExcelSaved(st.runId); };
             var dlC = g('r47DlCsv');    if (dlC) dlC.onclick = function() { r47DownloadSaved(API + '/DownloadCsv?runId=' + st.runId, 'Rule47_Run_' + st.runId + '.csv'); };
             var dlX = g('r47DlExcCsv');if (dlX) dlX.onclick = function() { r47DownloadSaved(API + '/DownloadExceptionsCsv?runId=' + st.runId, 'Rule47_Run_' + st.runId + '_Exceptions.csv'); };
             var dlS = g('r47DlSql');    if (dlS) dlS.onclick = function() { r47DownloadSaved(API + '/DownloadSql?runId=' + st.runId, 'Rule47_Run_' + st.runId + '.sql'); };
