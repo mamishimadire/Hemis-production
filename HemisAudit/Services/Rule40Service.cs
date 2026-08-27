@@ -101,7 +101,7 @@ namespace HemisAudit.Services
         {
             try
             {
-                var summary = await AnalyseAsync(request);
+                var summary = await AnalyseAsync(request, ExceptionSaveLimit);
 
                 if (summary.Success && request.ClientId > 0)
                     summary.SavedRunId = await SaveValidationRunAsync(request, summary, userEmail, userName);
@@ -112,7 +112,16 @@ namespace HemisAudit.Services
             catch (Exception ex) { return new Rule40ValidationSummary { Success = false, Error = ex.Message }; }
         }
 
-        private async Task<Rule40ValidationSummary> AnalyseAsync(Rule40ValidationRequest req)
+        public async Task<Rule40ValidationSummary> GetExportSummaryAsync(Rule40ValidationRequest request)
+            => await AnalyseAsync(request, exceptionLimit: null);
+
+        public async Task<int> GetPopulationCountAsync(Rule40ValidationRequest request)
+        {
+            var summary = await GetExportSummaryAsync(request);
+            return summary.TotalCount;
+        }
+
+        private async Task<Rule40ValidationSummary> AnalyseAsync(Rule40ValidationRequest req, int? exceptionLimit)
         {
             var valpacKey = string.IsNullOrWhiteSpace(req.ValpacKeyCol) ? "_037" : req.ValpacKeyCol;
             var asciiKey  = string.IsNullOrWhiteSpace(req.AsciiKeyCol)  ? "_037" : req.AsciiKeyCol;
@@ -196,9 +205,9 @@ namespace HemisAudit.Services
                 ExceptionRate        = rowNo == 0 ? 0m : Math.Round(exCount * 100m / rowNo, 2),
                 Status               = exCount == 0 ? "PASS" : "FAIL",
                 Pairs                = pairs,
-                ReviewRows           = exceptionRows.Take(ExceptionSaveLimit).ToList(),
+                ReviewRows           = exceptionLimit.HasValue ? exceptionRows.Take(exceptionLimit.Value).ToList() : exceptionRows,
                 AgreeSample          = agreeRows.Take(AgreeSaveLimit).ToList(),
-                Warning              = BuildScaleWarning(exceptionRows.Count, Math.Min(exceptionRows.Count, ExceptionSaveLimit), agreeRows.Count, Math.Min(agreeRows.Count, AgreeSaveLimit))
+                Warning              = BuildScaleWarning(exceptionRows.Count, exceptionLimit.HasValue ? Math.Min(exceptionRows.Count, exceptionLimit.Value) : exceptionRows.Count, agreeRows.Count, Math.Min(agreeRows.Count, AgreeSaveLimit))
             };
         }
 

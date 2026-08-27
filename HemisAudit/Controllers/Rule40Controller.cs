@@ -308,14 +308,37 @@ namespace HemisAudit.Controllers
             return Json(result);
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
+        private static Rule40ValidationRequest BuildRequestFromSummary(Rule40ValidationSummary s) => new()
+        {
+            ClientId = s.ClientId,
+            ValpacTable = s.ValpacTable,
+            AsciiTable = s.AsciiTable,
+            ValpacKeyCol = s.ValpacKeyCol,
+            AsciiKeyCol = s.AsciiKeyCol,
+            Pairs = s.Pairs
+        };
+
         [HttpGet]
         public async Task<IActionResult> DownloadExcel([FromQuery] int runId)
         {
             var user    = await _users.GetUserAsync(User);
             var role    = await GetCurrentSystemRoleAsync(user);
-            var summary = await _rule40.GetFullSummaryByRunIdAsync(runId);
-            if (summary == null || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+            var stored  = await _rule40.GetFullSummaryByRunIdAsync(runId);
+            if (stored == null || !await _systemDb.CanAccessClientResultsAsync(stored.ClientId, user, role))
                 return NotFound();
+            var exportRequest = BuildRequestFromSummary(stored);
+            var populationCount = await _rule40.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = $"This engagement has {populationCount:N0} records, too many to export as one Excel file." });
+            }
+            var summary = await _rule40.GetExportSummaryAsync(exportRequest);
             var bytes = BuildXlsxBytes(summary);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"Rule40_PROF_Agreement_Run_{runId}.xlsx");
         }
@@ -325,11 +348,29 @@ namespace HemisAudit.Controllers
         {
             var user    = await _users.GetUserAsync(User);
             var role    = await GetCurrentSystemRoleAsync(user);
-            var summary = await _rule40.GetFullSummaryByRunIdAsync(runId);
-            if (summary == null || !await _systemDb.CanAccessClientResultsAsync(summary.ClientId, user, role))
+            var stored  = await _rule40.GetFullSummaryByRunIdAsync(runId);
+            if (stored == null || !await _systemDb.CanAccessClientResultsAsync(stored.ClientId, user, role))
                 return NotFound();
+            var summary = await _rule40.GetExportSummaryAsync(BuildRequestFromSummary(stored));
             var bytes = BuildCsvBytes(summary);
             return File(bytes, "text/csv", $"Rule40_PROF_Agreement_Run_{runId}.csv");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo([FromQuery] int runId)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            var stored = await _rule40.GetFullSummaryByRunIdAsync(runId);
+            if (stored == null || !await _systemDb.CanAccessClientResultsAsync(stored.ClientId, user, role))
+                return NotFound();
+            var populationCount = await _rule40.GetPopulationCountAsync(BuildRequestFromSummary(stored));
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpGet]
