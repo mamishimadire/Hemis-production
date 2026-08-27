@@ -330,6 +330,11 @@ namespace HemisAudit.Controllers
             }));
         }
 
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
         [HttpGet]
         public async Task<IActionResult> DownloadExcel([FromQuery] int runId)
         {
@@ -338,7 +343,15 @@ namespace HemisAudit.Controllers
             var review = await _rule41.GetSavedRunAsync(runId, user?.Email);
             if (review == null || !await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
                 return NotFound();
-            var bytes = _export.ExportRule41FamilyExcel(review.Summary!, "HEMIS RULE 41 - Student ASCII Agreement", "STUD", "AUDIT");
+            var exportRequest = BuildRequestFromSummary(review.Summary!);
+            var populationCount = await _rule41.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Json(new { error = $"This engagement has {populationCount:N0} records, too many to export as one Excel file." });
+            }
+            var resolved = await _rule41.GetExportSummaryAsync(exportRequest);
+            var bytes = _export.ExportRule41FamilyExcel(resolved, "HEMIS RULE 41 - Student ASCII Agreement", "STUD", "AUDIT");
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule41_STUD_Agreement_Run_{runId}.xlsx");
         }
@@ -351,7 +364,8 @@ namespace HemisAudit.Controllers
             var review = await _rule41.GetSavedRunAsync(runId, user?.Email);
             if (review == null || !await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
                 return NotFound();
-            var bytes = BuildCsvExport(review.Summary!, false);
+            var resolved = await _rule41.GetExportSummaryAsync(BuildRequestFromSummary(review.Summary!));
+            var bytes = BuildCsvExport(resolved, false);
             return File(bytes, "text/csv", $"Rule41_STUD_Agreement_Run_{runId}.csv");
         }
 
@@ -363,8 +377,26 @@ namespace HemisAudit.Controllers
             var review = await _rule41.GetSavedRunAsync(runId, user?.Email);
             if (review == null || !await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
                 return NotFound();
-            var bytes = BuildCsvExport(review.Summary!, true);
+            var resolved = await _rule41.GetExportSummaryAsync(BuildRequestFromSummary(review.Summary!));
+            var bytes = BuildCsvExport(resolved, true);
             return File(bytes, "text/csv", $"Rule41_Exceptions_Run_{runId}.csv");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo([FromQuery] int runId)
+        {
+            var user = await _users.GetUserAsync(User);
+            var role = await GetCurrentSystemRoleAsync(user);
+            var review = await _rule41.GetSavedRunAsync(runId, user?.Email);
+            if (review == null || !await _systemDb.CanAccessClientResultsAsync(review.ClientId, user, role))
+                return NotFound();
+            var populationCount = await _rule41.GetPopulationCountAsync(BuildRequestFromSummary(review.Summary!));
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpGet]
@@ -515,10 +547,13 @@ namespace HemisAudit.Controllers
         private static Rule41ValidationRequest BuildRequestFromSummary(Rule41ValidationSummary s) =>
             new()
             {
+                ClientId   = s.ClientId,
                 StudTable  = s.StudTable,
                 H16Table = s.H16Table,
                 StudKey    = s.StudKey,
                 H16Key   = s.H16Key,
+                StudSecondaryKey  = s.Reconc.StudSecondaryKey,
+                H16SecondaryKey = s.Reconc.H16SecondaryKey,
                 Pairs      = s.Reconc.Pairs
             };
 
