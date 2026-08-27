@@ -435,7 +435,21 @@ window.r60Tab = function(tab) {
     function r60DownloadSaved(url, filename) {
         return window.downloadFileWithProgress({ url, method: 'GET', defaultFileName: filename, label: 'Downloading result' });
     }
-    window.r60DlAll = function() { if (st.runId) r60DownloadSaved(API + '/DownloadSavedExcel?runId=' + st.runId, 'Rule60_Run_' + st.runId + '.xlsx'); };
+    function r60DownloadExcelSaved(runId) {
+        return fetch(API + '/GetExportInfo?runId=' + runId).then(function(r) { return r.json(); }).then(function(info) {
+            if (info && info.exceedsExcelLimit) {
+                window.showExcelTooLargeModal(
+                    'This engagement has ' + (info.totalRecords || 0).toLocaleString() + ' records - too many to include in a single Excel file.',
+                    function() { r60DownloadSaved(API + '/DownloadSavedCsv?runId=' + runId, 'Rule60_Run_' + runId + '.csv'); }
+                );
+                return;
+            }
+            return r60DownloadSaved(API + '/DownloadSavedExcel?runId=' + runId, 'Rule60_Run_' + runId + '.xlsx');
+        }).catch(function(err) {
+            window.showExcelTooLargeModal("This engagement's Excel export failed: " + err.message, function() { r60DownloadSaved(API + '/DownloadSavedCsv?runId=' + runId, 'Rule60_Run_' + runId + '.csv'); });
+        });
+    }
+    window.r60DlAll = function() { if (st.runId) r60DownloadExcelSaved(st.runId); };
 
     /* ── Workspace ── */
     window.r60SaveWorkspace = function() {
@@ -612,7 +626,7 @@ window.r60Tab = function(tab) {
         renderDetails(summary, summary ? summary.reconc : null);
         renderCharts(summary, summary ? summary.reconc : null);
         if (summary && st.runId) {
-            var dlE = g('r60DlExcel');  if (dlE) dlE.onclick = function() { r60DownloadSaved(API + '/DownloadSavedExcel?runId=' + st.runId, 'Rule60_Run_' + st.runId + '.xlsx'); };
+            var dlE = g('r60DlExcel');  if (dlE) dlE.onclick = function() { r60DownloadExcelSaved(st.runId); };
             var dlC = g('r60DlCsv');    if (dlC) dlC.onclick = function() { r60DownloadSaved(API + '/DownloadSavedCsv?runId=' + st.runId, 'Rule60_Run_' + st.runId + '.csv'); };
             var dlX = g('r60DlExcCsv');if (dlX) dlX.onclick = function() { r60DownloadSaved(API + '/DownloadSavedExceptionsCsv?runId=' + st.runId, 'Rule60_Exceptions_Run_' + st.runId + '.csv'); };
             var dlS = g('r60DlSql');    if (dlS) dlS.onclick = function() { r60DownloadSaved(API + '/DownloadSavedSql?runId=' + st.runId, 'Rule60_Run_' + st.runId + '.sql'); };

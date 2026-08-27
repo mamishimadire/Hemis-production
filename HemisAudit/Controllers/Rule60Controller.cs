@@ -337,33 +337,46 @@ namespace HemisAudit.Controllers
             }));
         }
 
-        [HttpGet]
-        public async Task<IActionResult> DownloadExcel([FromQuery] int runId)
+        // ClosedXML builds the whole workbook in memory before it can be saved, and .xlsx caps
+        // out at 1,048,576 rows per sheet regardless. Matches Excel's own actual maximum now the
+        // Render service has 4GB (see Rule12Controller.ExcelExportRowSafetyLimit).
+        private const int ExcelExportRowSafetyLimit = 1_048_576;
+
+        private async Task<IActionResult> DownloadExcelInternal(int runId)
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var bytes = _export.ExportRule60Excel(review.Summary!);
+            var exportRequest = BuildRequestFromSummary(review.Summary!);
+            var populationCount = await _rule60.GetPopulationCountAsync(exportRequest);
+            if (populationCount > ExcelExportRowSafetyLimit)
+            {
+                TempData["Error"] = $"This engagement has {populationCount:N0} records, too many to export as one Excel file. Use the CSV download instead.";
+                return RedirectToAction(nameof(Run), new { id = runId });
+            }
+            var resolved = await _rule60.GetExportSummaryAsync(exportRequest);
+            var bytes = _export.ExportRule60Excel(resolved);
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 $"Rule60_CRSE_H16CRSE_Agreement_Run_{runId}.xlsx");
         }
 
-        [HttpGet]
-        public async Task<IActionResult> DownloadCsv([FromQuery] int runId)
+        private async Task<IActionResult> DownloadCsvInternal(int runId, bool exceptionsOnly)
         {
             var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
             if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var bytes = BuildCsvExport(review.Summary!, false);
-            return File(bytes, "text/csv", $"Rule60_CRSE_H16CRSE_Agreement_Run_{runId}.csv");
+            var resolved = await _rule60.GetExportSummaryAsync(BuildRequestFromSummary(review.Summary!));
+            var bytes = BuildCsvExport(resolved, exceptionsOnly);
+            var fileName = exceptionsOnly ? $"Rule60_Exceptions_Run_{runId}.csv" : $"Rule60_CRSE_H16CRSE_Agreement_Run_{runId}.csv";
+            return File(bytes, "text/csv", fileName);
         }
 
         [HttpGet]
-        public async Task<IActionResult> DownloadExceptionsCsv([FromQuery] int runId)
-        {
-            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
-            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var bytes = BuildCsvExport(review.Summary!, true);
-            return File(bytes, "text/csv", $"Rule60_Exceptions_Run_{runId}.csv");
-        }
+        public async Task<IActionResult> DownloadExcel([FromQuery] int runId) => await DownloadExcelInternal(runId);
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadCsv([FromQuery] int runId) => await DownloadCsvInternal(runId, false);
+
+        [HttpGet]
+        public async Task<IActionResult> DownloadExceptionsCsv([FromQuery] int runId) => await DownloadCsvInternal(runId, true);
 
         [HttpGet]
         public async Task<IActionResult> DownloadSql([FromQuery] int runId)
@@ -376,32 +389,13 @@ namespace HemisAudit.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> DownloadSavedExcel([FromQuery] int runId)
-        {
-            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
-            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var bytes = _export.ExportRule60Excel(review.Summary!);
-            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"Rule60_CRSE_H16CRSE_Agreement_Run_{runId}.xlsx");
-        }
+        public async Task<IActionResult> DownloadSavedExcel([FromQuery] int runId) => await DownloadExcelInternal(runId);
 
         [HttpGet]
-        public async Task<IActionResult> DownloadSavedCsv([FromQuery] int runId)
-        {
-            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
-            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var bytes = BuildCsvExport(review.Summary!, false);
-            return File(bytes, "text/csv", $"Rule60_CRSE_H16CRSE_Agreement_Run_{runId}.csv");
-        }
+        public async Task<IActionResult> DownloadSavedCsv([FromQuery] int runId) => await DownloadCsvInternal(runId, false);
 
         [HttpGet]
-        public async Task<IActionResult> DownloadSavedExceptionsCsv([FromQuery] int runId)
-        {
-            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: true);
-            if (review == null) return RedirectToAction(nameof(Run), new { id = runId });
-            var bytes = BuildCsvExport(review.Summary!, true);
-            return File(bytes, "text/csv", $"Rule60_Exceptions_Run_{runId}.csv");
-        }
+        public async Task<IActionResult> DownloadSavedExceptionsCsv([FromQuery] int runId) => await DownloadCsvInternal(runId, true);
 
         [HttpGet]
         public async Task<IActionResult> DownloadSavedSql([FromQuery] int runId)
@@ -411,6 +405,20 @@ namespace HemisAudit.Controllers
             var req = BuildRequestFromSummary(review.Summary!);
             var bytes = _export.ExportSql(_rule60.GenerateSql(req));
             return File(bytes, "application/sql", $"Rule60_CRSE_H16CRSE_Agreement_Run_{runId}.sql");
+        }
+
+        [HttpGet]
+        public async Task<IActionResult> GetExportInfo([FromQuery] int runId)
+        {
+            var review = await LoadAuthorizedSavedRunAsync(runId, requireDownloadAccess: false);
+            if (review == null) return NotFound();
+            var populationCount = await _rule60.GetPopulationCountAsync(BuildRequestFromSummary(review.Summary!));
+            return Json(new
+            {
+                totalRecords = populationCount,
+                exceedsExcelLimit = populationCount > ExcelExportRowSafetyLimit,
+                excelLimit = ExcelExportRowSafetyLimit
+            });
         }
 
         [HttpPost]
@@ -554,10 +562,13 @@ namespace HemisAudit.Controllers
         private static Rule41ValidationRequest BuildRequestFromSummary(Rule41ValidationSummary s) =>
             new()
             {
+                ClientId   = s.ClientId,
                 StudTable  = s.StudTable,
                 H16Table = s.H16Table,
                 StudKey    = s.StudKey,
                 H16Key   = s.H16Key,
+                StudSecondaryKey  = s.Reconc.StudSecondaryKey,
+                H16SecondaryKey = s.Reconc.H16SecondaryKey,
                 Pairs      = s.Reconc.Pairs
             };
 
