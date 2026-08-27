@@ -731,7 +731,14 @@ window.toggleAccordion = function (section) {
         const info = await postJson(`${apiBasePath}/GetExportInfo`, req);
 
         if (!info?.exceedsExcelLimit) {
-            await downloadBlob(`${apiBasePath}/DownloadExcel`, req, `Rule12_Course_Selection_${fileStamp()}.xlsx`);
+            try {
+                await downloadBlob(`${apiBasePath}/DownloadExcel`, req, `Rule12_Course_Selection_${fileStamp()}.xlsx`);
+            } catch (err) {
+                window.showExcelTooLargeModal(
+                    `This engagement's Excel export failed: ${err.message}`,
+                    downloadCsvFile
+                );
+            }
             return;
         }
 
